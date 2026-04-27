@@ -1,0 +1,28 @@
+{
+  "name": "scaffolding-python",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "prepare": "husky install",
+    "lint:front": "npm --prefix front run lint",
+    "format:front": "npm --prefix front run format",
+    "dev:front": "npm --prefix front run dev",
+    "dev:back": "cd back && python manage.py run",
+    "docker:up": "docker compose up -d --build",
+    "docker:down": "docker compose down"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^19.3.0",
+    "@commitlint/config-conventional": "^19.2.2",
+    "husky": "^9.0.11",
+    "lint-staged": "^15.2.7"
+  },
+  "lint-staged": {
+    "front/**/*.{ts,tsx,js,jsx}": [
+      "npm --prefix front run lint -- --fix"
+    ],
+    "front/**/*.{ts,tsx,js,jsx,css,md,json}": [
+      "prettier --write"
+    ]
+  }
+}

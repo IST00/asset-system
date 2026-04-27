@@ -1,0 +1,8 @@
+#!/usr/bin/env sh
+. "$(dirname -- "$0")/_/husky.sh"
+
+# 1) Convention guard (fails fast on staged files matching anti-patterns)
+bash "$(dirname -- "$0")/../scripts/guard-conventions.sh" || exit 1
+
+# 2) Lint-staged (ESLint + Prettier on staged front/** files)
+npx lint-staged
