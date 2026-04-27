@@ -1,6 +1,6 @@
 """Standalone health-check Flask app.
 
-Runs on a private port (default 8081, bind 127.0.0.1) in a daemon thread
+Runs on a dedicated port (default 8081, bind 0.0.0.0) in a daemon thread
 started by gunicorn's `post_fork` hook. Provides:
 
 - GET /health          — aggregate (all registered checks)
@@ -133,7 +133,7 @@ def create_health_app() -> Flask:
 
 def run_health_server() -> None:  # pragma: no cover
     port = int(os.getenv("HEALTH_PORT", "8081"))
-    bind = os.getenv("HEALTH_BIND", "127.0.0.1")
+    bind = os.getenv("HEALTH_BIND", "0.0.0.0")
     app = create_health_app()
     log.info("health server listening on %s:%s", bind, port)
     app.run(host=bind, port=port, use_reloader=False)

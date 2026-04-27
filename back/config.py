@@ -54,7 +54,7 @@ class BaseConfig:
     # --- App ---
     APP_NAME: str = "scaffold-python"
     HEALTH_PORT: int = int(os.getenv("HEALTH_PORT", "8081"))
-    HEALTH_BIND: str = os.getenv("HEALTH_BIND", "127.0.0.1")
+    HEALTH_BIND: str = os.getenv("HEALTH_BIND", "0.0.0.0")
 
 
 class DevConfig(BaseConfig):

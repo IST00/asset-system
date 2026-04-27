@@ -88,7 +88,7 @@ while IFS= read -r f; do
         add_violation "$f: do not import 'axios' directly — use '@/api/http'. See docs/conventions/frontend.md §1"
       fi
     fi
-    if grep -E "fetch\([[:space:]]*['\"](/api/|https?://[^'\"]*:5000)" "$f" >/dev/null 2>&1; then
+    if grep -E "fetch\([[:space:]]*['\"](/api/|https?://[^'\"]*:8080)" "$f" >/dev/null 2>&1; then
       add_violation "$f: do not call the backend via fetch() — use '@/api/http'. See docs/conventions/frontend.md §1"
     fi
     if grep -E "from[[:space:]]+['\"](\.\./){2,}" "$f" >/dev/null 2>&1; then

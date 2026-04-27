@@ -10,7 +10,14 @@ export default defineConfig(({ mode }) => {
   // 保持跟生产 nginx 的行为一致（location /prefix/ + proxy_pass http://back/）。
   const proxyPath = `${apiPrefix}${apiBase}` || '/api'
 
+  // 前端静态资源部署前缀。开发默认 '/'，生产通过 VITE_APP_BASE 注入 '/scaffold-ui/'。
+  // Vite 把它写入 import.meta.env.BASE_URL，同时自动改写 index.html 与 import 引用。
+  // 必须以 '/' 开头和结尾；这里做一次强制规范，避免尾部丢斜杠导致 nginx try_files 踩坑。
+  const rawBase = env.VITE_APP_BASE || '/'
+  const appBase = rawBase.endsWith('/') ? rawBase : `${rawBase}/`
+
   return {
+    base: appBase,
     plugins: [react()],
     resolve: {
       alias: {

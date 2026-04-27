@@ -38,7 +38,7 @@ React + TypeScript + Flask 全栈脚手架（Python 版）。是 `../scaffolding
 │
 ├── front/                          # React + Vite 前端（与 Java 版一致）
 │   ├── src/...
-│   ├── .env.development            # VITE_API_TARGET=http://localhost:5000
+│   ├── .env.development            # VITE_API_TARGET=http://localhost:8080
 │   ├── .env.production
 │   └── vite.config.ts
 │
@@ -63,9 +63,9 @@ FLASK_APP=manage.py flask db upgrade            # 首次执行，建表并写入
 python manage.py run                            # 启动开发服务器
 ```
 
-- 应用：http://localhost:5000
-- Swagger：http://localhost:5000/swagger-ui（需显式启用 flask-smorest Api；默认已装）
-- 健康检查（独立端口，仅 127.0.0.1）：http://127.0.0.1:8081/health
+- 应用：http://localhost:8080
+- Swagger：http://localhost:8080/swagger-ui（需显式启用 flask-smorest Api；默认已装）
+- 健康检查（独立端口）：http://localhost:8081/health
 
 **前端**：
 
@@ -85,7 +85,7 @@ npm run docker:up
 ```
 
 - 前端：http://localhost
-- 后端：http://localhost:5000
+- 后端：http://localhost:8080
 - MySQL：3306，Redis：6379
 
 ## 后端接口

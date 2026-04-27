@@ -39,7 +39,7 @@ services:
       REDIS_PORT: "6379"
       JWT_SECRET: change-me-in-production-change-me-in-production
     ports:
-      - "5000:5000"
+      - "8080:8080"
       - "8081:8081"
     depends_on:
       mysql:

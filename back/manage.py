@@ -20,7 +20,7 @@ app = create_app()
 
 @app.cli.command("run")
 @click.option("--host", default="0.0.0.0")
-@click.option("--port", default=5000, type=int)
+@click.option("--port", default=8080, type=int)
 def run_cmd(host: str, port: int) -> None:  # pragma: no cover
     """Start the dev server (equivalent to `flask run`)."""
     app.run(host=host, port=port, debug=app.config.get("DEBUG", False))
@@ -32,7 +32,7 @@ if __name__ == "__main__":  # pragma: no cover
 
     if len(sys.argv) > 1 and sys.argv[1] == "run":
         host = os.getenv("FLASK_RUN_HOST", "0.0.0.0")
-        port = int(os.getenv("FLASK_RUN_PORT", "5000"))
+        port = int(os.getenv("FLASK_RUN_PORT", "8080"))
         app.run(host=host, port=port, debug=app.config.get("DEBUG", False))
     else:
         # Fall through to Flask's CLI for `db`, etc.
