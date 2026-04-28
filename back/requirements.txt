@@ -5,10 +5,10 @@ marshmallow==3.21.3
 apispec==6.6.1
 
 # --- Persistence ---
-SQLAlchemy==2.0.30
+SQLAlchemy==2.0.36
 Flask-SQLAlchemy==3.1.1
 Flask-Migrate==4.0.7
-alembic==1.13.2
+alembic==1.13.3
 
 # --- Drivers (dev uses sqlite built-in, prod uses mysql) ---
 PyMySQL==1.1.1
