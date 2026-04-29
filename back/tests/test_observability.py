@@ -50,7 +50,15 @@ def test_log_format_matches_java_pattern(app, client):
     assert "GET /api/hello" in line
 
 
-def test_health_endpoints_use_check_registry():
+def test_health_endpoints_use_check_registry(monkeypatch):
+    # Force redis check to be registered for this test, regardless of the
+    # ambient REDIS_HOST setting on the dev machine.
+    monkeypatch.setenv("REDIS_HOST", "localhost")
+    # Reset registry so create_health_app re-evaluates the gate.
+    from app.health import _REGISTRY  # type: ignore[attr-defined]
+
+    _REGISTRY.clear()
+
     from app.health import _run_checks, create_health_app, register_check
 
     create_health_app()
@@ -72,3 +80,30 @@ def test_health_endpoints_use_check_registry():
     # Built-in checks are wrapped by _timed() and must report latency_ms.
     assert "latency_ms" in checks["db"]
     assert isinstance(ok, bool)
+
+
+def test_redis_check_skipped_when_redis_host_unset(monkeypatch):
+    """If REDIS_HOST is unset/empty, redis must NOT be in the registry."""
+    monkeypatch.delenv("REDIS_HOST", raising=False)
+    from app.health import _REGISTRY  # type: ignore[attr-defined]
+
+    _REGISTRY.clear()
+
+    from app.health import create_health_app
+
+    create_health_app()
+    assert "db" in _REGISTRY
+    assert "redis" not in _REGISTRY
+
+
+def test_redis_check_registered_when_redis_host_set(monkeypatch):
+    monkeypatch.setenv("REDIS_HOST", "localhost")
+    from app.health import _REGISTRY  # type: ignore[attr-defined]
+
+    _REGISTRY.clear()
+
+    from app.health import create_health_app
+
+    create_health_app()
+    assert "db" in _REGISTRY
+    assert "redis" in _REGISTRY

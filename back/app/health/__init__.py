@@ -109,8 +109,13 @@ def _run_checks() -> tuple[bool, dict[str, Any]]:
 
 def create_health_app() -> Flask:
     # Default registry — callers can replace entries by calling register_check() after import.
+    # DB check: always on (sqlite in dev, mysql in prod — both routed via SQLAlchemy).
     _REGISTRY.setdefault("db", _check_db)
-    _REGISTRY.setdefault("redis", _check_redis)
+    # Redis check: only when REDIS_HOST is explicitly configured (non-empty).
+    # An unset/empty REDIS_HOST means "redis is not part of this deployment",
+    # so probing it would always fail and turn readiness into 503.
+    if (os.getenv("REDIS_HOST") or "").strip():
+        _REGISTRY.setdefault("redis", _check_redis)
 
     health_app = Flask("health")
 

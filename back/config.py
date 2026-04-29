@@ -1,13 +1,72 @@
 """Configuration classes for Dev / Prod / Test profiles.
 
-Selected via the FLASK_ENV env var (default: dev).
-Secrets must come from environment variables in prod.
+Profile selection
+-----------------
+The active profile is resolved in this order (highest wins):
+  1. Explicit argv on `python manage.py run [dev|prod|test]`
+     or `python manage.py run --env <profile>` (handled in manage.py).
+  2. `FLASK_ENV` environment variable.
+  3. Default: `dev`.
+
+Profile -> .env file
+--------------------
+On first call to `bootstrap_env()` (from manage.py / wsgi.py / gunicorn.conf.py
+/ load_config), we load variables from a profile-specific dotenv file:
+
+  dev / development / test / testing  -> back/.env.dev
+  prod / production                   -> back/.env.prod
+
+System environment variables ALWAYS win over the file (override=False), so
+real secrets injected via docker-compose / systemd EnvironmentFile / K8s
+Secret will not be clobbered by placeholders in `.env.prod`.
 """
 
 from __future__ import annotations
 
 import os
 from datetime import timedelta
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+_BACK_DIR = Path(__file__).resolve().parent
+_LOADED_FILES: set[str] = set()
+
+
+def _resolve_env_file(profile: str) -> Path:
+    """Return the dotenv file path for the given profile.
+
+    `ENV_FILE` env var, if set, overrides the profile-based mapping.
+    """
+    explicit = os.getenv("ENV_FILE")
+    if explicit:
+        return Path(explicit).expanduser().resolve()
+    if profile in {"prod", "production"}:
+        return _BACK_DIR / ".env.prod"
+    # dev / development / test / testing all share .env.dev
+    return _BACK_DIR / ".env.dev"
+
+
+def bootstrap_env(profile: str | None = None) -> str:
+    """Load the matching .env file for `profile` (or `FLASK_ENV`).
+
+    Idempotent — calling it again with the same file is a no-op.
+    Returns the resolved profile name, lower-cased.
+    """
+    resolved = (profile or os.getenv("FLASK_ENV") or "dev").lower()
+    # Ensure FLASK_ENV reflects what we just resolved, so downstream
+    # `os.getenv("FLASK_ENV")` calls see a consistent value.
+    os.environ.setdefault("FLASK_ENV", resolved)
+
+    env_file = _resolve_env_file(resolved)
+    key = str(env_file)
+    if key in _LOADED_FILES:
+        return resolved
+    if env_file.is_file():
+        # override=False: real env (docker / k8s / systemd) wins over the file.
+        load_dotenv(env_file, override=False)
+        _LOADED_FILES.add(key)
+    return resolved
 
 
 class BaseConfig:
@@ -40,16 +99,14 @@ class BaseConfig:
     OPENAPI_JSON_PATH: str = "openapi.json"
 
     # --- Redis / Celery ---
-    REDIS_HOST: str = os.getenv("REDIS_HOST", "localhost")
+    # NOTE: do NOT default REDIS_HOST here; an unset REDIS_HOST is the signal
+    # that "redis is not configured for this deployment" (drives the
+    # conditional health check in app/health). If you need a default, set it
+    # in .env.dev / .env.prod.
+    REDIS_HOST: str | None = os.getenv("REDIS_HOST")
     REDIS_PORT: int = int(os.getenv("REDIS_PORT", "6379"))
-    CELERY_BROKER_URL: str = os.getenv(
-        "CELERY_BROKER_URL",
-        f"redis://{os.getenv('REDIS_HOST', 'localhost')}:{os.getenv('REDIS_PORT', '6379')}/0",
-    )
-    CELERY_RESULT_BACKEND: str = os.getenv(
-        "CELERY_RESULT_BACKEND",
-        f"redis://{os.getenv('REDIS_HOST', 'localhost')}:{os.getenv('REDIS_PORT', '6379')}/1",
-    )
+    CELERY_BROKER_URL: str | None = os.getenv("CELERY_BROKER_URL")
+    CELERY_RESULT_BACKEND: str | None = os.getenv("CELERY_RESULT_BACKEND")
 
     # --- App ---
     APP_NAME: str = "scaffold-python"
@@ -97,5 +154,5 @@ _PROFILES: dict[str, type[BaseConfig]] = {
 
 
 def load_config() -> type[BaseConfig]:
-    env = os.getenv("FLASK_ENV", "dev").lower()
-    return _PROFILES.get(env, DevConfig)
+    profile = bootstrap_env()
+    return _PROFILES.get(profile, DevConfig)
