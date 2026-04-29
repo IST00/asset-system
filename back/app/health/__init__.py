@@ -70,11 +70,30 @@ def _timed(name: str, work: Callable[[], dict[str, Any]]) -> CheckResult:
         )
 
 
+_BUSINESS_APP: Any = None
+
+
+def bind_business_app(business_app: Any) -> None:
+    """Register the business Flask app so DB checks can borrow its context."""
+    global _BUSINESS_APP
+    _BUSINESS_APP = business_app
+
+
+def _db_configured() -> bool:
+    """True if the deployment explicitly configured a DB connection."""
+    return bool((os.getenv("DB_URL") or "").strip()) or bool(
+        (os.getenv("DB_HOST") or "").strip()
+    )
+
+
 def _check_db() -> CheckResult:
     def _work() -> dict[str, Any]:
         from app.extensions import db
 
-        db.session.execute(db.text("SELECT 1"))
+        if _BUSINESS_APP is None:
+            raise RuntimeError("health: business app not bound; call bind_business_app()")
+        with _BUSINESS_APP.app_context():
+            db.session.execute(db.text("SELECT 1"))
         return {"ok": True}
 
     return _timed("db", _work)
@@ -109,11 +128,12 @@ def _run_checks() -> tuple[bool, dict[str, Any]]:
 
 def create_health_app() -> Flask:
     # Default registry — callers can replace entries by calling register_check() after import.
-    # DB check: always on (sqlite in dev, mysql in prod — both routed via SQLAlchemy).
-    _REGISTRY.setdefault("db", _check_db)
+    # DB check: only when DB is explicitly configured (DB_URL or DB_HOST set & non-empty).
+    # Leaving both unset in the env file means "no DB in this deployment"; probing
+    # would turn readiness into a perpetual 503.
+    if _db_configured():
+        _REGISTRY.setdefault("db", _check_db)
     # Redis check: only when REDIS_HOST is explicitly configured (non-empty).
-    # An unset/empty REDIS_HOST means "redis is not part of this deployment",
-    # so probing it would always fail and turn readiness into 503.
     if (os.getenv("REDIS_HOST") or "").strip():
         _REGISTRY.setdefault("redis", _check_redis)
 

@@ -39,7 +39,11 @@ def post_fork(server, worker):  # type: ignore[no-untyped-def]
     if worker.age != 1:
         return
     try:
-        from app.health import run_health_server
+        from app.health import bind_business_app, run_health_server
+        from wsgi import app as business_app
+
+        # Let the health server borrow the business app context for DB checks.
+        bind_business_app(business_app)
 
         t = threading.Thread(
             target=run_health_server,

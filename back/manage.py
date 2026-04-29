@@ -20,10 +20,36 @@ is loaded; system env vars always win over the file.
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
+import threading
 
 import click
+
+_log = logging.getLogger("manage.scaffold")
+
+
+def _start_health_thread(business_app) -> None:  # type: ignore[no-untyped-def]
+    """Boot the health-check Flask app on a daemon thread (dev/test path).
+
+    Mirrors what gunicorn.conf.py:post_fork does for prod, so `:8081/health`
+    works the same regardless of how the server was launched.
+    """
+    try:
+        from app.health import bind_business_app, run_health_server
+
+        bind_business_app(business_app)
+        t = threading.Thread(
+            target=run_health_server,
+            name="health-server",
+            daemon=True,
+        )
+        t.start()
+        _log.info("health server thread started (dev/test)")
+    except Exception as exc:  # pragma: no cover
+        _log.warning("failed to start health server: %s", exc)
+
 
 _VALID_PROFILES = {"dev", "development", "prod", "production", "test", "testing"}
 
@@ -70,6 +96,7 @@ app = create_app()
 @click.option("--port", default=8080, type=int)
 def run_cmd(host: str, port: int) -> None:  # pragma: no cover
     """Start the dev server (equivalent to `flask run`)."""
+    _start_health_thread(app)
     app.run(host=host, port=port, debug=app.config.get("DEBUG", False))
 
 
@@ -78,6 +105,7 @@ if __name__ == "__main__":  # pragma: no cover
     if len(sys.argv) > 1 and sys.argv[1] == "run":
         host = os.getenv("FLASK_RUN_HOST", "0.0.0.0")
         port = int(os.getenv("FLASK_RUN_PORT", "8080"))
+        _start_health_thread(app)
         app.run(host=host, port=port, debug=app.config.get("DEBUG", False))
     else:
         # Fall through to Flask's CLI for `db`, etc.
