@@ -60,8 +60,10 @@ cd back
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 FLASK_APP=manage.py flask db upgrade            # 首次执行，建表并写入 admin 种子
-python manage.py run                            # 启动开发服务器
+python manage.py run [dev|prod]                            # 启动开发服务器
 ```
+
+环境里面如何操作
 
 - 应用：http://localhost:8080
 - Swagger：http://localhost:8080/swagger-ui（需显式启用 flask-smorest Api；默认已装）
