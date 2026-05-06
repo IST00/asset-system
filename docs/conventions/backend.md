@@ -94,6 +94,111 @@ service 里一旦 `return Result.fail(...)`，调用方要么得自己再判状�
 
 ---
 
+## 2.5. HTTP 动词只用 GET 与 POST
+
+脚手架的 blueprint **只允许** `@bp.get(...)` 和 `@bp.post(...)` 两种装饰器。
+
+- **`@bp.get(...)`** —— 幂等查询；入参走 `request.args` / 路径参数，不读 body。
+- **`@bp.post(...)`** —— 其他一切（创建 / 更新 / 删除 / 动作 / 批量操作）；入参走 `request.get_json(...)` 经 `*RequestSchema.load(...)` 校验。
+
+**禁止使用**：`@bp.put` / `@bp.delete` / `@bp.patch`；也禁止 `@bp.route(..., methods=["PUT","DELETE","PATCH"])` 或 `add_url_rule(..., methods=["PUT", ...])`。
+
+### 为什么
+
+- **LLM 生成代码一致性**：减少 AI 工具在 "用 PUT 还是 POST" 之间摇摆，约束少 = 生成更稳。
+- **网关 / 代理兼容**：老旧代理、部分 WAF、公司内网穿透对 PUT/DELETE/PATCH 的支持不如 GET/POST 稳。统一收敛到两种，部署面最小。
+- **前端对接简单**：`@/api/http` 统一用 `get` / `post`；不再有 "业务到底用 delete 还是 post" 的反复拉扯。
+- **幂等语义自己担保**：REST 的 PUT/DELETE 幂等只是"协议层约定"，真实幂等要 service 里做去重 / 条件更新。不靠 HTTP 动词。
+
+### URL 命名约定（动作化，弥补动词收敛）
+
+因为不再靠动词表达语义，URL 末段用动词或 `/action` 后缀表达意图：
+
+```
+GET  /api/users                         # 列表查询（分页走 query param）
+GET  /api/users/<int:id>                # 单个查询
+POST /api/users                         # 创建
+POST /api/users/<int:id>/update         # 更新
+POST /api/users/<int:id>/delete         # 删除
+POST /api/users/<int:id>/disable        # 领域动作
+POST /api/users/batch-import            # 批量
+```
+
+### ✅
+
+```python
+# app/api/users.py
+from flask import Blueprint, request
+from flask_jwt_extended import jwt_required
+from app.common import Result
+from app.schemas.user import (
+    CreateUserRequestSchema,
+    UpdateUserRequestSchema,
+)
+from app.services import user_service
+
+bp = Blueprint("users", __name__, url_prefix="/api/users")
+
+_create_schema = CreateUserRequestSchema()
+_update_schema = UpdateUserRequestSchema()
+
+
+@bp.get("")
+@jwt_required()
+def page() -> dict:
+    page_num = int(request.args.get("page", 1))
+    size = int(request.args.get("size", 20))
+    return Result.success(user_service.page(page_num, size)).to_dict()
+
+
+@bp.get("/<int:user_id>")
+@jwt_required()
+def detail(user_id: int) -> dict:
+    return Result.success(user_service.get(user_id)).to_dict()
+
+
+@bp.post("")
+@jwt_required()
+def create() -> dict:
+    payload = _create_schema.load(request.get_json(silent=True) or {})
+    return Result.success(user_service.create(payload)).to_dict()
+
+
+@bp.post("/<int:user_id>/update")
+@jwt_required()
+def update(user_id: int) -> dict:
+    payload = _update_schema.load(request.get_json(silent=True) or {})
+    return Result.success(user_service.update(user_id, payload)).to_dict()
+
+
+@bp.post("/<int:user_id>/delete")
+@jwt_required()
+def delete(user_id: int) -> dict:
+    user_service.delete(user_id)
+    return Result.success().to_dict()
+```
+
+### ❌
+
+```python
+@bp.put("/<int:user_id>")                # ❌ 禁用 PUT
+def update(user_id: int): ...
+
+@bp.delete("/<int:user_id>")             # ❌ 禁用 DELETE
+def delete(user_id: int): ...
+
+@bp.patch("/<int:user_id>/status")       # ❌ 禁用 PATCH
+def patch(user_id: int): ...
+
+@bp.route("/<int:user_id>",
+          methods=["DELETE"])            # ❌ 换写法也不行
+def del_user(user_id: int): ...
+```
+
+前端对应（`@/api/http`）：**只**用 `http.get(...)` / `http.post(...)`，不写 `http.put` / `http.delete` / `http.patch`。
+
+---
+
 ## 3. Schema 边界（marshmallow）
 
 - 入参：`*RequestSchema.load(request.get_json(silent=True) or {})`。`ValidationError` 会被全局 handler 翻成 `400 + Result.fail(BAD_REQUEST, ...)`。

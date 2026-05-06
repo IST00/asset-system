@@ -20,7 +20,7 @@
 | `front/` 任意文件 | `../scaffolding-java/docs/conventions/frontend.md`（规则完全一致） |
 | 提交 / 分支 / CI | 本文件 §工作流 |
 
-## 不可越线的 10 条
+## 不可越线的 11 条
 
 1. **Blueprint 禁止直接 import `app.models` 或 `app.extensions.db`**，走 `app.services`。
 2. **Blueprint 禁止返回 model 实例**，过 marshmallow `*Schema` 或 service 出参 dict。
@@ -32,6 +32,7 @@
 8. **ESLint 零 warning，TypeScript 禁 `any`**。
 9. **后端 lint 零告警**：`ruff check .`、`ruff format --check .`、`mypy app/ config.py` 全过。
 10. **Conventional Commits，禁用 `--no-verify` 绕 husky**。
+11. **HTTP 动词只用 GET 与 POST**。查询走 `@bp.get(...)`，其他（增 / 改 / 删 / 动作）统统走 `@bp.post(...)`；**禁止** `@bp.put` / `@bp.delete` / `@bp.patch` 或 `methods=["PUT","DELETE","PATCH"]`。→ `docs/conventions/backend.md` §2.5
 
 ## 后端分层
 
