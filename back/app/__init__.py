@@ -20,14 +20,33 @@ from config import BaseConfig, load_config
 
 
 def _enable_cors(app: Flask) -> None:
-    """Single place for CORS rules — mirrors CorsConfig on the Java side."""
-    allowed = os.getenv("CORS_ALLOWED_ORIGINS", "*")
+    """Single place for CORS rules — mirrors CorsConfig on the Java side.
+
+    ``CORS_ALLOWED_ORIGINS`` is a comma-separated list.
+    - ``*`` (default for dev) 回显请求的 Origin，方便本地调试；不建议用于 prod。
+    - 具体域名列表：只对命中的 Origin 回写 Allow-Origin 头，未命中则不回写
+      （浏览器会拦住，等同于拒绝）。
+    """
+    raw = os.getenv("CORS_ALLOWED_ORIGINS", "*").strip()
+    allow_any = raw == "*"
+    whitelist = {o.strip() for o in raw.split(",") if o.strip() and o.strip() != "*"}
 
     @app.after_request
     def _set_cors_headers(resp: Any) -> Any:
-        resp.headers.setdefault("Access-Control-Allow-Origin", allowed)
+        from flask import request
+
+        origin = request.headers.get("Origin", "")
+        if allow_any and origin:
+            resp.headers.setdefault("Access-Control-Allow-Origin", origin)
+            resp.headers.setdefault("Vary", "Origin")
+        elif origin in whitelist:
+            resp.headers.setdefault("Access-Control-Allow-Origin", origin)
+            resp.headers.setdefault("Vary", "Origin")
+        # else: 不命中则完全不写 Allow-Origin，浏览器自然拦截
+        resp.headers.setdefault("Access-Control-Allow-Credentials", "true")
         resp.headers.setdefault(
-            "Access-Control-Allow-Headers", "Authorization, Content-Type, X-Requested-With"
+            "Access-Control-Allow-Headers",
+            "Authorization, Content-Type, X-Requested-With",
         )
         resp.headers.setdefault(
             "Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, PATCH"
