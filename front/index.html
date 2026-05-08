@@ -1,14 +1,58 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-cmn-Hans">
   <head>
     <meta charset="UTF-8" />
-    <!-- 相对路径；Vite 构建时会按 `base` 自动注入前缀（开发 '/'，生产 '/scaffold-ui/'）。 -->
-    <link rel="icon" type="image/svg+xml" href="./vite.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" href="https://static-card.dushu365.com/favicon.ico" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, minimum-scale=1, user-scalable=no, viewport-fit=cover" />
     <title>%VITE_APP_TITLE%</title>
+    <meta name="description" content="%VITE_APP_DESCRIPTION%" />
+    <link rel="preconnect" href="https://static-card.dushu365.com" />
+    <link rel="dns-prefetch" href="//gateway-api.dushu365.com" />
+    <link rel="dns-prefetch" href="//cdn-upyun-images.dushu365.com" />
+    <link rel="dns-prefetch" href="//cdn-web-images.dushu365.com" />
+    <link rel="dns-prefetch" href="//g.alicdn.com" />
+    <script>
+      window.setToken = function (token) {
+        if (window.token !== token) {
+          window.location.reload();
+        }
+        window.token = token;
+      };
+      window.generalPurpose_setGlobalData = function () {
+        var t = arguments.length > 0 && void 0 !== arguments[0] ? arguments[0] : {};
+        try {
+          Object.keys(t).map(function (e) {
+            window[e] = t[e];
+          });
+        } catch (e) {}
+      };
+      window.FILES = {css: [], js: []};
+      window.OPTIONS = {
+        disableSensor: '%VITE_DISABLE_SENSORS%' === 'true'
+      };
+      window.IS_IPAD = '%VITE_IS_IPAD%' === 'true';
+      window.PACKAGE_NAME = '<%- packageName %>';
+      window.PACKAGE_VERSION = '<%- packageVersion %>';
+    </script>
+    <script src="https://gateway-api.dushu365.com/compose-orch/commonScriptConfig/getFrontScriptConfig"></script>
   </head>
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
+
+    <!-- vconsole start -->
+    <% if (!isProduction) { %>
+    <script src="https://static-card.dushu365.com/@npm/v.console/vconsole.min.js"></script>
+    <script>
+      window.vConsole = new VConsole();
+    </script>
+    <% } %>
+    <!-- vconsole end -->
+
+    <script>
+      document.write(
+        '<script src="' + window.STATIC_CARD + '/@soybean/common.init/dist/react@' + window.GLOBAL_LIBS['@soybean/common.init'] + '.min.js' + '"><' + '/script>'
+      );
+    </script>
   </body>
 </html>
