@@ -1,0 +1,69 @@
+---
+description: 提交 / 分支 / CI / 钩子规则——所有文件均适用
+globs: **/*
+alwaysApply: true
+---
+
+# 工作流规则
+
+唯一事实源：[`docs/conventions/workflow.md`](../../docs/conventions/workflow.md)。
+
+## 提交（Conventional Commits）
+
+格式：`<type>(<scope>): <subject>`
+
+允许的 type：`feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert`。
+
+### ✅
+```
+feat(auth): 支持 refresh token
+fix(front): 修复登录后跳转空白页
+refactor(back/user): 拆出 UserQueryService
+```
+
+### ❌
+```
+update                          # 没 type
+feat:支持refresh                # 冒号后缺空格
+增加登录                        # 没 type，也没英文关键字
+```
+
+## 钩子
+
+- `.husky/pre-commit` 跑 `lint-staged` + 规则守护脚本。**禁止** 用 `git commit --no-verify` 绕过。
+- `.husky/commit-msg` 跑 `commitlint`。
+- 首次 clone 需要在 `scaffolding-java/` 下执行 `npm install && npm run prepare`。
+
+## 分支
+
+- `main` / `develop`：只接 PR，禁止直接 push，禁止 force push。
+- 工作分支：`feature/<id>-<desc>`、`fix/<id>-<desc>`、`hotfix/<desc>`。
+
+## CI
+
+`.github/workflows/ci.yml` 跑后端 `mvn verify` + 前端 `npm ci → type-check → lint → build`。**不要**用 `continue-on-error: true` 把红变绿——必须修根因。
+
+## Push 前自查
+
+- 后端：`cd back && mvn -DskipTests compile`（改到测试覆盖的代码再跑 `mvn test`）。
+- 前端：`cd front && npm run type-check && npm run lint && npm run build`。
+- 改了中间件：`cd scaffolding-middleware && mvn -DskipTests clean install`，再回 `back` 重新编译。
+
+## 脚手架自身变更（需要评审）
+
+改动下列任意一项 = 改脚手架本体，必须开独立 PR 并打 `scaffolding` 标签：
+
+- `back/pom.xml` 根依赖（starter opt-in 的注释切换除外）
+- `front/package.json` 的 dependencies（非 devDep）
+- `Result<T>` / `ResultCode` / `GlobalExceptionHandler` / `SecurityConfig`
+- `application*.properties`、`.husky/*`、`commitlint.config.cjs`、`.eslintrc.cjs`、`tsconfig.json`
+- 新增/删除 starter
+- `CLAUDE.md` / `AGENTS.md` / `docs/conventions/**` / `.cursor/rules/**`
+
+## 给 AI 工具的操作守则
+
+- 生成新文件前，先读一个同类型的现有文件当模板。
+- 引用类/导入前，用 `Grep` / `Read` 确认存在，**不要瞎猜**。
+- 改完用上面的自检命令跑一遍。
+- 不要在没写清楚理由的前提下静音 lint 或跳过钩子。
+- 保持 diff 最小——不做顺手重构，不对未改动文件批量格式化。

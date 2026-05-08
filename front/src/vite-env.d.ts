@@ -1,5 +1,9 @@
 /// <reference types="vite/client" />
 
+import type { SoybeanCommonMain } from '@soybean/types.main'
+import type * as React from 'react'
+import type * as ReactDOM from 'react-dom'
+
 interface ImportMetaEnv {
   readonly VITE_API_BASE_URL: string
   readonly VITE_API_TARGET: string
@@ -13,4 +17,20 @@ interface ImportMetaEnv {
 
 interface ImportMeta {
   readonly env: ImportMetaEnv
+}
+
+declare global {
+  interface Window {
+    React: typeof React
+    ReactDOM: typeof ReactDOM
+    SoybeanCommonMain: SoybeanCommonMain
+    pagePath: string
+    setupWKWebViewJavascriptBridge: any
+    WKWebViewJavascriptBridge: any
+    WKWVJBCallbacks: any
+    webkit: any
+    SoybeanCoreMain: any
+    javaDataPath: string
+    deeplinkPath: string
+  }
 }

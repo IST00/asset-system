@@ -38,21 +38,26 @@
   </head>
   <body>
     <div id="root"></div>
+
+    <!-- Load common.init first (synchronous via document.write) -->
+    <script>
+      (function() {
+        try {
+          if (!window.STATIC_CARD || !window.GLOBAL_LIBS || !window.GLOBAL_LIBS['@soybean/common.init']) {
+            console.error('Missing required globals: STATIC_CARD or GLOBAL_LIBS');
+            throw new Error('Configuration not loaded');
+          }
+          
+          var scriptSrc = window.STATIC_CARD + '/@soybean/common.init/dist/react@' + window.GLOBAL_LIBS['@soybean/common.init'] + '.min.js';
+          document.write('<script src="' + scriptSrc + '"><' + '/script>');
+        } catch (e) {
+          console.error('Failed to load common.init:', e);
+          document.write('<div style="padding: 20px; color: red; font-family: sans-serif;">加载依赖失败,请刷新页面重试。<button onclick="location.reload()" style="margin-left: 10px;">刷新</button></div>');
+        }
+      })();
+    </script>
+
+    <!-- Now load the app (module script defers execution until after common.init) -->
     <script type="module" src="/src/main.tsx"></script>
-
-    <!-- vconsole start -->
-    <% if (!isProduction) { %>
-    <script src="https://static-card.dushu365.com/@npm/v.console/vconsole.min.js"></script>
-    <script>
-      window.vConsole = new VConsole();
-    </script>
-    <% } %>
-    <!-- vconsole end -->
-
-    <script>
-      document.write(
-        '<script src="' + window.STATIC_CARD + '/@soybean/common.init/dist/react@' + window.GLOBAL_LIBS['@soybean/common.init'] + '.min.js' + '"><' + '/script>'
-      );
-    </script>
   </body>
 </html>

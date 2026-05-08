@@ -1,6 +1,7 @@
 import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 import { createHtmlPlugin } from 'vite-plugin-html'
+import { viteExternalsPlugin } from 'vite-plugin-externals'
 import path from 'node:path'
 import pkg from './package.json'
 
@@ -21,6 +22,11 @@ export default defineConfig(({ mode }) => {
   return {
     base: appBase,
     plugins: [
+      viteExternalsPlugin({
+        react: 'React',
+        'react-dom': 'ReactDOM',
+        '@soybean/common.main': 'SoybeanCommonMain',
+      }),
       react(),
       createHtmlPlugin({
         inject: {
@@ -37,13 +43,25 @@ export default defineConfig(({ mode }) => {
         '@': path.resolve(__dirname, 'src'),
       },
     },
+    build: {
+      rollupOptions: {
+        external: ['react', 'react-dom', '@soybean/common.main'],
+        output: {
+          globals: {
+            react: 'React',
+            'react-dom': 'ReactDOM',
+            '@soybean/common.main': 'SoybeanCommonMain',
+          },
+        },
+      },
+    },
     server: {
       port: 3000,
       proxy: {
         [proxyPath]: {
           target: env.VITE_API_TARGET || 'http://localhost:8080',
           changeOrigin: true,
-          // 剥掉 apiPrefix，让后端看到的路径跟线上 nginx 转发后一致（只剩 /api/...）
+          // 剥掉 apiPrefix,让后端看到的路径跟线上 nginx 转发后一致(只剩 /api/...)
           rewrite: (p) => (apiPrefix ? p.replace(new RegExp(`^${apiPrefix}`), '') : p),
         },
       },

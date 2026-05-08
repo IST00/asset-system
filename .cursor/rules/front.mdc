@@ -1,0 +1,65 @@
+---
+description: 前端（React + Vite）规则——编辑 front/** 时自动加载
+globs: front/**/*.ts,front/**/*.tsx,front/**/*.css
+alwaysApply: false
+---
+
+# 前端规则（front/）
+
+唯一事实源：[`docs/conventions/frontend.md`](../../docs/conventions/frontend.md)。
+
+## 硬性规则
+
+1. **所有 HTTP 必须走 `@/api/http`**。禁止 `import axios from 'axios'`，禁止直接 `fetch('/api/...')`。
+2. **状态分层**：UI 内部状态用 `useState`；跨组件全局状态用 Zustand（`src/store/*`）；服务端数据用 TanStack Query。**不要**把服务端数据放 Zustand，也**不要**把纯 UI 状态放 Query。
+3. **只允许 `@/` 别名**；禁止 `../../..`，禁止新增其他别名。
+4. **表单**：`react-hook-form` + `zod`（`@hookform/resolvers/zod`）。不要在 AntD `Form` props 里重复写 zod 已表达的校验。
+5. **UI 技术栈固定**：AntD 5 组件 + `lucide-react` 图标 + `react-i18next` 文案。面向用户的中文**不要**硬编码在 JSX 里。
+6. **ESLint 零 warning，禁 `any`**。禁止整文件 `/* eslint-disable */`；行级 disable 必须带 `-- 原因` 注释。
+7. **路由**集中在 `src/router/index.tsx`；受保护路由套 `ProtectedRoute`；404 统一走 `pages/NotFound.tsx`。
+8. **HTTP 动词只用 `http.get` / `http.post`**：与后端 `@GetMapping` / `@PostMapping` 对齐。**禁止** `http.put` / `http.delete` / `http.patch` 或裸 `axios.put/delete/patch`。删除 / 更新 / 动作型接口都用 POST 加动词后缀，例如 `http.post('/api/users/${id}/delete')` / `http.post('/api/users/${id}/update', body)`。详见 `docs/conventions/backend.md` §2.5。
+
+## ✅ 正确
+
+```ts
+// src/api/user.ts
+import { http } from '@/api/http'
+export const fetchMe = () => http.get<UserResponse>('/api/users/me')
+
+// src/pages/Profile.tsx
+const { data } = useQuery({ queryKey: ['me'], queryFn: fetchMe })
+```
+
+```ts
+const schema = z.object({
+  username: z.string().min(3).max(32),
+  password: z.string().min(6),
+})
+const { register, handleSubmit } = useForm({ resolver: zodResolver(schema) })
+```
+
+## ❌ 错误
+
+```tsx
+import axios from 'axios'
+const res = await axios.get('http://localhost:8080/api/users/me')  // 绕过 http
+```
+
+```ts
+// 把服务端数据塞进 zustand
+export const useUsers = create(set => ({
+  users: [],
+  load: async () => set({ users: await fetchUsers() }),
+}))
+```
+
+```ts
+import { Layout } from '../../components/Layout'   // 应该用 @/
+const data: any = res.data                          // 禁 any
+```
+
+## 收尾自检
+
+- `cd front && npm run type-check` 通过。
+- `cd front && npm run lint` **零 warning** 通过。
+- `cd front && npm run build` 能构建出产物。
