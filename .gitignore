@@ -61,5 +61,4 @@ logs/
 .omc/
 .claude/
 memory/
-.cursor/
 .aider*

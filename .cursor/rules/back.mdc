@@ -1,0 +1,89 @@
+---
+description: 后端（Spring Boot）规则——编辑 back/** 时自动加载
+globs: back/**/*.java,back/**/*.properties,back/**/*.xml,back/**/*.sql
+alwaysApply: false
+---
+
+# 后端规则（back/）
+
+唯一事实源：[`docs/conventions/backend.md`](../../docs/conventions/backend.md)。
+
+## 硬性规则
+
+1. **分层依赖方向**：`controller → service → repository → entity`。Controller **不得**直接注入 `*Repository`；Service **不可**被跳过。
+2. **DTO 边界**：Controller **不能**接收/返回实体类。使用 `dto/` 下的 `*Request` / `*Response` + MapStruct Mapper。
+3. **统一响应信封**：返回 `common.Result<T>`（分页用 `common.PageResult<T>`）。**不要**手写 `Result.fail(code, msg)`——抛 `BusinessException(ResultCode.XXX)`，交给 `GlobalExceptionHandler` 翻译。
+4. **Schema 只走 Flyway**：新增 `V{n}__<snake_desc>.sql`；**禁止**改动已合入的迁移；**禁止**用 `V1_1` 这种写法；**禁止**引入 `spring-boot-starter-data-jpa` / `JpaRepository` / `@Entity`。
+5. **安全**：从 `Authentication` 或 `SecurityContextHolder` 取当前用户，**不要**自己解析 Authorization 头。
+6. **配置**：敏感值走环境变量。新增 starter 的配置前缀固定为 `quick.<kebab-name>`。
+7. **命名**：实体 = 名词（不带 `Entity` 后缀）；仓库 = `XxxRepository`；入参/出参统一放 `dto/`。
+8. **HTTP 动词只用 GET / POST**：查询走 `@GetMapping`（`@RequestParam` / `@PathVariable`，不接受 body）；其余（创建 / 更新 / 删除 / 动作 / 批量）统统走 `@PostMapping`（`@RequestBody @Valid *Request`）。**禁止** `@PutMapping` / `@DeleteMapping` / `@PatchMapping`，也禁止 `@RequestMapping(method = RequestMethod.PUT|DELETE|PATCH)` 或 `methods = { RequestMethod.PUT, ... }`。URL 命名用动词后缀弥补：`POST /api/users/{id}/update`、`POST /api/users/{id}/delete`、`POST /api/users/{id}/disable`、`POST /api/users/batch-import`。详见 `docs/conventions/backend.md` §2.5。
+
+## ✅ 正确
+
+```java
+@RestController
+@RequestMapping("/api/users")
+@RequiredArgsConstructor
+public class UserController {
+    private final UserService userService;
+
+    @GetMapping("/me")
+    public Result<UserResponse> me(Authentication auth) {
+        return Result.ok(userService.loadByUsername(auth.getName()));
+    }
+}
+```
+
+```java
+if (userRepository.existsByUsername(req.getUsername())) {
+    throw new BusinessException(ResultCode.USER_ALREADY_EXISTS);
+}
+```
+
+## ❌ 错误
+
+```java
+@RestController
+@RequiredArgsConstructor
+public class UserController {
+    private final UserRepository userRepository;  // 跳过 Service
+    @GetMapping("/me")
+    public User me() {                            // 泄漏 Entity
+        return userRepository.findById(1L).orElseThrow();
+    }
+}
+```
+
+```java
+return Result.fail(400, "用户已存在");             // 绕过 BusinessException / ResultCode
+```
+
+```xml
+<!-- 禁止 -->
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-data-jpa</artifactId>
+</dependency>
+```
+
+```java
+@PutMapping("/{id}")                       // ❌ 禁用 PUT
+public Result<UserResponse> update(...) { ... }
+
+@DeleteMapping("/{id}")                    // ❌ 禁用 DELETE
+public Result<Void> delete(...) { ... }
+
+@PatchMapping("/{id}/status")              // ❌ 禁用 PATCH
+public Result<Void> patch(...) { ... }
+
+@RequestMapping(value = "/{id}",
+    method = RequestMethod.DELETE)         // ❌ 换写法也不行
+public Result<Void> del(...) { ... }
+```
+
+## 收尾自检
+
+- `cd back && mvn -DskipTests compile` 通过。
+- 新增了 Flyway 迁移？本地 `mvn spring-boot:run` 跑一次，确认 `flyway migrate` 成功。
+- 加了 `@ConfigurationProperties`？前缀必须是 `quick.<kebab-name>`。

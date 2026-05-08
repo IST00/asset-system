@@ -1,6 +1,9 @@
 import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
+import { createHtmlPlugin } from 'vite-plugin-html'
+import { viteExternalsPlugin } from 'vite-plugin-externals'
 import path from 'node:path'
+import pkg from './package.json'
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
@@ -18,10 +21,38 @@ export default defineConfig(({ mode }) => {
 
   return {
     base: appBase,
-    plugins: [react()],
+    plugins: [
+      viteExternalsPlugin({
+        react: 'React',
+        'react-dom': 'ReactDOM',
+        '@soybean/common.main': 'SoybeanCommonMain',
+      }),
+      react(),
+      createHtmlPlugin({
+        inject: {
+          data: {
+            packageName: pkg.name,
+            packageVersion: pkg.version,
+            isProduction: mode === 'production',
+          },
+        },
+      }),
+    ],
     resolve: {
       alias: {
         '@': path.resolve(__dirname, 'src'),
+      },
+    },
+    build: {
+      rollupOptions: {
+        external: ['react', 'react-dom', '@soybean/common.main'],
+        output: {
+          globals: {
+            react: 'React',
+            'react-dom': 'ReactDOM',
+            '@soybean/common.main': 'SoybeanCommonMain',
+          },
+        },
       },
     },
     server: {
@@ -30,7 +61,7 @@ export default defineConfig(({ mode }) => {
         [proxyPath]: {
           target: env.VITE_API_TARGET || 'http://localhost:8080',
           changeOrigin: true,
-          // 剥掉 apiPrefix，让后端看到的路径跟线上 nginx 转发后一致（只剩 /api/...）
+          // 剥掉 apiPrefix,让后端看到的路径跟线上 nginx 转发后一致(只剩 /api/...)
           rewrite: (p) => (apiPrefix ? p.replace(new RegExp(`^${apiPrefix}`), '') : p),
         },
       },
