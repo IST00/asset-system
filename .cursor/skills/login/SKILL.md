@@ -1,175 +1,116 @@
 ---
-name: login
+name: login-do-login
 description: >-
   Documents Soybean common main `app.login` on `window.SoybeanCommonMain.alias`:
-  `doLogin`, `doPopupLoginForm`, `doPopupAgreement`, form fields, context hooks,
-  store management, and login components. Use when implementing login flows,
-  authentication, user registration, or debugging login UX.
+  `doLogin`（统一登录入口，自动路由 Native / Aurora 一键登录 / H5 弹框）。
+  Use when implementing login flows, triggering the login popup, or debugging
+  `doLogin` / `doNativeLogin` / `doAuroraLogin` / `doWebLogin` behavior.
 ---
 
-# Login（`window.SoybeanCommonMain.alias.app.login`）
+# Login · `doLogin`（`window.SoybeanCommonMain.alias.app.login`）
 
-已接入 common main 时：**登录入口**统一 `app.login`，支持 Web 表单登录、极光一键登录、Native 原生登录三种方式，自动判断环境与能力。
+> **⚠️ 仅限 Web H5 页面使用**
+> 本 Skill 依赖 `window.SoybeanCommonMain`，只能在 Web H5 页面环境（`front/` 目录下的页面）中使用，不适用于后端或其他非 H5 场景。
 
 ## 快速开始
 
-1. 业务侧默认调用 **`action.doLogin()`** 唤起登录流程，框架自动选择最优方式（极光/表单）。
-2. 需要弹窗获取手机号但不立即登录时，使用 **`action.doPopupLoginForm()`**。
-3. **登录流程示例**见 [examples.md](examples.md)。
+```ts
+const {app} = window.SoybeanCommonMain.alias;
 
-## 何时使用
-
-- 用户登录/注册；获取手机号与验证码；弹窗用户协议；登录状态校验；排查登录失败、验证码未发送、协议未勾选等问题。
-
-## 能力速查
-
-### action（核心方法）
-
-| API | 用途 |
-| --- | --- |
-| `doLogin(params?)` | 唤起登录流程（自动选择极光/表单/Native） |
-| `doPopupLoginForm(params)` | 弹窗登录表单（仅获取手机号验证码，不执行登录） |
-| `doPopupAgreement(params)` | 弹窗用户协议 |
-| `submitLoginForm(login)` | 提交登录表单（手动调用） |
-| `sendSMS({isFirstTime})` | 发送验证码短信 |
-| `validate()` | 校验表单完整性（手机号、验证码、协议） |
-| `validateMobile()` | 仅校验手机号 |
-| `validateAgreement()` | 仅校验协议勾选 |
-| `reset()` | 重置表单字段 |
-| `updateLoginParams(params)` | 更新登录参数（渠道、活动等） |
-| `updateField(key, value, subKey?)` | 更新单个表单字段 |
-| `clearError($store)` | 清除字段错误状态 |
-| `throwError($store, message)` | 设置字段错误并抛异常 |
-| `subscribe(key, callback)` | 订阅字段变化 |
-| `getTrackingSourceId()` | 获取注册来源 ID（4 种来源优先级） |
-| `updateTrackingSourceId(id)` | 更新注册来源 ID |
-| `getActivityId()` | 获取活动 ID |
-| `getComputedMobile(areaCode, mobile)` | 拼装国际号码格式 |
-| `getAgreement()` | 获取协议勾选状态 |
-| `isFieldError()` | 是否有字段错误 |
-
-### store（状态管理）
-
-| Store | 用途 |
-| --- | --- |
-| `$areaCode` | 区号字段（默认 +86） |
-| `$mobile` | 手机号字段 |
-| `$verificationCode` | 验证码字段 |
-| `$agreement` | 协议勾选字段 |
-| `$loginParams` | 登录参数（渠道、活动、来源等） |
-| `$focusInput` | 输入框聚焦状态 |
-| `$loginPosition` | 登录弹窗位置 |
-| `defaults` | 字段默认值 |
-
-### context（React Hooks）
-
-| Hook | 用途 |
-| --- | --- |
-| `useAreaCode()` | 订阅区号状态 |
-| `useMobile()` | 订阅手机号状态 |
-| `useVerificationCode()` | 订阅验证码状态 |
-| `useAgreement()` | 订阅协议勾选状态 |
-| `useLoginParams()` | 订阅登录参数 |
-
-### fields（表单组件）
-
-| Component | 用途 |
-| --- | --- |
-| `AreaCodeSelect` | 区号选择器 |
-| `MobileInput` | 手机号输入框 |
-| `VerificationCodeInput` | 验证码输入框 |
-| `CountDownButton` | 倒计时发送按钮 |
-| `UserAgreement` | 用户协议勾选 |
-| `LoginButton` | 登录按钮 |
-| `FormTitle` | 表单标题 |
-| `FormFooter` | 表单底部 |
-| `ErrorMessage` | 错误提示 |
-
-### components（整体组件）
-
-| Component | 用途 |
-| --- | --- |
-| `BasicLoginForm` | 基础登录表单 |
-| `PopupLoginForm` | 弹窗登录表单 |
-| `AutoLoginForm` | 自动登录表单 |
-| `CardLoginForm` | 卡片登录表单 |
-| `PopupAgreement` | 协议弹窗 |
-
-## 登录流程
-
-### 1. 自动判断环境
-
-```typescript
-doLogin() → 
-  Native 环境 → doNativeLogin()
-  极光可用 → doAuroraLogin()
-  其他 → doWebLogin()
+// 直接调用即可，无需提前判断登录状态
+const userInfo = await app.login.action.doLogin(params?);
 ```
 
-### 2. 参数传递
+`doLogin` 是统一入口，有两点**不需要业务方自行判断**：
 
-```typescript
-LoginParams {
-  c?: string;              // 渠道
-  r?: string;              // 推广人 ID
-  activityId?: string;     // 活动 ID
-  trackingSourceId?: number; // 注册来源 ID
-  source?: string;         // 短信来源
-  sourceId?: string;       // 书籍 ID
-  childId?: string;        // 海报 ID
-  copyId?: string;         // 文案 ID
+1. **登录状态**：已登录则直接返回 `userInfo`，未登录才弹框——业务方无需 `if (token)` 守卫。
+2. **运行环境**：内部自动路由登录方式，无需区分 Native / H5。
+
+| 运行环境 | 实际走的登录方式 |
+|----------|----------------|
+| Native App | `doNativeLogin` → JSBridge |
+| H5 + Aurora SDK 可用 | `doAuroraLogin` → 极光一键登录，失败降级 `doWebLogin` |
+| H5 + Aurora 不可用 | `doWebLogin` → 手机号验证码弹框 |
+
+---
+
+## 参数说明
+
+```ts
+doLogin(params?: WebLoginParam & AuroraLoginParam & NativeLoginParam & PopupLoginFormProps): Promise<UserInfo>
+```
+
+所有参数均为**可选**。常用字段：
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `logout` | `boolean` | 已登录时强制重新弹登录框（默认跳过） |
+| `sensors` | `{source?: string; title?: string; ...}` | 埋点来源信息 |
+| `onBeforeLogin` | `() => Promise<void>` | 登录接口调用前的钩子（Aurora 流程） |
+| `customUIWithConfig` | `SetCustomUIWithConfigParams` | Aurora 一键登录界面自定义（logo / 颜色等） |
+| `el` | `string \| Element` | 挂载 H5 弹框的容器（不传则自动创建） |
+| `cancelText` | `string` | 用户关闭弹框时 reject 的错误消息文本 |
+| `allowEmptyToken` | `boolean` | Native：允许空 token（默认 `true`） |
+| `init` | `boolean` | Native：使用 `CoreNative.init` 而非 `CoreNative.login` |
+
+> 完整类型定义见 [reference.md](reference.md)。
+
+---
+
+## 返回值与错误处理
+
+- **成功**：resolve `UserInfo`（含 `token`、`userId` 等用户信息）。
+- **用户主动关闭弹框**：reject，message 为 `cancelText`（默认 `undefined`）。
+- **Aurora 用户取消授权**：reject，message 为 `'用户取消授权'`。
+
+```ts
+try {
+  const userInfo = await app.login.action.doLogin({
+    sensors: {source: 'home_banner'},
+  });
+  console.log(userInfo.token);
+} catch (err) {
+  // 用户取消 / 关闭弹框
+  console.warn(err.message);
 }
 ```
 
-### 3. 注册来源 ID 优先级
+---
 
-1. 通过 `updateLoginParams({ trackingSourceId })` 设置
-2. 通过 URL 参数 `?trackingSourceId=xxx` 传递
-3. 通过页面配置 `pageConfig.trackingSourceId` 获取
-4. 通过活动容器配置获取
+## 已登录时的行为
 
-## 字段状态结构
+```ts
+// 已登录 → 直接返回缓存 userInfo，不弹框
+const userInfo = await doLogin();
 
-```typescript
-FieldAtom<T> {
-  value: T;                 // 字段值
-  error: boolean;           // 是否有错误
-  message?: string;         // 错误信息
-  name?: string;            // 国家名称（区号专用）
-  abbr?: string;            // 国家缩写（区号专用）
-}
+// 强制重新登录（已登录也弹框）
+const userInfo = await doLogin({logout: true});
+
+// 登录中（isLoading）→ 等待当前请求完成后返回
 ```
+
+---
+
+## 约束与依赖
+
+- 依赖 `window.SoybeanCoreMain`（`native` / `CoreNative`）与 `window.SoybeanCommonMain`。
+- Aurora 一键登录需 Aurora SDK 在宿主页面初始化（`aurora.enableUse()` 返回 `true`）。
+- `doNativeLogin` 要求 App 端支持 `CoreNative.login` / `CoreNative.init`。
+- `loginParams`（推广信息：`r` / `c` / `activityId` 等）通过 `app.login.action.updateLoginParams` 预先写入，`doLogin` 内部自动读取。
+
+---
 
 ## 常见问题
 
-| 现象 | 方向 |
-| --- | --- |
-| 登录无反应 | 检查 `doLogin` 是否执行、环境判断是否正确 |
-| 验证码未发送 | 手机号格式、`sendSMS` 是否调用、设备 ID 是否获取 |
-| 协议未勾选报错 | `validateAgreement()` 校验、`$agreement.value` 状态 |
-| 极光失败降级 | 检查 `aurora.loginAuth()` 错误、是否正确降级到 Web |
-| 注册来源 ID 错误 | 检查 4 种来源优先级、`getTrackingSourceId()` 返回值 |
-| 登录后未刷新用户信息 | 检查 `user.action.updateToken()` 调用 |
-
-## 实践建议
-
-**应做**：
-- 默认使用 `doLogin()` 自动选择最优方式
-- 手动调用 `updateLoginParams` 传递活动/渠道参数
-- 登录前调用 `validate()` 校验完整性
-
-**避免**：
-- 跳过 `validateAgreement()` 校验
-- 手动拼装 `LoginAPIParam`（使用 `submitLoginForm`）
-- 重复调用 `reset()` 导致状态丢失
-
-## 内置字段（了解即可）
-
-- **区号默认值**：`+86` (中国)
-- **验证码长度**：6 位
-- **authType 枚举**：4=手机验证码，14=极光一键登录
-- **短信 source 默认值**：`'login'`
+| 现象 | 排查方向 |
+|------|----------|
+| 已登录但仍弹框 | 检查 `userInfo.token` 是否有值；或传了 `logout: true` |
+| Aurora 每次都降级 H5 | `aurora.enableUse()` 返回 `false`，确认 Aurora SDK 已初始化 |
+| Native 登录 token 为空 | `allowEmptyToken: false` 时会 reject，检查 App 侧授权 |
+| 弹框挂载位置不对 | 传入 `el` 指定容器，否则自动 `appendChild` 到 `document.body` |
+| 推广参数丢失 | 在 `doLogin` 之前调用 `updateLoginParams({r, c, ...})` |
 
 ## 延伸阅读
 
-- [examples.md](examples.md) — `doLogin`、`doPopupLoginForm`、`doPopupAgreement` 示例
+- [examples.md](examples.md) — 基础调用、强制登录、Aurora 自定义 UI 示例
+- [reference.md](reference.md) — `WebLoginParam` / `NativeLoginParam` / `UserInfo` 类型速查

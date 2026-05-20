@@ -8,6 +8,9 @@ description: >-
 
 # Sensors（`window.SoybeanCommonMain.alias.app.sensors`）
 
+> **⚠️ 仅限 Web H5 页面使用**
+> 本 Skill 依赖 `window.SoybeanCommonMain`，只能在 Web H5 页面环境（`front/` 目录下的页面）中使用，不适用于后端或其他非 H5 场景。
+
 已接入 common main 时：**埋点入口**优先 `app.sensors`，底层仍委托 `window.sensors`，字段拼装与注册集中管理。
 
 ## 快速开始
