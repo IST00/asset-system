@@ -113,6 +113,16 @@ class BaseConfig:
     HEALTH_PORT: int = int(os.getenv("HEALTH_PORT", "8081"))
     HEALTH_BIND: str = os.getenv("HEALTH_BIND", "0.0.0.0")
 
+    # --- DeepSeek (Keke story generator) ---
+    # Empty key disables the service: StoryService raises a friendly
+    # BusinessException so the H5 keeps working even before the secret
+    # is injected at deploy time.
+    DEEPSEEK_API_KEY: str = os.getenv("DEEPSEEK_API_KEY", "")
+    DEEPSEEK_API_URL: str = os.getenv(
+        "DEEPSEEK_API_URL", "https://api.deepseek.com/v1/chat/completions"
+    )
+    DEEPSEEK_TIMEOUT_SECONDS: int = int(os.getenv("DEEPSEEK_TIMEOUT_SECONDS", "120"))
+
 
 class DevConfig(BaseConfig):
     DEBUG: bool = True
