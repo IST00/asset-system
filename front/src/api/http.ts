@@ -17,6 +17,9 @@ import type { ApiResult } from '@/types'
  * 最终请求路径 = `${prefix}${baseURL}${url}`
  *   本地开发：  ""          + "/api" + "/users/me" = "/api/users/me"          （Vite 代理走 8080）
  *   生产环境：  "/scaffold" + "/api" + "/users/me" = "/scaffold/api/users/me" （nginx 去掉 /scaffold）
+ *
+ * 静默请求：传 `{ silent: true }` 跳过 antd message 弹窗与 401 自动登出。
+ * 用于埋点 / 后台轮询等不想骚扰用户的场景。失败仍 reject，调用方自己 try/catch。
  */
 const apiPrefix = (import.meta.env.VITE_API_PREFIX ?? '').replace(/\/+$/, '')
 const apiBase = (import.meta.env.VITE_API_BASE_URL ?? '/api').replace(/\/+$/, '') || '/api'
@@ -25,6 +28,14 @@ const apiBase = (import.meta.env.VITE_API_BASE_URL ?? '/api').replace(/\/+$/, ''
 export const withApiPrefix = (path: string): string => {
   const p = path.startsWith('/') ? path : `/${path}`
   return `${apiPrefix}${p}`
+}
+
+declare module 'axios' {
+  // eslint-disable-next-line @typescript-eslint/no-empty-interface
+  export interface AxiosRequestConfig {
+    /** 跳过 antd message 弹窗与 401 自动登出，方便埋点等场景静默失败 */
+    silent?: boolean
+  }
 }
 
 const http: AxiosInstance = axios.create({
@@ -42,17 +53,20 @@ http.interceptors.request.use((config: InternalAxiosRequestConfig) => {
 
 http.interceptors.response.use(
   (res) => {
+    const silent = Boolean(res.config?.silent)
     const body = res.data as ApiResult<unknown>
     if (body && typeof body === 'object' && 'code' in body) {
       if (body.code === 200) return { ...res, data: body.data }
-      message.error(body.message || 'Request failed')
+      if (!silent) message.error(body.message || 'Request failed')
       return Promise.reject(new Error(body.message))
     }
     return res
   },
   (err: AxiosError<ApiResult<unknown>>) => {
+    const silent = Boolean(err.config?.silent)
     const status = err.response?.status
     const msg = err.response?.data?.message || err.message
+    if (silent) return Promise.reject(err)
     if (status === 401) {
       message.error('登录已过期，请重新登录')
       useAuthStore.getState().logout()
