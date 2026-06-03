@@ -12,5 +12,3 @@ export const authApi = {
 export const helloApi = {
   hello: () => http.get<unknown, string>('/hello'),
 }
-
-export { kekeApi } from './keke'
