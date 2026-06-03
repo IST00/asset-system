@@ -7,18 +7,6 @@ BusinessException.
 """
 
 from app.repositories.base import BaseRepository, Page, QuerySpec
-from app.repositories.device_repository import DeviceRepository, device_repository
-from app.repositories.event_repository import EventRepository, event_repository
 from app.repositories.user_repository import UserRepository, user_repository
 
-__all__ = [
-    "BaseRepository",
-    "DeviceRepository",
-    "EventRepository",
-    "Page",
-    "QuerySpec",
-    "UserRepository",
-    "device_repository",
-    "event_repository",
-    "user_repository",
-]
+__all__ = ["BaseRepository", "Page", "QuerySpec", "UserRepository", "user_repository"]
