@@ -2,6 +2,10 @@
 
 React + TypeScript + Flask 全栈脚手架（Python 版）。是 `../scaffolding-java/` 的 Python 孪生：前端完全一致，后端用 **Flask 3 / SQLAlchemy / Flask-JWT-Extended / Alembic / Gunicorn** 替代 Spring Boot / MyBatis-Plus / Flyway。
 
+## 使用说明
+
+- 飞书 Wiki：https://h9f4zz91q9.feishu.cn/wiki/RqUgwZwuxiYMGgkPXo7cAYSZnsd
+
 ## 技术栈
 
 **后端**：Python 3.13 · Flask 3 · SQLAlchemy 2 · Flask-Migrate (Alembic) · Flask-JWT-Extended · Flask-Smorest (OpenAPI) · passlib[bcrypt] · Celery · Gunicorn · SQLite/MySQL · Redis
