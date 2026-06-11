@@ -1,0 +1,78 @@
+---
+description: 中间件 starter 规则——编辑 scaffolding-middleware/** 时自动加载
+globs: ../scaffolding-middleware/**/*.java,../scaffolding-middleware/**/pom.xml
+alwaysApply: false
+---
+
+# 中间件 starter 规则
+
+唯一事实源：[`docs/conventions/middleware-starter.md`](../../docs/conventions/middleware-starter.md)。
+
+## 硬性规则
+
+1. **命名**：
+   - groupId = `com.soybean.quick.starter`
+   - artifactId = `quick-starter-<kebab-name>`
+   - 包路径 = `com.soybean.quick.starter.<name>`
+   - 配置前缀 = `quick.<kebab-name>`
+2. **每个 starter 必须提供**：
+   - `@AutoConfiguration` 类（**不是** `@Configuration`）
+   - `@ConditionalOnClass(...)` 作为类路径守卫
+   - `@ConditionalOnProperty(prefix = "quick.<name>", name = "enabled", matchIfMissing = true)` 作为总开关
+   - 每个 `@Bean` 都要加 `@ConditionalOnMissingBean`，业务方可覆盖
+   - `META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports` 登记全限定类名
+3. **禁止反向依赖 `com.soybean:quick`（back 业务工程）**。Starter 对业务一无所知。
+4. **版本管理**：只在父 `scaffolding-middleware/pom.xml` 里写 `<version>`；子模块 POM 不能在依赖上带 `<version>`。
+5. **文档同步**：新增/删除 starter 必须同步更新：
+   - `scaffolding-middleware/README.md`
+   - `docs/conventions/middleware-starter.md`（starter 清单表）
+
+## ✅ 正确
+
+```java
+@AutoConfiguration(after = RedisAutoConfiguration.class)
+@ConditionalOnClass(RedisTemplate.class)
+@ConditionalOnProperty(prefix = "quick.redis", name = "enabled",
+                      havingValue = "true", matchIfMissing = true)
+@EnableConfigurationProperties(QuickRedisProperties.class)
+public class QuickRedisAutoConfiguration {
+    @Bean
+    @ConditionalOnMissingBean(name = "redisTemplate")
+    public RedisTemplate<String, Object> redisTemplate(RedisConnectionFactory cf) { ... }
+}
+```
+
+```
+// META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports
+com.soybean.quick.starter.redis.QuickRedisAutoConfiguration
+```
+
+## ❌ 错误
+
+```java
+@Configuration                                      // 错：Spring Boot 3 自动装配不会识别
+public class RedisConfig { ... }
+```
+
+```xml
+<!-- quick-starter-redis/pom.xml -->
+<dependency>
+    <groupId>com.soybean</groupId>
+    <artifactId>quick</artifactId>                  <!-- 反向依赖业务 back -->
+</dependency>
+```
+
+```xml
+<!-- 子模块 POM 直接写死版本 -->
+<dependency>
+    <groupId>org.springdoc</groupId>
+    <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+    <version>2.5.0</version>                         <!-- 版本应放到父 pom 的 dependencyManagement -->
+</dependency>
+```
+
+## 收尾自检
+
+- `cd scaffolding-middleware && mvn -DskipTests clean install` 通过。
+- `cd scaffolding-java/back && mvn -DskipTests compile` 仍然通过。
+- starter 清单变了？README 表格 + conventions 表格都要改。
