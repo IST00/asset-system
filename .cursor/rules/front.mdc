@@ -78,6 +78,18 @@ export function ShareButton() {
 }
 ```
 
+## 低版本 WebView CSS 兼容
+
+编辑活动页或内嵌页样式时，遇到低版本 WebView 兼容问题只能做等效语法转换，不能改视觉设计。
+
+- `gap` → 相邻元素 `margin-left` / `margin-top`。
+- `inset` → `top` / `right` / `bottom` / `left`。
+- `min()` / `max()` / `clamp()` → `width: calc(...)` + `max-width` / `min-width`，或在 TS 中计算。
+- 复杂 `background` shorthand（多层、带 `/ background-size`、带 `calc()`）→ 拆成 `background-image` / `background-position` / `background-size` / `background-repeat` / `background-color`，必要时用伪元素分层。
+- 渐变双位置色标（如 `rgba(...) 0 10px`）→ 显式重复色标（如 `rgba(...) 0px, rgba(...) 10px, transparent 10px`）。
+- 不要用 `@supports` 作为主要兜底；优先直接写目标 WebView 可解析的兼容 CSS。
+- 四角短线、按钮背景、渐变遮罩等装饰只能保留原效果转换实现，禁止改成整圈边框、三角块或其他新样式。
+
 ## 收尾自检
 
 - `cd front && npm run type-check` 通过。

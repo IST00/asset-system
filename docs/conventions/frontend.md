@@ -131,7 +131,7 @@ const { register, handleSubmit, formState: { errors } } = useForm({
 
 ## 6. 低端机器兼容性
 
-目标用户可能使用低端设备或旧版 WebView / 浏览器，新增前端代码默认按“低配置可用、渐进增强”处理：
+目标用户可能使用低端设备或旧版 WebView / 浏览器，新增前端代码默认按"低配置可用、渐进增强"处理：
 
 - **开发 API 先查兼容性**：使用较新的 Web API 前，先确认目标运行环境支持情况；不确定时不要直接上生产路径。
 - **禁用未经兜底的高级浏览器 API**：`ResizeObserver`、`IntersectionObserver`、`AbortController`、`requestIdleCallback`、`structuredClone`、`crypto.randomUUID`、Clipboard、Web Worker、BroadcastChannel 等能力必须先做特性检测，缺失时提供降级、polyfill 或安全跳过。
@@ -142,6 +142,50 @@ const { register, handleSubmit, formState: { errors } } = useForm({
 - **布局间距不要依赖 `gap`**：横纵列表、按钮组、表单项间距优先用子元素 `margin`、父容器 padding 或 AntD 兼容能力；不要把 `gap` 当成默认方案。
 - **兼容逻辑集中封装**：需要 polyfill、特性检测或降级分支时，优先放在 `src/utils/` 或专用 hook，页面里只调用封装后的能力，避免散落判断。
 - **新增依赖要谨慎**：不要为了一个新 API 兼容引入重型 polyfill 包；优先小函数、已有依赖或按需 polyfill。
+
+### 低版本 WebView CSS 等效转换
+
+低版本 Android WebView / 内嵌页适配时，**只能把不兼容语法转换为等效写法，不允许借兼容改造重新设计视觉**。按钮、四角装饰、背景融合、尺寸、间距、颜色和层级都必须保持原效果。
+
+- `gap`：改为相邻元素的 `margin-left` / `margin-top`。
+- `inset`：改为分别声明 `top` / `right` / `bottom` / `left`。
+- `min()` / `max()` / `clamp()`：改为 `width: calc(...)` 配合 `max-width` / `min-width`，或在 TypeScript 中计算。
+- 复杂 `background` shorthand：多层背景、带 `/ background-size` 或带 `calc()` 时，拆成 `background-image` / `background-position` / `background-size` / `background-repeat` / `background-color`；必要时用伪元素分层。
+- 渐变双位置色标：如 `rgba(...) 0 10px`，改为 `rgba(...) 0px, rgba(...) 10px, transparent 10px` 这类显式重复色标。
+- `@supports`：不要作为低版本 WebView 的主要兜底；优先直接写目标环境可解析的兼容语法。
+- 关键装饰元素：空元素若仅靠 `border-top` / `height: 1px` 在低版本不渲染，改用真实子元素或伪元素，并显式设置 `display: block; font-size: 0; line-height: 0;`。
+- 视觉装饰：四角短线、按钮背景、渐变遮罩等只能转换实现方式，禁止替换为整圈边框、三角块或其他新样式。
+
+```css
+/* gap → margin */
+.item + .item {
+  margin-left: 8px;
+}
+
+/* inset → 明确四边 */
+.decor {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  bottom: 4px;
+  left: 4px;
+}
+
+/* min(calc(...), 430px) → width + max-width */
+.actions {
+  width: calc(100% - 32px);
+  max-width: 430px;
+}
+
+/* background shorthand → longhand */
+.panel {
+  background-color: transparent;
+  background-image: linear-gradient(180deg, #fff 0%, #f8eccf 100%), url('/bg.png');
+  background-position: 0 12px, center bottom;
+  background-size: 100% calc(100% - 38px), 100% auto;
+  background-repeat: no-repeat, no-repeat;
+}
+```
 
 ### ✅
 
