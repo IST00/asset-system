@@ -1,6 +1,6 @@
 # Middleware Conventions
 
-> 适用范围：所有"基础设施 / 中间件"相关代码 —— Flask extensions、DB、Redis、Celery、JWT、健康检查、observability、日志。
+> 适用范围：所有"基础设施 / 中间件"相关代码 —— Flask extensions、DB、Celery、JWT、健康检查、observability、日志。
 > 受众：人类开发者 + LLM 代码生成工具
 
 核心原则：**共享实例集中在 `app/extensions.py`；接入逻辑集中在 `create_app()`；接入一个中间件 = 加一个 extension + 在工厂里 init_app + 在 config 里加环境变量，不要散在业务里**。
@@ -12,7 +12,7 @@
 Java 侧有独立仓 `scaffolding-middleware/`（多模块 Maven，产出可选 starter jar）。Python 侧**没有这一层**，原因：
 
 - Flask 的 "中间件" 形态就是 extension（`SQLAlchemy()` / `JWTManager()` / `Migrate()`…），本质是一个对象加一行 `.init_app(app)`，没必要再包一层 starter。
-- 可选集成（Redis、Celery）靠 **环境变量条件装配**：变量没配就不注册、不初始化、不进健康检查；比 Java 的 `@ConditionalOnProperty` 更简单。
+- 可选集成（如 Celery）靠 **环境变量条件装配**：变量没配就不初始化；比 Java 的 `@ConditionalOnProperty` 更简单。
 - 真正要跨项目复用的时候，拆成独立 PyPI 包（`pip install ...`），而不是 monorepo 子模块。
 
 **所以：Python 项目里"新增中间件" ≠ 拆 starter，而是 §1 讲的三步法。**
@@ -83,7 +83,6 @@ CACHE_DEFAULT_TIMEOUT=300
 | `jwt` = `JWTManager()` | 同上 | 同上 | `JWT_SECRET_KEY`（= env `JWT_SECRET`）、`JWT_ACCESS_TOKEN_EXPIRES`（= env `JWT_EXPIRE_SECONDS`）、`JWT_TOKEN_LOCATION`、`JWT_HEADER_NAME`、`JWT_HEADER_TYPE` | 始终启用 |
 | `api` = `flask_smorest.Api()` | 同上 | 暂未在工厂里 `init_app`；预留给后续 OpenAPI 集成 | `API_TITLE` / `API_VERSION` / `OPENAPI_*` | 预留 |
 | Celery `celery_app` | `app/tasks/__init__.py` | 不在 Flask 进程 init；独立进程 `celery -A app.tasks.celery_app worker` | `CELERY_BROKER_URL` / `CELERY_RESULT_BACKEND` | **可选**：没配 broker URL 时 worker 起不来，Flask 进程不受影响 |
-| Redis | 未显式共享实例；各处按需 `redis.Redis(host=...)` | 运行时 | `REDIS_HOST`（可选）、`REDIS_PORT` | **可选**：`REDIS_HOST` 未设 = 视为未配置 Redis |
 
 **改这份表 = 改脚手架本体**（见 `workflow.md` §6）。
 
@@ -93,14 +92,7 @@ CACHE_DEFAULT_TIMEOUT=300
 
 Python 侧的约定是 **"环境变量空 / 未设 ⇒ 不启用"**。这是 `app/health/__init__.py` 和 `config.py` 已经遵守的规则，新增的可选集成务必跟上。
 
-### 3.1 Redis
-
-- `config.BaseConfig.REDIS_HOST = os.getenv("REDIS_HOST")` —— **不要**给 `"localhost"` 这种默认值；`None` 就是 "没配"。
-- `.env.dev` 里 `REDIS_HOST` **默认注释掉**，本地启动不会连 Redis；需要时再取消注释。
-- `.env.prod` 里**必须**有 `REDIS_HOST`（哪怕是占位）—— 部署环境覆盖。
-- 业务用 Redis：走 `current_app.config["REDIS_HOST"]` / `["REDIS_PORT"]`，**不要**直接 `os.getenv`；先判 `None`，为空就抛 `BusinessException` 或降级（取决于业务语义）。
-
-### 3.2 Celery
+### 3.1 Celery
 
 - `celery_app` 在 `app/tasks/__init__.py` 里构造；broker / backend 从 `config` 拿。
 - 没配 `CELERY_BROKER_URL` 时，worker 启动会失败，但 **Flask web 进程完全不受影响**（不要在 web 请求路径里 `send_task`，否则会连上 broker）。
@@ -142,8 +134,7 @@ if (os.getenv("XX_BASE_URL") or "").strip():
 
 ### 坑
 
-- `db` check **只在配置了 `DB_URL` 或 `DB_HOST` 时注册**；否则 readiness 会永远 503。
-- `redis` check **只在 `REDIS_HOST` 非空时注册**；`.env.dev` 默认注释掉 `REDIS_HOST`，本地不 probe Redis。
+- `db` check 始终注册；数据库不可用时 readiness 返回 503。
 - check 里的异常会被 `_timed()` 吞成 `ok=false` —— **不要**自己 try/except 吞掉错误还 return `ok=True`。
 - **不要**让 check 依赖 Flask 请求上下文；DB check 通过 `bind_business_app(app)` + `with app.app_context()` 借用业务 app 的上下文。
 
@@ -206,7 +197,7 @@ env 旋钮（与 Java `-D` 属性一一对应，具体见 `observability/__init_
 - [ ] `app/__init__.py:create_app()` 里 `init_app(app)`，顺序合理。
 - [ ] 配置项在 `config.py` 的 `BaseConfig` / `DevConfig` / `ProdConfig` 里读。
 - [ ] `back/.env.dev` 和 `back/.env.prod` 都加了条目，`.env.prod` 只放占位。
-- [ ] 如果引入 **可选依赖**：`REDIS_HOST` / `CELERY_BROKER_URL` 的 "空 = 不启用" 模式已遵守。
+- [ ] 如果引入 **可选依赖**：环境变量为空时不启用的模式已遵守。
 - [ ] 如果可观测：`app/health` 加了条件注册的 check；新 check 读的环境变量空时不注册。
 - [ ] `requirements.txt` 钉了具体版本（`==x.y.z`），不要用 `>=`。
 - [ ] 更新了本 `middleware.md` 的 §2 清单。

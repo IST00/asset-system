@@ -35,7 +35,9 @@ class Result:
 
     @classmethod
     def success(cls, data: Any = None) -> "Result":
-        return cls(code=ResultCode.SUCCESS.code, message=ResultCode.SUCCESS.message, data=data)
+        return cls(
+            code=ResultCode.SUCCESS.code, message=ResultCode.SUCCESS.message, data=data
+        )
 
     @classmethod
     def fail(cls, code: ResultCode | int, message: str | None = None) -> "Result":

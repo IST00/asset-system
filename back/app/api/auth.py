@@ -9,24 +9,12 @@ from __future__ import annotations
 from flask import Blueprint, request
 
 from app.common import Result
-from app.schemas import LoginRequestSchema, RegisterRequestSchema
+from app.schemas import LoginRequestSchema
 from app.services import auth_service
 
-bp = Blueprint("auth", __name__, url_prefix="/api/auth")
+bp = Blueprint("auth", __name__, url_prefix="/api/v1/auth")
 
 _login_schema = LoginRequestSchema()
-_register_schema = RegisterRequestSchema()
-
-
-@bp.post("/register")
-def register() -> dict:
-    payload = _register_schema.load(request.get_json(silent=True) or {})
-    user = auth_service.register(
-        username=payload["username"],
-        password=payload["password"],
-        nickname=payload.get("nickname"),
-    )
-    return Result.success(user).to_dict()
 
 
 @bp.post("/login")

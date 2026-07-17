@@ -8,7 +8,7 @@ React + TypeScript + Flask 全栈脚手架（Python 版）。是 `../scaffolding
 
 ## 技术栈
 
-**后端**：Python 3.13 · Flask 3 · SQLAlchemy 2 · Flask-Migrate (Alembic) · Flask-JWT-Extended · Flask-Smorest (OpenAPI) · passlib[bcrypt] · Celery · Gunicorn · SQLite/MySQL · Redis
+**后端**：Python 3.13 · Flask 3 · SQLAlchemy 2 · Flask-Migrate (Alembic) · Flask-JWT-Extended · Flask-Smorest (OpenAPI) · passlib[bcrypt] · Celery · Gunicorn · SQLite/MySQL
 
 **前端**：React 18 · TypeScript · Vite 5 · React Router 6 · Zustand · TanStack Query · Axios · Ant Design 5 · React Hook Form + Zod · lucide-react · i18next
 
@@ -49,7 +49,7 @@ React + TypeScript + Flask 全栈脚手架（Python 版）。是 `../scaffolding
 ├── .github/workflows/ci.yml
 ├── .husky/                         # git hooks
 ├── scripts/guard-conventions.sh    # 反模式守护
-├── docker-compose.yml              # mysql + redis + back + front
+├── docker-compose.yml              # mysql + back + front
 └── package.json                    # husky + commitlint + lint-staged
 ```
 
@@ -92,7 +92,7 @@ npm run docker:up
 
 - 前端：http://localhost
 - 后端：http://localhost:8080
-- MySQL：3306，Redis：6379
+- MySQL：3306
 
 ## 后端接口
 

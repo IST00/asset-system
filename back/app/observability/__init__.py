@@ -96,7 +96,7 @@ def _parse_size(raw: str) -> int:
         raise ValueError(f"invalid size: {raw!r}")
     n = int(m.group(1))
     unit = m.group(2) or "B"
-    return n * {"B": 1, "KB": 1024, "MB": 1024 ** 2, "GB": 1024 ** 3}[unit]
+    return n * {"B": 1, "KB": 1024, "MB": 1024**2, "GB": 1024**3}[unit]
 
 
 class GzipRotatingFileHandler(RotatingFileHandler):
@@ -107,7 +107,9 @@ class GzipRotatingFileHandler(RotatingFileHandler):
     filename (checked on every rollover).
     """
 
-    def __init__(self, filename: str, max_bytes: int, backup_count: int, basename: str) -> None:
+    def __init__(
+        self, filename: str, max_bytes: int, backup_count: int, basename: str
+    ) -> None:
         super().__init__(
             filename=filename,
             maxBytes=max_bytes,

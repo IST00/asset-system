@@ -81,7 +81,9 @@ class BaseConfig:
     }
 
     # --- JWT ---
-    JWT_SECRET_KEY: str = os.getenv("JWT_SECRET", "change-me-change-me-change-me-change-me")
+    JWT_SECRET_KEY: str = os.getenv(
+        "JWT_SECRET", "change-me-change-me-change-me-change-me"
+    )
     JWT_ACCESS_TOKEN_EXPIRES: timedelta = timedelta(
         seconds=int(os.getenv("JWT_EXPIRE_SECONDS", "86400"))
     )
@@ -98,13 +100,7 @@ class BaseConfig:
     OPENAPI_SWAGGER_UI_URL: str = "https://cdn.jsdelivr.net/npm/swagger-ui-dist/"
     OPENAPI_JSON_PATH: str = "openapi.json"
 
-    # --- Redis / Celery ---
-    # NOTE: do NOT default REDIS_HOST here; an unset REDIS_HOST is the signal
-    # that "redis is not configured for this deployment" (drives the
-    # conditional health check in app/health). If you need a default, set it
-    # in .env.dev / .env.prod.
-    REDIS_HOST: str | None = os.getenv("REDIS_HOST")
-    REDIS_PORT: int = int(os.getenv("REDIS_PORT", "6379"))
+    # --- Celery ---
     CELERY_BROKER_URL: str | None = os.getenv("CELERY_BROKER_URL")
     CELERY_RESULT_BACKEND: str | None = os.getenv("CELERY_RESULT_BACKEND")
 
@@ -118,7 +114,9 @@ class DevConfig(BaseConfig):
     DEBUG: bool = True
     SQLALCHEMY_DATABASE_URI: str = os.getenv("DB_URL", "sqlite:///instance/dev.db")
     # dev defaults: weaker secrets are OK, but keep the shape
-    JWT_SECRET_KEY: str = os.getenv("JWT_SECRET", "dev-jwt-secret-change-me-change-me-change-me")
+    JWT_SECRET_KEY: str = os.getenv(
+        "JWT_SECRET", "dev-jwt-secret-change-me-change-me-change-me"
+    )
 
 
 class ProdConfig(BaseConfig):

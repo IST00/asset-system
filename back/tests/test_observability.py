@@ -42,7 +42,9 @@ def test_log_format_matches_java_pattern(app, client):
     finally:
         logger.removeHandler(handler)
 
-    lines = [l for l in buf.getvalue().splitlines() if l.strip()]
+    lines = [
+        line_text for line_text in buf.getvalue().splitlines() if line_text.strip()
+    ]
     assert lines, "expected access log output"
     line = lines[-1]
     assert _LOG_LINE_RE.match(line), f"log line does not match Java pattern: {line!r}"
@@ -50,10 +52,7 @@ def test_log_format_matches_java_pattern(app, client):
     assert "GET /api/hello" in line
 
 
-def test_health_endpoints_use_check_registry(monkeypatch):
-    # Force redis check to be registered for this test, regardless of the
-    # ambient REDIS_HOST setting on the dev machine.
-    monkeypatch.setenv("REDIS_HOST", "localhost")
+def test_health_endpoints_use_check_registry():
     # Reset registry so create_health_app re-evaluates the gate.
     from app.health import _REGISTRY  # type: ignore[attr-defined]
 
@@ -82,9 +81,7 @@ def test_health_endpoints_use_check_registry(monkeypatch):
     assert isinstance(ok, bool)
 
 
-def test_redis_check_skipped_when_redis_host_unset(monkeypatch):
-    """If REDIS_HOST is unset/empty, redis must NOT be in the registry."""
-    monkeypatch.delenv("REDIS_HOST", raising=False)
+def test_health_registry_only_contains_database_by_default():
     from app.health import _REGISTRY  # type: ignore[attr-defined]
 
     _REGISTRY.clear()
@@ -92,12 +89,12 @@ def test_redis_check_skipped_when_redis_host_unset(monkeypatch):
     from app.health import create_health_app
 
     create_health_app()
-    assert "db" in _REGISTRY
-    assert "redis" not in _REGISTRY
+    assert set(_REGISTRY) == {"db"}
 
 
-def test_redis_check_registered_when_redis_host_set(monkeypatch):
+def test_health_registry_ignores_redis_environment(monkeypatch):
     monkeypatch.setenv("REDIS_HOST", "localhost")
+    monkeypatch.setenv("REDIS_PORT", "6379")
     from app.health import _REGISTRY  # type: ignore[attr-defined]
 
     _REGISTRY.clear()
@@ -105,5 +102,4 @@ def test_redis_check_registered_when_redis_host_set(monkeypatch):
     from app.health import create_health_app
 
     create_health_app()
-    assert "db" in _REGISTRY
-    assert "redis" in _REGISTRY
+    assert set(_REGISTRY) == {"db"}

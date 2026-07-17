@@ -30,7 +30,6 @@ def test_repository_add_find_count_page(app):
                 User(
                     username=f"{prefix}{i}",
                     password=hash_password("pw", rounds=4),
-                    role="REPO_TEST",
                     enabled=True,
                 )
             )
@@ -40,7 +39,7 @@ def test_repository_add_find_count_page(app):
         assert user_repository.count() == baseline + 5
 
         spec = QuerySpec(
-            filters=[User.role == "REPO_TEST"],
+            filters=[User.username.like(f"{prefix}%")],
             order_by=[User.username.asc()],
             page=0,
             size=2,
@@ -51,7 +50,7 @@ def test_repository_add_find_count_page(app):
         assert p1.items[0].username == f"{prefix}0"
 
         spec2 = QuerySpec(
-            filters=[User.role == "REPO_TEST"],
+            filters=[User.username.like(f"{prefix}%")],
             order_by=[User.username.asc()],
             page=1,
             size=2,
