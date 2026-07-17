@@ -10,6 +10,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+RUN chmod +x docker-entrypoint.sh
+
 EXPOSE 8080 8081
 
+ENTRYPOINT ["./docker-entrypoint.sh"]
 CMD ["gunicorn", "-c", "gunicorn.conf.py", "wsgi:app"]

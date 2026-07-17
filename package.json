@@ -7,7 +7,7 @@
     "lint:front": "npm --prefix front run lint",
     "format:front": "npm --prefix front run format",
     "dev:front": "npm --prefix front run dev",
-    "dev:back": "cd back && python manage.py run",
+    "dev:back": "cd back && FLASK_APP=manage.py flask db upgrade && python manage.py run",
     "docker:up": "docker compose up -d --build",
     "docker:down": "docker compose down"
   },
