@@ -10,6 +10,7 @@
     "build:test": "tsc -b && vite build --mode test",
     "build:prod": "tsc -b && vite build --mode production",
     "lint": "eslint . --ext ts,tsx,js,jsx --report-unused-disable-directives --max-warnings 0",
+    "test": "node --experimental-strip-types --test src/config/navigationModel.test.ts src/config/navigation.test.ts src/features/dashboard/dashboardModel.test.ts src/features/dashboard/dashboardData.test.ts src/theme/tokens.test.ts src/i18n/zhCN.test.ts",
     "format": "prettier --write \"src/**/*.{ts,tsx,js,jsx,css,md}\"",
     "preview": "vite preview",
     "type-check": "tsc --noEmit"

@@ -1,0 +1,232 @@
+.asset-page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 24px;
+}
+
+.asset-page-header h1 {
+  color: var(--asset-color-text);
+  font-size: 28px;
+  font-weight: 750;
+  line-height: 1.25;
+  letter-spacing: -0.02em;
+}
+
+.asset-page-header p {
+  margin-top: 7px;
+  color: var(--asset-color-text-muted);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.asset-page-header__aside {
+  flex: 0 0 auto;
+  margin-left: 24px;
+  text-align: right;
+}
+
+.asset-page-header__meta {
+  color: var(--asset-color-text-subtle);
+  font-size: 12px;
+}
+
+.asset-page-header__actions {
+  margin-top: 10px;
+}
+
+.asset-metric-card {
+  min-width: 0;
+  padding: 20px;
+  background: var(--asset-color-surface);
+  border: 1px solid var(--asset-color-border);
+  border-radius: var(--asset-radius-lg);
+  transition:
+    border-color 160ms ease,
+    transform 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.asset-metric-card:hover {
+  border-color: var(--asset-color-border-strong);
+  box-shadow: 0 10px 28px rgba(23, 32, 51, 0.08);
+  transform: translateY(-2px);
+}
+
+.asset-metric-card__topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.asset-metric-card__icon {
+  display: inline-flex;
+  width: 42px;
+  height: 42px;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--asset-radius-md);
+}
+
+.asset-metric-card--brand .asset-metric-card__icon {
+  color: var(--asset-color-brand);
+  background: var(--asset-color-brand-soft);
+}
+
+.asset-metric-card--success .asset-metric-card__icon {
+  color: var(--asset-color-success);
+  background: var(--asset-color-success-soft);
+}
+
+.asset-metric-card--warning .asset-metric-card__icon {
+  color: var(--asset-color-warning);
+  background: var(--asset-color-warning-soft);
+}
+
+.asset-metric-card--danger .asset-metric-card__icon {
+  color: var(--asset-color-danger);
+  background: var(--asset-color-danger-soft);
+}
+
+.asset-metric-card__change {
+  color: var(--asset-color-success);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.asset-metric-card__value {
+  display: flex;
+  align-items: baseline;
+  margin-top: 18px;
+}
+
+.asset-metric-card__value strong {
+  color: var(--asset-color-text);
+  font-size: 30px;
+  font-weight: 760;
+  line-height: 1;
+  letter-spacing: -0.03em;
+}
+
+.asset-metric-card__value span {
+  margin-left: 6px;
+  color: var(--asset-color-text-muted);
+  font-size: 12px;
+}
+
+.asset-metric-card > p {
+  margin-top: 10px;
+  color: var(--asset-color-text-muted);
+  font-size: 13px;
+}
+
+.asset-section-panel {
+  min-width: 0;
+  background: var(--asset-color-surface);
+  border: 1px solid var(--asset-color-border);
+  border-radius: var(--asset-radius-lg);
+}
+
+.asset-section-panel__header {
+  display: flex;
+  min-height: 62px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px;
+  border-bottom: 1px solid var(--asset-color-border);
+}
+
+.asset-section-panel__title {
+  display: flex;
+  align-items: center;
+  color: var(--asset-color-brand);
+}
+
+.asset-section-panel__title > * + * {
+  margin-left: 9px;
+}
+
+.asset-section-panel__title h2 {
+  color: var(--asset-color-text);
+  font-size: 16px;
+  font-weight: 680;
+}
+
+.asset-section-panel__extra {
+  margin-left: 16px;
+}
+
+.asset-section-panel__body {
+  padding: 20px;
+}
+
+.asset-state-panel {
+  display: flex;
+  min-height: 220px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  color: var(--asset-color-text-muted);
+  text-align: center;
+  background: var(--asset-color-surface);
+  border: 1px solid var(--asset-color-border);
+  border-radius: var(--asset-radius-lg);
+}
+
+.asset-state-panel--error > svg {
+  color: var(--asset-color-danger);
+}
+
+.asset-state-panel--empty > svg {
+  color: var(--asset-color-text-subtle);
+}
+
+.asset-state-panel p {
+  margin-top: 12px;
+  line-height: 1.5;
+}
+
+.asset-state-panel .ant-btn {
+  margin-top: 16px;
+}
+
+@media (max-width: 767px) {
+  .asset-page-header {
+    display: block;
+    margin-bottom: 20px;
+  }
+
+  .asset-page-header h1 {
+    font-size: 24px;
+  }
+
+  .asset-page-header__aside {
+    margin-top: 12px;
+    margin-left: 0;
+    text-align: left;
+  }
+
+  .asset-metric-card {
+    padding: 16px;
+  }
+
+  .asset-metric-card__value strong {
+    font-size: 26px;
+  }
+
+  .asset-section-panel__header {
+    min-height: 56px;
+    padding: 0 16px;
+  }
+
+  .asset-section-panel__body {
+    padding: 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .asset-metric-card {
+    transition: none;
+  }
+}

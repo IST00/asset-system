@@ -3,9 +3,11 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ConfigProvider } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
 import App from './App'
+import '@/i18n'
+import { appTheme } from '@/theme'
 import './index.css'
 
-const {app} = window.SoybeanCommonMain.alias;
+const { app } = window.SoybeanCommonMain.alias
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -13,10 +15,10 @@ const queryClient = new QueryClient({
   },
 })
 
-const Main = () => {
+export const Main = () => {
   return (
     <QueryClientProvider client={queryClient}>
-      <ConfigProvider locale={zhCN}>
+      <ConfigProvider locale={zhCN} theme={appTheme}>
         <BrowserRouter basename={import.meta.env.BASE_URL}>
           <App />
         </BrowserRouter>
@@ -35,4 +37,4 @@ app.setup(Main, {
   emptyButton: null,
   pageAutoEnd: false,
   scope: 'snsapi_base',
-});
+})

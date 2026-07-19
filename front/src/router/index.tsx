@@ -2,11 +2,11 @@ import { Navigate, Route, Routes } from 'react-router-dom'
 import { lazy, Suspense } from 'react'
 import { Spin } from 'antd'
 import ProtectedRoute from './ProtectedRoute'
-import Layout from '@/components/Layout'
 
 const Login = lazy(() => import('@/pages/Login'))
 const Home = lazy(() => import('@/pages/Home'))
 const NotFound = lazy(() => import('@/pages/NotFound'))
+const AppShell = lazy(() => import('@/layouts/AppShell'))
 
 const loading = (
   <div style={{ display: 'flex', justifyContent: 'center', padding: 48 }}>
@@ -23,7 +23,7 @@ export default function AppRouter() {
           path="/"
           element={
             <ProtectedRoute>
-              <Layout />
+              <AppShell />
             </ProtectedRoute>
           }
         >

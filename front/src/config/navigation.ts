@@ -1,0 +1,72 @@
+import type { NavigationEntry } from './navigationModel.ts'
+
+export const navigationEntries: NavigationEntry[] = [
+  { key: 'home', labelKey: 'nav.home', path: '/home', icon: 'home', mobile: true },
+  {
+    key: 'assets',
+    labelKey: 'nav.assets',
+    path: '/assets',
+    icon: 'package',
+    mobile: true,
+    disabled: true,
+  },
+  {
+    key: 'workflows',
+    labelKey: 'nav.workflows',
+    path: '/workflows',
+    icon: 'workflow',
+    disabled: true,
+  },
+  {
+    key: 'inventory',
+    labelKey: 'nav.inventory',
+    path: '/inventory',
+    icon: 'scan',
+    mobile: true,
+    disabled: true,
+  },
+  {
+    key: 'approvals',
+    labelKey: 'nav.approvals',
+    path: '/approvals',
+    icon: 'approval',
+    disabled: true,
+  },
+  {
+    key: 'imports',
+    labelKey: 'nav.imports',
+    path: '/imports',
+    icon: 'import',
+    disabled: true,
+  },
+  {
+    key: 'masterData',
+    labelKey: 'nav.masterData',
+    path: '/master-data',
+    icon: 'database',
+    disabled: true,
+  },
+  {
+    key: 'permissions',
+    labelKey: 'nav.permissions',
+    path: '/permissions',
+    icon: 'shield',
+    permission: 'role:view',
+    disabled: true,
+  },
+  {
+    key: 'logs',
+    labelKey: 'nav.logs',
+    path: '/logs',
+    icon: 'logs',
+    permission: 'log:view',
+    disabled: true,
+  },
+  {
+    key: 'profile',
+    labelKey: 'nav.profile',
+    path: '/profile',
+    icon: 'user',
+    mobile: true,
+  },
+]
