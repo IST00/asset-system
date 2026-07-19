@@ -9,7 +9,6 @@ from sqlalchemy import ColumnElement, false, or_
 from app.common import BusinessException, PageResult, ResultCode
 from app.enums import DataScope
 from app.enums import ApprovalStatus, AssetCodeStatus, AssetStatus, ExecutionStatus
-from app.extensions import db
 from app.models import Asset
 from app.repositories import (
     QuerySpec,
@@ -45,8 +44,6 @@ def stock_in_request(operation_request_id: int, actor_id: int) -> None:
     if len(items) != len(reservations):
         raise BusinessException("资产编码占用记录不完整")
 
-    operation.execution_status = ExecutionStatus.PROCESSING.value
-    operation.execution_error = None
     for item in items:
         reservation = reservations[item.id]
         if reservation.status == AssetCodeStatus.ACTIVE.value:
@@ -92,11 +89,7 @@ def stock_in_request(operation_request_id: int, actor_id: int) -> None:
                 "organization_id": asset.organization_id,
             },
         )
-    operation.execution_status = ExecutionStatus.SUCCESS.value
-    operation.execution_error = None
-    operation.version += 1
     stock_in_item_repository.release_serial_reservations(stock_in.id)
-    db.session.commit()
 
 
 def _access_filter(actor_id: int):

@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date
+from threading import Barrier
 
 from sqlalchemy.exc import IntegrityError
 
+from app import create_app
 from app.enums import DataScope
 from app.extensions import db
 from app.models import (
     ApprovalTask,
+    ApprovalFlowDefinition,
     AssetCategory,
     AssetCodeReservation,
     AssetCodeSequence,
@@ -24,7 +28,9 @@ from app.models import (
     UserRole,
 )
 from app.security.passwords import hash_password
+from app.schemas.stock_in import CreateStockInRequestSchema
 from app.services import stock_in_service
+from config import TestConfig
 
 
 def _role_with_permissions(code: str, *permission_codes: str) -> Role:
@@ -133,6 +139,75 @@ def test_submit_reserves_codes_and_snapshots_approvers(client) -> None:
     assert db.session.query(ApprovalTask).one().approver_id == context["approver"].id
 
 
+def test_submit_replays_same_idempotency_key_without_new_business_rows(client) -> None:
+    context = _setup(client)
+    payload = {
+        "organization_id": context["organization"].id,
+        "idempotency_key": "stock-in-once",
+        "items": [_item(context, serial_number="IDEMPOTENT-STOCK")],
+    }
+
+    first = client.post(
+        "/api/v1/stock-in-requests",
+        headers=context["headers"],
+        json=payload,
+    ).get_json()
+    replayed = client.post(
+        "/api/v1/stock-in-requests",
+        headers=context["headers"],
+        json=payload,
+    ).get_json()
+
+    assert first["code"] == 200
+    assert replayed["code"] == 200
+    assert replayed["data"]["id"] == first["data"]["id"]
+    assert db.session.query(OperationRequest).count() == 1
+    assert db.session.query(StockInItem).count() == 1
+    assert db.session.query(ApprovalTask).count() == 1
+    assert db.session.query(AssetCodeReservation).count() == 1
+
+
+def test_concurrent_stock_in_submit_replays_one_request(tmp_path) -> None:
+    database = tmp_path / "stock-in-idempotency-concurrency.db"
+
+    class ConcurrentConfig(TestConfig):
+        SQLALCHEMY_DATABASE_URI = f"sqlite:///{database}"
+
+    concurrent_app = create_app(config=ConcurrentConfig)
+    with concurrent_app.app_context():
+        db.create_all()
+        context = _setup(concurrent_app.test_client())
+        stock_in_service._stock_in_flow([context["approver"].id])
+        db.session.commit()
+        actor_id = context["applicant"].id
+        payload = CreateStockInRequestSchema().load(
+            {
+                "organization_id": context["organization"].id,
+                "idempotency_key": "concurrent-stock-in",
+                "items": [_item(context, serial_number="CONCURRENT-STOCK")],
+            }
+        )
+
+    barrier = Barrier(2)
+
+    def submit() -> int:
+        with concurrent_app.app_context():
+            barrier.wait()
+            result = stock_in_service.submit(payload, actor_id)
+            return int(result["id"])
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        operation_ids = list(executor.map(lambda _index: submit(), range(2)))
+
+    assert operation_ids[0] == operation_ids[1]
+    with concurrent_app.app_context():
+        assert db.session.query(OperationRequest).count() == 1
+        assert db.session.query(StockInItem).count() == 1
+        assert db.session.query(ApprovalTask).count() == 1
+        assert db.session.query(AssetCodeReservation).count() == 1
+        db.drop_all()
+
+
 def test_submit_without_approver_creates_nothing(client) -> None:
     context = _setup(client, with_approver=False)
     response = client.post(
@@ -148,6 +223,24 @@ def test_submit_without_approver_creates_nothing(client) -> None:
     assert "审批人" in response.get_json()["message"]
     assert db.session.query(OperationRequest).count() == 0
     assert db.session.query(AssetCodeSequence).count() == 0
+
+
+def test_non_testing_submit_requires_prepublished_stock_in_flow(app, client) -> None:
+    context = _setup(client)
+    app.config["TESTING"] = False
+
+    response = client.post(
+        "/api/v1/stock-in-requests",
+        headers=context["headers"],
+        json={
+            "organization_id": context["organization"].id,
+            "items": [_item(context, serial_number="NO-DYNAMIC-FLOW")],
+        },
+    ).get_json()
+
+    assert response["code"] == 1000
+    assert "审批流尚未发布" in response["message"]
+    assert db.session.query(ApprovalFlowDefinition).count() == 0
 
 
 def test_zero_amount_requires_reason_and_batch_validation_is_atomic(client) -> None:

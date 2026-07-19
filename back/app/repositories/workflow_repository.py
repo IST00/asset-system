@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from sqlalchemy import ColumnElement, false, func, or_, select, update
 
-from app.enums import ApprovalStatus, OperationType
+from app.enums import ApprovalStatus, OperationType, RuntimeTaskStatus
 from app.extensions import db
 from app.models import (
     ApprovalRecord,
@@ -41,6 +41,32 @@ class OperationRequestRepository(BaseRepository[OperationRequest]):
             .execution_options(synchronize_session=False)
         )
         return result.rowcount == 1
+
+    def find_for_update(self, operation_request_id: int) -> OperationRequest | None:
+        statement = (
+            select(OperationRequest)
+            .where(OperationRequest.id == operation_request_id)
+            .with_for_update()
+        )
+        return db.session.scalar(statement)
+
+    def find_by_idempotency_key(
+        self, applicant_id: int, operation_type: str, idempotency_key: str
+    ) -> OperationRequest | None:
+        statement = select(OperationRequest).where(
+            OperationRequest.applicant_id == applicant_id,
+            OperationRequest.operation_type == operation_type,
+            OperationRequest.idempotency_key == idempotency_key,
+        )
+        return db.session.scalar(statement)
+
+    def find_by_external_instance(
+        self, external_instance_id: str
+    ) -> OperationRequest | None:
+        statement = select(OperationRequest).where(
+            OperationRequest.external_instance_id == external_instance_id
+        )
+        return db.session.scalar(statement)
 
     def page_stock_in(
         self,
@@ -183,6 +209,42 @@ class ApprovalStepRepository(BaseRepository[ApprovalStep]):
     def find_by_operation(self, operation_request_id: int) -> ApprovalStep | None:
         return self.find_one(ApprovalStep.operation_request_id == operation_request_id)
 
+    def find_current_for_update(self, operation_request_id: int) -> ApprovalStep | None:
+        statement = (
+            select(ApprovalStep)
+            .where(
+                ApprovalStep.operation_request_id == operation_request_id,
+                ApprovalStep.status == RuntimeTaskStatus.PENDING.value,
+            )
+            .order_by(ApprovalStep.level_no.asc(), ApprovalStep.id.asc())
+            .with_for_update()
+            .limit(1)
+        )
+        return db.session.scalar(statement)
+
+    def find_by_operation_ordered(
+        self, operation_request_id: int
+    ) -> list[ApprovalStep]:
+        statement = (
+            select(ApprovalStep)
+            .where(ApprovalStep.operation_request_id == operation_request_id)
+            .order_by(ApprovalStep.level_no.asc(), ApprovalStep.id.asc())
+        )
+        return list(db.session.scalars(statement).all())
+
+    def claim_pending(self, step_id: int, expected_version: int) -> bool:
+        result = db.session.execute(
+            update(ApprovalStep)
+            .where(
+                ApprovalStep.id == step_id,
+                ApprovalStep.status == RuntimeTaskStatus.PENDING.value,
+                ApprovalStep.version == expected_version,
+            )
+            .values(version=ApprovalStep.version + 1)
+            .execution_options(synchronize_session=False)
+        )
+        return result.rowcount == 1
+
 
 class ApprovalTaskRepository(BaseRepository[ApprovalTask]):
     def __init__(self) -> None:
@@ -196,9 +258,36 @@ class ApprovalTaskRepository(BaseRepository[ApprovalTask]):
             ApprovalTask.approver_id == approver_id,
         )
 
+    def find_for_update(
+        self, approval_step_id: int, actor_id: int
+    ) -> ApprovalTask | None:
+        statement = (
+            select(ApprovalTask)
+            .where(
+                ApprovalTask.approval_step_id == approval_step_id,
+                ApprovalTask.approver_id == actor_id,
+            )
+            .order_by(ApprovalTask.id.asc())
+            .with_for_update()
+            .limit(1)
+        )
+        return db.session.scalar(statement)
+
+    def find_by_idempotency_key(
+        self, applicant_id: int, operation_type: str, idempotency_key: str
+    ) -> OperationRequest | None:
+        statement = select(OperationRequest).where(
+            OperationRequest.applicant_id == applicant_id,
+            OperationRequest.operation_type == operation_type,
+            OperationRequest.idempotency_key == idempotency_key,
+        )
+        return db.session.scalar(statement)
+
     def find_by_step(self, approval_step_id: int) -> list[ApprovalTask]:
-        stmt = select(ApprovalTask).where(
-            ApprovalTask.approval_step_id == approval_step_id
+        stmt = (
+            select(ApprovalTask)
+            .where(ApprovalTask.approval_step_id == approval_step_id)
+            .order_by(ApprovalTask.id.asc())
         )
         return list(db.session.scalars(stmt).all())
 

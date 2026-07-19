@@ -207,11 +207,12 @@ def test_approval_terminal_transition_is_compare_and_set(app) -> None:
     assert persisted.version == expected_version + 1
 
 
-def test_only_one_terminal_approval_record_is_allowed_per_step() -> None:
+def test_only_one_terminal_approval_record_is_allowed_per_task() -> None:
     constraint_names = {
         constraint.name for constraint in ApprovalRecord.__table__.constraints
     }
-    assert "uq_approval_record_step" in constraint_names
+    assert "uq_approval_record_task" in constraint_names
+    assert "uq_approval_record_step" not in constraint_names
 
 
 def test_pending_serial_reservation_has_a_unique_database_guard() -> None:

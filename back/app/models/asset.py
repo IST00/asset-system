@@ -16,6 +16,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.enums import RecordStatus
 from app.extensions import db
 from app.models.mixins import TimestampMixin
 
@@ -64,6 +65,21 @@ class AssetCodeReservation(TimestampMixin, db.Model):  # type: ignore[misc,name-
     )
 
 
+class PublicUsageObject(TimestampMixin, db.Model):  # type: ignore[misc,name-defined]
+    __tablename__ = "public_usage_objects"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    code: Mapped[str] = mapped_column(
+        String(64), nullable=False, unique=True, index=True
+    )
+    name: Mapped[str] = mapped_column(
+        String(128), nullable=False, unique=True, index=True
+    )
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default=RecordStatus.ENABLED.value, index=True
+    )
+
+
 class Asset(TimestampMixin, db.Model):  # type: ignore[misc,name-defined]
     __tablename__ = "assets"
 
@@ -75,6 +91,23 @@ class Asset(TimestampMixin, db.Model):  # type: ignore[misc,name-defined]
     status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     organization_id: Mapped[int] = mapped_column(
         ForeignKey("organizations.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    usage_type: Mapped[str | None] = mapped_column(
+        String(16), nullable=True, index=True
+    )
+    holder_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    public_object_id: Mapped[int | None] = mapped_column(
+        ForeignKey("public_usage_objects.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
+    usage_department_id: Mapped[int | None] = mapped_column(
+        ForeignKey("organizations.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    parent_asset_id: Mapped[int | None] = mapped_column(
+        ForeignKey("assets.id", ondelete="RESTRICT"), nullable=True, index=True
     )
     category_id: Mapped[int] = mapped_column(
         ForeignKey("asset_categories.id", ondelete="RESTRICT"),
@@ -113,4 +146,9 @@ class Asset(TimestampMixin, db.Model):  # type: ignore[misc,name-defined]
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
 
-__all__ = ["Asset", "AssetCodeReservation", "AssetCodeSequence"]
+__all__ = [
+    "Asset",
+    "AssetCodeReservation",
+    "AssetCodeSequence",
+    "PublicUsageObject",
+]

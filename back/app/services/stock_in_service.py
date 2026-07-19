@@ -2,36 +2,50 @@
 
 from __future__ import annotations
 
-import logging
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 from uuid import uuid4
 
+from flask import current_app
 from sqlalchemy.exc import IntegrityError
 
 from app.common import BusinessException, PageResult, ResultCode
-from app.enums import ApprovalStatus, DataScope, ExecutionStatus, OperationType
+from app.enums import (
+    ApprovalChannel,
+    ApprovalStatus,
+    AssigneeType,
+    DataScope,
+    ExecutionStatus,
+    FlowStatus,
+    OperationType,
+    SignMode,
+)
 from app.extensions import db
-from app.models import OperationRequest, StockInItem, StockInRequest
-from app.repositories import asset_repository, rbac_repository
+from app.models import (
+    ApprovalFlowAssigneeRule,
+    ApprovalFlowDefinition,
+    ApprovalFlowLayer,
+    ApprovalFlowVersion,
+    OperationRequest,
+    StockInItem,
+    StockInRequest,
+)
+from app.models.mixins import utc_now
+from app.repositories import approval_flow_repository, asset_repository, rbac_repository
 from app.repositories.workflow_repository import (
     operation_request_repository,
     stock_in_item_repository,
     stock_in_request_repository,
 )
 from app.services import (
-    approval_service,
+    approval_engine,
     asset_code_service,
-    asset_service,
     master_data_service,
+    operation_executor,
     organization_service,
     permission_service,
 )
-
-log = logging.getLogger(__name__)
-
-_EXECUTION_FAILURE_MESSAGE = "资产入库执行失败，请联系管理员或稍后重试"
 
 
 def _request_no() -> str:
@@ -139,10 +153,68 @@ def _validate_item(item: dict[str, Any], seen_serials: set[str]) -> dict[str, An
     return normalized
 
 
+def _stock_in_flow(candidates: list[int]) -> ApprovalFlowVersion:
+    published = approval_flow_repository.find_published(OperationType.STOCK_IN.value)
+    if published is not None:
+        return published
+    if (
+        approval_flow_repository.find_definition(OperationType.STOCK_IN.value)
+        is not None
+    ):
+        raise BusinessException("入库审批流尚未发布")
+    if not current_app.testing:
+        raise BusinessException("入库审批流尚未发布")
+
+    definition = approval_flow_repository.add_definition(
+        ApprovalFlowDefinition(
+            operation_type=OperationType.STOCK_IN.value,
+            name="入库审批",
+            status=FlowStatus.PUBLISHED.value,
+        )
+    )
+    version = approval_flow_repository.add_version(
+        ApprovalFlowVersion(
+            flow_definition_id=definition.id,
+            version_no=1,
+            status=FlowStatus.PUBLISHED.value,
+            published_at=utc_now(),
+        )
+    )
+    layer = ApprovalFlowLayer(
+        flow_version_id=version.id,
+        level_no=1,
+        sign_mode=SignMode.OR_SIGN.value,
+        allow_self_approval=True,
+    )
+    db.session.add(layer)
+    db.session.flush()
+    db.session.add_all(
+        [
+            ApprovalFlowAssigneeRule(
+                layer_id=layer.id,
+                assignee_type=AssigneeType.USER.value,
+                assignee_id=candidate_id,
+            )
+            for candidate_id in candidates
+        ]
+    )
+    db.session.flush()
+    return approval_flow_repository.load_version_graph(version.id) or version
+
+
 def submit(payload: dict[str, Any], actor_id: int) -> dict[str, Any]:
     permission_service.require_permission(actor_id, "stock-in:create")
     organization_id = payload["organization_id"]
     permission_service.require_organization_scope(actor_id, organization_id)
+    idempotency_key = (
+        payload["idempotency_key"].strip() if payload.get("idempotency_key") else None
+    )
+    if idempotency_key:
+        existing = operation_request_repository.find_by_idempotency_key(
+            actor_id, OperationType.STOCK_IN.value, idempotency_key
+        )
+        if existing is not None:
+            return _serialize(existing, actor_id)
     organization = organization_service.require_enabled(organization_id)
     top_organization = organization_service.get_top_level(organization.id)
     candidates = permission_service.find_approval_candidates(
@@ -150,19 +222,56 @@ def submit(payload: dict[str, Any], actor_id: int) -> dict[str, Any]:
     )
     if not candidates:
         raise BusinessException("未找到符合条件的入库审批人")
+    flow_version = _stock_in_flow(candidates)
 
     seen_serials: set[str] = set()
-    validated_items = [_validate_item(item, seen_serials) for item in payload["items"]]
+    try:
+        validated_items = [
+            _validate_item(item, seen_serials) for item in payload["items"]
+        ]
+    except BusinessException:
+        if idempotency_key is None:
+            raise
+        db.session.rollback()
+        existing = operation_request_repository.find_by_idempotency_key(
+            actor_id, OperationType.STOCK_IN.value, idempotency_key
+        )
+        if existing is None:
+            raise
+        return _serialize(existing, actor_id)
 
     operation = OperationRequest(
         request_no=_request_no(),
         operation_type=OperationType.STOCK_IN.value,
         applicant_id=actor_id,
+        approval_channel=ApprovalChannel.INTERNAL.value,
+        approval_flow_version_id=flow_version.id,
+        idempotency_key=idempotency_key,
         approval_status=ApprovalStatus.PENDING.value,
         execution_status=ExecutionStatus.NOT_STARTED.value,
         flow_version=1,
+        submitted_at=utc_now(),
     )
-    operation_request_repository.add(operation)
+    try:
+        operation_request_repository.add(operation)
+    except IntegrityError as exc:
+        message = str(exc.orig).lower()
+        is_idempotency_conflict = idempotency_key is not None and (
+            "uq_operation_request_idempotency" in message
+            or "operation_requests.applicant_id, "
+            "operation_requests.operation_type, "
+            "operation_requests.idempotency_key"
+            in message
+        )
+        if not is_idempotency_conflict:
+            raise
+        db.session.rollback()
+        existing = operation_request_repository.find_by_idempotency_key(
+            actor_id, OperationType.STOCK_IN.value, idempotency_key
+        )
+        if existing is None:
+            raise
+        return _serialize(existing, actor_id)
     stock_in = StockInRequest(
         operation_request_id=operation.id,
         organization_id=organization_id,
@@ -201,7 +310,7 @@ def submit(payload: dict[str, Any], actor_id: int) -> dict[str, Any]:
             raise BusinessException("设备序列号已被其他申请占用") from None
         raise
 
-    approval_service.create_initial_step(operation.id, candidates)
+    approval_engine.initialize(operation, flow_version.id, organization_id)
     db.session.commit()
     return _serialize(operation, actor_id)
 
@@ -270,28 +379,6 @@ def _operation_with_scope(operation_request_id: int, actor_id: int) -> Operation
     return _accessible_operation(operation_request_id, actor_id)
 
 
-def _execute(operation_request_id: int, actor_id: int) -> dict[str, Any]:
-    try:
-        asset_service.stock_in_request(operation_request_id, actor_id)
-    except Exception:
-        log.exception(
-            "stock-in execution failed for operation_request_id=%s",
-            operation_request_id,
-        )
-        db.session.rollback()
-        operation = operation_request_repository.get(operation_request_id)
-        if operation is None:
-            raise
-        operation.execution_status = ExecutionStatus.FAILED.value
-        operation.execution_error = _EXECUTION_FAILURE_MESSAGE
-        operation.version += 1
-        db.session.commit()
-    operation = operation_request_repository.get(operation_request_id)
-    if operation is None:
-        raise RuntimeError("operation request disappeared")
-    return _serialize(operation, actor_id)
-
-
 def approve(
     operation_request_id: int, opinion: str | None, actor_id: int
 ) -> dict[str, Any]:
@@ -302,15 +389,17 @@ def approve(
             return _serialize(operation, actor_id)
         if operation.execution_status == ExecutionStatus.FAILED.value:
             raise BusinessException("执行失败，请使用重新执行功能")
-    approval_service.approve(operation, actor_id, opinion)
+    outcome = approval_engine.approve(operation.id, actor_id, opinion)
     db.session.commit()
-    return _execute(operation.id, actor_id)
+    if outcome.request_approved:
+        operation = operation_executor.execute(operation.id, actor_id, "APPROVAL")
+    return _serialize(operation, actor_id)
 
 
 def reject(operation_request_id: int, opinion: str, actor_id: int) -> dict[str, Any]:
     permission_service.require_permission(actor_id, "stock-in:approve")
     operation = _operation_with_scope(operation_request_id, actor_id)
-    approval_service.reject(operation, actor_id, opinion)
+    approval_engine.reject(operation.id, actor_id, opinion)
     asset_code_service.void_for_request(operation.id)
     stock_in = stock_in_request_repository.find_by_operation(operation.id)
     if stock_in is not None:
@@ -323,7 +412,7 @@ def withdraw(operation_request_id: int, actor_id: int) -> dict[str, Any]:
     operation = _operation_with_scope(operation_request_id, actor_id)
     if operation.applicant_id != actor_id:
         raise BusinessException("只有申请人可以撤回", result_code=ResultCode.FORBIDDEN)
-    approval_service.withdraw(operation)
+    approval_engine.withdraw(operation.id, actor_id, None)
     asset_code_service.void_for_request(operation.id)
     stock_in = stock_in_request_repository.find_by_operation(operation.id)
     if stock_in is not None:
@@ -341,7 +430,8 @@ def retry(operation_request_id: int, actor_id: int) -> dict[str, Any]:
         return _serialize(operation, actor_id)
     if operation.execution_status != ExecutionStatus.FAILED.value:
         raise BusinessException("当前执行状态不能重新执行")
-    return _execute(operation.id, actor_id)
+    operation = operation_executor.retry(operation.id, actor_id)
+    return _serialize(operation, actor_id)
 
 
 __all__ = ["approve", "get", "page", "reject", "retry", "submit", "withdraw"]

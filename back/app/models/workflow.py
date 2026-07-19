@@ -17,12 +17,21 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.enums import ApprovalChannel, SignMode
 from app.extensions import db
 from app.models.mixins import TimestampMixin
 
 
 class OperationRequest(TimestampMixin, db.Model):  # type: ignore[misc,name-defined]
     __tablename__ = "operation_requests"
+    __table_args__ = (
+        UniqueConstraint(
+            "applicant_id",
+            "operation_type",
+            "idempotency_key",
+            name="uq_operation_request_idempotency",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     request_no: Mapped[str] = mapped_column(
@@ -32,12 +41,48 @@ class OperationRequest(TimestampMixin, db.Model):  # type: ignore[misc,name-defi
     applicant_id: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True
     )
+    parent_request_id: Mapped[int | None] = mapped_column(
+        ForeignKey("operation_requests.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
+    approval_channel: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default=ApprovalChannel.INTERNAL.value,
+        index=True,
+    )
+    approval_flow_version_id: Mapped[int | None] = mapped_column(
+        ForeignKey("approval_flow_versions.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
+    external_instance_id: Mapped[str | None] = mapped_column(
+        String(191), nullable=True, index=True
+    )
+    idempotency_key: Mapped[str | None] = mapped_column(String(191), nullable=True)
     approval_status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     execution_status: Mapped[str] = mapped_column(
         String(32), nullable=False, index=True
     )
     flow_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     execution_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    submitted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    approved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    executed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    terminated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    terminated_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=True, index=True
+    )
+    termination_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
 
@@ -118,8 +163,17 @@ class ApprovalStep(TimestampMixin, db.Model):  # type: ignore[misc,name-defined]
         nullable=False,
         index=True,
     )
+    flow_layer_id: Mapped[int | None] = mapped_column(
+        ForeignKey("approval_flow_layers.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
     level_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    sign_mode: Mapped[str] = mapped_column(
+        String(32), nullable=False, default=SignMode.OR_SIGN.value
+    )
     status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
 
 class ApprovalTask(TimestampMixin, db.Model):  # type: ignore[misc,name-defined]
@@ -138,6 +192,7 @@ class ApprovalTask(TimestampMixin, db.Model):  # type: ignore[misc,name-defined]
         ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True
     )
     status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     opinion: Mapped[str | None] = mapped_column(Text, nullable=True)
     decided_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -147,7 +202,7 @@ class ApprovalTask(TimestampMixin, db.Model):  # type: ignore[misc,name-defined]
 class ApprovalRecord(TimestampMixin, db.Model):  # type: ignore[misc,name-defined]
     __tablename__ = "approval_records"
     __table_args__ = (
-        UniqueConstraint("approval_step_id", name="uq_approval_record_step"),
+        UniqueConstraint("approval_task_id", name="uq_approval_record_task"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)

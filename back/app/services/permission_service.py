@@ -91,8 +91,43 @@ def find_approval_candidates(permission_code: str, organization_id: int) -> list
     return candidates
 
 
+def enabled_role_member_ids(
+    role_id: int, organization_id: int, applicant_id: int | None = None
+) -> list[int]:
+    role = rbac_repository.get_role(role_id)
+    if role is None or not role.enabled:
+        return []
+    users = rbac_repository.enabled_users_for_role(role_id)
+    if role.data_scope == DataScope.ALL.value:
+        return [user.id for user in users]
+    if role.data_scope == DataScope.CUSTOM.value:
+        allowed = set(rbac_repository.custom_organization_ids_for_role(role_id))
+        return [user.id for user in users] if organization_id in allowed else []
+
+    if role.data_scope == DataScope.SELF.value:
+        return [
+            user.id
+            for user in users
+            if applicant_id is not None and user.id == applicant_id
+        ]
+
+    result: list[int] = []
+    for user in users:
+        if user.organization_id is None:
+            continue
+        if role.data_scope == DataScope.DEPARTMENT.value:
+            if user.organization_id == organization_id:
+                result.append(user.id)
+        elif role.data_scope == DataScope.DEPARTMENT_TREE.value and (
+            organization_id in _descendant_ids(user.organization_id)
+        ):
+            result.append(user.id)
+    return result
+
+
 __all__ = [
     "accessible_organization_ids",
+    "enabled_role_member_ids",
     "find_approval_candidates",
     "get_data_scopes",
     "get_user_permissions",

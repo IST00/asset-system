@@ -31,12 +31,53 @@ class ApprovalStatus(StringEnum):
     WITHDRAWN = "WITHDRAWN"
 
 
+class ApprovalChannel(StringEnum):
+    INTERNAL = "INTERNAL"
+    FEISHU = "FEISHU"
+    DIRECT = "DIRECT"
+
+
+class SignMode(StringEnum):
+    OR_SIGN = "OR_SIGN"
+    AND_SIGN = "AND_SIGN"
+
+
+class AssigneeType(StringEnum):
+    USER = "USER"
+    ROLE = "ROLE"
+
+
+class FlowStatus(StringEnum):
+    DRAFT = "DRAFT"
+    PUBLISHED = "PUBLISHED"
+    DISABLED = "DISABLED"
+
+
+class RuntimeTaskStatus(StringEnum):
+    WAITING = "WAITING"
+    PENDING = "PENDING"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+    WITHDRAWN = "WITHDRAWN"
+
+
 class ExecutionStatus(StringEnum):
     NOT_STARTED = "NOT_STARTED"
     PROCESSING = "PROCESSING"
     SUCCESS = "SUCCESS"
     FAILED = "FAILED"
     TERMINATED = "TERMINATED"
+
+
+class ExecutionAttemptStatus(StringEnum):
+    PROCESSING = "PROCESSING"
+    SUCCESS = "SUCCESS"
+    FAILED = "FAILED"
+
+
+class ExecutionTriggerType(StringEnum):
+    APPROVAL = "APPROVAL"
+    RETRY = "RETRY"
 
 
 class AssetCodeStatus(StringEnum):
@@ -52,6 +93,11 @@ class AssetStatus(StringEnum):
     SCRAPPED = "SCRAPPED"
 
 
+class UsageType(StringEnum):
+    PERSONAL = "PERSONAL"
+    PUBLIC = "PUBLIC"
+
+
 class OperationType(StringEnum):
     STOCK_IN = "STOCK_IN"
 
@@ -63,12 +109,20 @@ class ApprovalAction(StringEnum):
 
 __all__ = [
     "ApprovalAction",
+    "ApprovalChannel",
     "ApprovalStatus",
+    "AssigneeType",
     "AssetCodeStatus",
     "AssetStatus",
     "DataScope",
+    "ExecutionAttemptStatus",
     "ExecutionStatus",
+    "ExecutionTriggerType",
+    "FlowStatus",
     "OperationType",
     "RecordStatus",
+    "RuntimeTaskStatus",
+    "SignMode",
     "StringEnum",
+    "UsageType",
 ]

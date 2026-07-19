@@ -48,6 +48,9 @@ class CreateStockInRequestSchema(Schema):
     remark = fields.String(
         required=False, allow_none=True, validate=validate.Length(max=2000)
     )
+    idempotency_key = fields.String(
+        required=False, allow_none=True, validate=validate.Length(min=1, max=191)
+    )
     items = fields.List(
         fields.Nested(StockInItemRequestSchema),
         required=True,

@@ -85,6 +85,20 @@ class RbacRepository:
         )
         return list(db.session.scalars(stmt).all())
 
+    def enabled_users_for_role(self, role_id: int) -> list[User]:
+        statement = (
+            select(User)
+            .join(UserRole, UserRole.user_id == User.id)
+            .join(Role, Role.id == UserRole.role_id)
+            .where(
+                UserRole.role_id == role_id,
+                User.enabled.is_(True),
+                Role.enabled.is_(True),
+            )
+            .order_by(User.id.asc())
+        )
+        return list(db.session.scalars(statement).all())
+
     def list_roles(self) -> list[Role]:
         return list(db.session.scalars(select(Role).order_by(Role.code.asc())).all())
 

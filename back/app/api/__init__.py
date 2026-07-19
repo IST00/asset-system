@@ -5,11 +5,13 @@ from __future__ import annotations
 from flask import Flask
 
 from app.api import (
+    approval_flows,
     assets,
     auth,
     hello,
     master_data,
     organizations,
+    operations,
     rbac,
     stock_in,
     users,
@@ -21,6 +23,8 @@ def register_blueprints(app: Flask) -> None:
     app.register_blueprint(auth.bp)
     app.register_blueprint(users.bp)
     app.register_blueprint(rbac.bp)
+    app.register_blueprint(approval_flows.bp)
+    app.register_blueprint(operations.bp)
     app.register_blueprint(organizations.bp)
     app.register_blueprint(master_data.bp)
     app.register_blueprint(stock_in.bp)

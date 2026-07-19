@@ -21,9 +21,25 @@ from app.repositories.audit_repository import (
     asset_lifecycle_repository,
     operation_log_repository,
 )
+from app.repositories.approval_flow_repository import (
+    ApprovalFlowRepository,
+    approval_flow_repository,
+)
 from app.repositories.master_data_repository import (
     OrganizationRepository,
     organization_repository,
+)
+from app.repositories.operation_repository import (
+    AssetBusinessLockRepository,
+    ExecutionAttemptRepository,
+    ExternalApprovalEventRepository,
+    OperationRequestAssetRepository,
+    OperationActionIdempotencyRepository,
+    asset_business_lock_repository,
+    execution_attempt_repository,
+    external_approval_event_repository,
+    operation_request_asset_repository,
+    operation_action_idempotency_repository,
 )
 from app.repositories.rbac_repository import RbacRepository, rbac_repository
 from app.repositories.user_repository import UserRepository, user_repository
@@ -47,8 +63,14 @@ __all__ = [
     "AssetCodeReservationRepository",
     "AssetCodeSequenceRepository",
     "AssetRepository",
+    "AssetBusinessLockRepository",
     "AssetLifecycleRepository",
+    "ApprovalFlowRepository",
+    "ExecutionAttemptRepository",
+    "ExternalApprovalEventRepository",
     "OperationLogRepository",
+    "OperationRequestAssetRepository",
+    "OperationActionIdempotencyRepository",
     "Page",
     "QuerySpec",
     "OrganizationRepository",
@@ -65,8 +87,14 @@ __all__ = [
     "asset_code_reservation_repository",
     "asset_code_sequence_repository",
     "asset_repository",
+    "asset_business_lock_repository",
     "asset_lifecycle_repository",
     "operation_log_repository",
+    "approval_flow_repository",
+    "execution_attempt_repository",
+    "external_approval_event_repository",
+    "operation_request_asset_repository",
+    "operation_action_idempotency_repository",
     "user_repository",
     "approval_step_repository",
     "approval_task_repository",
