@@ -39,6 +39,3 @@ services:
       - "80:80"
     depends_on:
       - back
-
-volumes:
-  mysql_data:

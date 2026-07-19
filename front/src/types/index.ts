@@ -16,6 +16,7 @@ export interface User {
   username: string
   nickname?: string
   role?: string
+  permissions?: string[]
 }
 
 export interface LoginResponse {

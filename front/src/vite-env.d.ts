@@ -25,11 +25,11 @@ declare global {
     ReactDOM: typeof ReactDOM
     SoybeanCommonMain: SoybeanCommonMain
     pagePath: string
-    setupWKWebViewJavascriptBridge: any
-    WKWebViewJavascriptBridge: any
-    WKWVJBCallbacks: any
-    webkit: any
-    SoybeanCoreMain: any
+    setupWKWebViewJavascriptBridge: unknown
+    WKWebViewJavascriptBridge: unknown
+    WKWVJBCallbacks: unknown
+    webkit: unknown
+    SoybeanCoreMain: unknown
     javaDataPath: string
     deeplinkPath: string
   }
