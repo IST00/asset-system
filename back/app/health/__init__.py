@@ -11,7 +11,8 @@ Check registry
 --------------
 Checks are functions returning (name, ok, detail_dict). Register new ones
 via `register_check(fn)` before `run_health_server()` is called. The default
-set ships db + redis; disable via env `HEALTH_CHECKS=db,redis` narrowing.
+set contains the mandatory database check. `HEALTH_CHECKS` can narrow any
+checks registered by application extensions.
 """
 
 from __future__ import annotations
@@ -32,7 +33,9 @@ CheckFn = Callable[[], "CheckResult"]
 class CheckResult:
     __slots__ = ("name", "ok", "detail")
 
-    def __init__(self, name: str, ok: bool, detail: dict[str, Any] | None = None) -> None:
+    def __init__(
+        self, name: str, ok: bool, detail: dict[str, Any] | None = None
+    ) -> None:
         self.name = name
         self.ok = ok
         self.detail = detail or {}
@@ -79,37 +82,19 @@ def bind_business_app(business_app: Any) -> None:
     _BUSINESS_APP = business_app
 
 
-def _db_configured() -> bool:
-    """True if the deployment explicitly configured a DB connection."""
-    return bool((os.getenv("DB_URL") or "").strip()) or bool(
-        (os.getenv("DB_HOST") or "").strip()
-    )
-
-
 def _check_db() -> CheckResult:
     def _work() -> dict[str, Any]:
         from app.extensions import db
 
         if _BUSINESS_APP is None:
-            raise RuntimeError("health: business app not bound; call bind_business_app()")
+            raise RuntimeError(
+                "health: business app not bound; call bind_business_app()"
+            )
         with _BUSINESS_APP.app_context():
             db.session.execute(db.text("SELECT 1"))
         return {"ok": True}
 
     return _timed("db", _work)
-
-
-def _check_redis() -> CheckResult:
-    def _work() -> dict[str, Any]:
-        import redis as _redis
-
-        host = os.getenv("REDIS_HOST", "localhost")
-        port = int(os.getenv("REDIS_PORT", "6379"))
-        r = _redis.Redis(host=host, port=port, socket_connect_timeout=2)
-        r.ping()
-        return {"ok": True, "host": host, "port": port}
-
-    return _timed("redis", _work)
 
 
 def _enabled_checks() -> dict[str, CheckFn]:
@@ -128,21 +113,17 @@ def _run_checks() -> tuple[bool, dict[str, Any]]:
 
 def create_health_app() -> Flask:
     # Default registry — callers can replace entries by calling register_check() after import.
-    # DB check: only when DB is explicitly configured (DB_URL or DB_HOST set & non-empty).
-    # Leaving both unset in the env file means "no DB in this deployment"; probing
-    # would turn readiness into a perpetual 503.
-    if _db_configured():
-        _REGISTRY.setdefault("db", _check_db)
-    # Redis check: only when REDIS_HOST is explicitly configured (non-empty).
-    if (os.getenv("REDIS_HOST") or "").strip():
-        _REGISTRY.setdefault("redis", _check_redis)
+    # The business database is mandatory in every profile, including dev SQLite.
+    _REGISTRY.setdefault("db", _check_db)
 
     health_app = Flask("health")
 
     @health_app.get("/health")
     def aggregate():
         ok, checks = _run_checks()
-        return jsonify({"status": "UP" if ok else "DOWN", "checks": checks}), 200 if ok else 503
+        return jsonify(
+            {"status": "UP" if ok else "DOWN", "checks": checks}
+        ), 200 if ok else 503
 
     @health_app.get("/health/liveness")
     def liveness():
@@ -151,7 +132,9 @@ def create_health_app() -> Flask:
     @health_app.get("/health/readiness")
     def readiness():
         ok, checks = _run_checks()
-        return jsonify({"status": "UP" if ok else "DOWN", "checks": checks}), 200 if ok else 503
+        return jsonify(
+            {"status": "UP" if ok else "DOWN", "checks": checks}
+        ), 200 if ok else 503
 
     return health_app
 

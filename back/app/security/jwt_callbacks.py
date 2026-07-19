@@ -21,14 +21,22 @@ def register_jwt_callbacks(app: Flask, jwt_manager: JWTManager) -> None:
     @jwt_manager.unauthorized_loader
     def _missing(reason: str) -> tuple[Any, int]:
         return (
-            jsonify(Result.fail(ResultCode.UNAUTHORIZED, reason or "missing token").to_dict()),
+            jsonify(
+                Result.fail(
+                    ResultCode.UNAUTHORIZED, reason or "missing token"
+                ).to_dict()
+            ),
             401,
         )
 
     @jwt_manager.invalid_token_loader
     def _invalid(reason: str) -> tuple[Any, int]:
         return (
-            jsonify(Result.fail(ResultCode.UNAUTHORIZED, reason or "invalid token").to_dict()),
+            jsonify(
+                Result.fail(
+                    ResultCode.UNAUTHORIZED, reason or "invalid token"
+                ).to_dict()
+            ),
             401,
         )
 
@@ -42,7 +50,9 @@ def register_jwt_callbacks(app: Flask, jwt_manager: JWTManager) -> None:
     @jwt_manager.needs_fresh_token_loader
     def _fresh(_jwt_header: dict, _jwt_payload: dict) -> tuple[Any, int]:
         return (
-            jsonify(Result.fail(ResultCode.UNAUTHORIZED, "fresh token required").to_dict()),
+            jsonify(
+                Result.fail(ResultCode.UNAUTHORIZED, "fresh token required").to_dict()
+            ),
             401,
         )
 

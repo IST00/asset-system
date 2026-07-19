@@ -17,7 +17,9 @@ class LoginRequestSchema(Schema):
 class RegisterRequestSchema(Schema):
     username = fields.String(required=True, validate=validate.Length(min=3, max=64))
     password = fields.String(required=True, validate=validate.Length(min=6, max=128))
-    nickname = fields.String(required=False, allow_none=True, validate=validate.Length(max=64))
+    nickname = fields.String(
+        required=False, allow_none=True, validate=validate.Length(max=64)
+    )
 
 
 class UserResponseSchema(Schema):

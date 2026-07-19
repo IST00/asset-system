@@ -157,7 +157,7 @@ npm run build
 
 改到下列任一 = 改脚手架本体，需要**独立 PR + 打 `scaffolding` 标签 + 团队评审**：
 
-- `back/requirements.txt` 的核心依赖（Flask / SQLAlchemy / flask-jwt-extended / marshmallow / flask-smorest / alembic / celery / redis 的主版本）
+- `back/requirements.txt` 的核心依赖（Flask / SQLAlchemy / flask-jwt-extended / marshmallow / flask-smorest / alembic / celery 的主版本）
 - `front/package.json` 的 `dependencies`（`devDependencies` 除外）
 - `app/common/result.py`、`app/common/errors.py`、`register_error_handlers`
 - `app/__init__.py:create_app()` 的装配顺序

@@ -7,7 +7,7 @@
 | --- | --- |
 | [`backend.md`](./backend.md) | `back/app/**`（Flask + SQLAlchemy + marshmallow + flask_jwt_extended） |
 | [`frontend.md`](./frontend.md) | `front/src/**`（React + TS + Vite + AntD） |
-| [`middleware.md`](./middleware.md) | 中间件接入（Flask extensions、DB、Redis、Celery、健康检查、observability） |
+| [`middleware.md`](./middleware.md) | 中间件接入（Flask extensions、DB、Celery、健康检查、observability） |
 | [`workflow.md`](./workflow.md) | 提交 / 分支 / 钩子 / CI / 脚手架自身的变更流程 |
 
 ## 给 AI 编码工具（Claude Code / Cursor / Copilot 等）

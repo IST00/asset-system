@@ -301,7 +301,7 @@ def me():
 
 | Profile | 对应文件 | 典型场景 |
 | --- | --- | --- |
-| `dev` / `development`（默认） | `back/.env.dev` | 本地开发；sqlite `instance/dev.db`；默认不启用 Redis |
+| `dev` / `development`（默认） | `back/.env.dev` | 本地开发；sqlite `instance/dev.db` |
 | `prod` / `production` | `back/.env.prod` | 生产；MySQL；**所有机密**必须在部署环境覆盖 |
 | `test` / `testing` | `back/.env.dev` | pytest；内存 sqlite；共享 dev 的 .env |
 

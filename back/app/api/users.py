@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 from flask import Blueprint, request
-from flask_jwt_extended import get_jwt, get_jwt_identity, jwt_required
+from flask_jwt_extended import jwt_required
 
-from app.common import BusinessException, Result, ResultCode
+from app.common import Result
 from app.schemas import PageQuerySchema
-from app.security import require_role
-from app.services import user_service
+from app.security import current_user_id
+from app.services import permission_service, user_service
 
-bp = Blueprint("users", __name__, url_prefix="/api/users")
+bp = Blueprint("users", __name__, url_prefix="/api/v1/users")
 
 _page_schema = PageQuerySchema()
 
@@ -18,15 +18,13 @@ _page_schema = PageQuerySchema()
 @bp.get("/me")
 @jwt_required()
 def me() -> dict:
-    username = get_jwt_identity()
-    return Result.success(user_service.get_current(username)).to_dict()
+    return Result.success(user_service.get_current(current_user_id())).to_dict()
 
 
 @bp.get("")
 @jwt_required()
 def page_users() -> dict:
-    if not require_role("ADMIN", get_jwt()):
-        raise BusinessException(result_code=ResultCode.FORBIDDEN)
+    permission_service.require_permission(current_user_id(), "system:user:view")
 
     query = _page_schema.load(request.args.to_dict())
     result = user_service.page(page_index=query["page"], size=query["size"])

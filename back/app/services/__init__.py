@@ -1,5 +1,41 @@
 """Service layer — business logic sits here, not in blueprints."""
 
-from app.services import auth_service, user_service
+from app.services import (
+    auth_service,
+    asset_code_service,
+    approval_service,
+    asset_service,
+    audit_service,
+    master_data_service,
+    organization_service,
+    permission_service,
+    approval_flow_service,
+    approval_engine,
+    asset_lock_service,
+    operation_service,
+    operation_executor,
+    approval_provider_service,
+    rbac_service,
+    stock_in_service,
+    user_service,
+)
 
-__all__ = ["auth_service", "user_service"]
+__all__ = [
+    "auth_service",
+    "asset_code_service",
+    "approval_service",
+    "approval_flow_service",
+    "approval_engine",
+    "asset_lock_service",
+    "asset_service",
+    "audit_service",
+    "master_data_service",
+    "organization_service",
+    "operation_service",
+    "operation_executor",
+    "approval_provider_service",
+    "permission_service",
+    "rbac_service",
+    "stock_in_service",
+    "user_service",
+]

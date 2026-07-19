@@ -19,7 +19,8 @@ from dataclasses import dataclass, field
 from typing import Any, Generic, TypeVar
 
 from sqlalchemy import ColumnElement, Select, func, select
-from sqlalchemy.orm import Session
+from flask_sqlalchemy.session import Session
+from sqlalchemy.orm import scoped_session
 
 from app.extensions import db
 
@@ -69,7 +70,7 @@ class BaseRepository(Generic[M]):
     # -- session accessor ------------------------------------------------
     # Indirection so tests / Celery workers can inject a custom session
     # without monkey-patching `app.extensions.db`.
-    def _session(self) -> Session:
+    def _session(self) -> scoped_session[Session]:
         return db.session
 
     # -- reads -----------------------------------------------------------

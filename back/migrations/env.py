@@ -3,7 +3,7 @@ from flask import current_app
 from alembic import context
 
 config = context.config
-if config.config_file_name is not None:
+if config.config_file_name is not None and config.get_section("loggers") is not None:
     fileConfig(config.config_file_name)
 
 target_metadata = current_app.extensions["migrate"].db.metadata

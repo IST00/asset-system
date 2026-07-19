@@ -59,21 +59,33 @@ def register_error_handlers(app: Flask) -> None:
     @app.errorhandler(401)
     def handle_unauthorized(e: HTTPException) -> ResponseReturnValue:
         return (
-            jsonify(Result.fail(ResultCode.UNAUTHORIZED, e.description or "unauthorized").to_dict()),
+            jsonify(
+                Result.fail(
+                    ResultCode.UNAUTHORIZED, e.description or "unauthorized"
+                ).to_dict()
+            ),
             401,
         )
 
     @app.errorhandler(403)
     def handle_forbidden(e: HTTPException) -> ResponseReturnValue:
         return (
-            jsonify(Result.fail(ResultCode.FORBIDDEN, e.description or "forbidden").to_dict()),
+            jsonify(
+                Result.fail(
+                    ResultCode.FORBIDDEN, e.description or "forbidden"
+                ).to_dict()
+            ),
             403,
         )
 
     @app.errorhandler(404)
     def handle_not_found(e: HTTPException) -> ResponseReturnValue:
         return (
-            jsonify(Result.fail(ResultCode.NOT_FOUND, e.description or "not found").to_dict()),
+            jsonify(
+                Result.fail(
+                    ResultCode.NOT_FOUND, e.description or "not found"
+                ).to_dict()
+            ),
             404,
         )
 

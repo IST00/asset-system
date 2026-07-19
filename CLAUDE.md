@@ -72,7 +72,7 @@ api (blueprint) → services → models (SQLAlchemy) → db session
 
 | Profile | 对应文件 | 典型场景 |
 | --- | --- | --- |
-| `dev` / `development`（默认） | `back/.env.dev` | 本地开发；sqlite `instance/dev.db`；默认不启用 Redis |
+| `dev` / `development`（默认） | `back/.env.dev` | 本地开发；sqlite `instance/dev.db` |
 | `prod` / `production` | `back/.env.prod` | 生产；MySQL；所有机密要在部署环境覆盖 |
 | `test` / `testing` | `back/.env.dev` | pytest 自用内存 sqlite；共享 dev 的 .env |
 
@@ -98,10 +98,7 @@ FLASK_ENV=prod python manage.py run
 FLASK_ENV=prod gunicorn -c gunicorn.conf.py wsgi:app
 ```
 
-**健康检查条件性注册**（`app/health`）：
-
-- `db` check：始终注册（sqlite 也查）
-- `redis` check：仅当 `REDIS_HOST` 非空时注册；`.env.dev` 默认把 `REDIS_HOST` 注释掉，所以本地不查 redis
+**健康检查**（`app/health`）：`db` check 始终注册（sqlite 也查）。
 
 想添加新的环境变量？写进 `.env.dev` + `.env.prod` 两个文件即可；敏感项在 `.env.prod` 只放占位，部署环境里覆盖。
 

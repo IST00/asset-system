@@ -1,5 +1,6 @@
-"""Security utilities (JWT callbacks, role helpers)."""
+"""Security utilities."""
 
-from app.security.jwt_callbacks import register_jwt_callbacks, require_role
+from app.security.current_user import current_user_id
+from app.security.jwt_callbacks import register_jwt_callbacks
 
-__all__ = ["register_jwt_callbacks", "require_role"]
+__all__ = ["current_user_id", "register_jwt_callbacks"]
