@@ -1,0 +1,317 @@
+.asset-shell {
+  min-height: 100vh;
+  background: var(--asset-color-canvas);
+}
+
+.asset-shell__rail {
+  position: fixed;
+  z-index: 20;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  display: flex;
+  width: var(--asset-rail-width);
+  flex-direction: column;
+  align-items: center;
+  padding: 16px 10px;
+  color: #ffffff;
+  background: var(--asset-color-rail);
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.asset-shell__brand {
+  display: flex;
+  width: 46px;
+  height: 46px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  color: #ffffff;
+  cursor: pointer;
+  background: var(--asset-color-brand);
+  border: 0;
+  border-radius: 14px;
+  box-shadow: 0 10px 24px rgba(37, 99, 235, 0.32);
+}
+
+.asset-shell__rail-nav {
+  width: 100%;
+  margin-top: 28px;
+}
+
+.asset-shell__rail-nav > * + *,
+.asset-shell__rail-footer > * + * {
+  margin-top: 8px;
+}
+
+.asset-shell__rail-button,
+.asset-shell__account-button {
+  display: flex;
+  width: 48px;
+  height: 44px;
+  align-items: center;
+  justify-content: center;
+  margin-right: auto;
+  margin-left: auto;
+  color: #9ba7bb;
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+  border-radius: var(--asset-radius-md);
+  transition:
+    color 160ms ease,
+    background-color 160ms ease,
+    transform 160ms ease;
+}
+
+.asset-shell__rail-button:hover,
+.asset-shell__rail-button--active {
+  color: #ffffff;
+  background: rgba(37, 99, 235, 0.92);
+}
+
+.asset-shell__rail-button--active {
+  box-shadow: 0 8px 20px rgba(37, 99, 235, 0.28);
+}
+
+.asset-shell__rail-button--disabled {
+  cursor: default;
+  opacity: 0.58;
+}
+
+.asset-shell__rail-button--disabled:hover {
+  color: #9ba7bb;
+  background: transparent;
+}
+
+.asset-shell__rail-footer {
+  width: 100%;
+  margin-top: auto;
+}
+
+.asset-shell__account-button {
+  height: 40px;
+  color: inherit;
+}
+
+.asset-shell__account-button:hover {
+  transform: translateY(-1px);
+}
+
+.asset-shell__workspace {
+  min-height: 100vh;
+  margin-left: var(--asset-rail-width);
+}
+
+.asset-shell__topbar {
+  display: flex;
+  min-height: 68px;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 32px;
+  background: rgba(245, 247, 251, 0.94);
+  border-bottom: 1px solid var(--asset-color-border);
+}
+
+.asset-shell__mobile-brand {
+  display: none;
+  align-items: center;
+  color: var(--asset-color-brand);
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.asset-shell__mobile-brand > * + * {
+  margin-left: 8px;
+}
+
+.asset-shell__topbar-actions {
+  display: flex;
+  align-items: center;
+}
+
+.asset-shell__topbar-actions > * + * {
+  margin-left: 8px;
+}
+
+.asset-shell__user-button {
+  height: 42px;
+  padding: 4px 8px;
+  color: var(--asset-color-text);
+}
+
+.asset-shell__user-button > * + * {
+  margin-left: 8px;
+}
+
+.asset-shell__more-button {
+  display: none;
+}
+
+.asset-shell__content {
+  padding: 28px 32px 48px;
+}
+
+.asset-shell__content-inner {
+  width: 100%;
+  max-width: var(--asset-content-max-width);
+  margin-right: auto;
+  margin-left: auto;
+}
+
+.asset-shell__mobile-nav {
+  display: none;
+}
+
+.asset-shell__drawer-user {
+  display: flex;
+  align-items: center;
+  padding: 4px 0 20px;
+  border-bottom: 1px solid var(--asset-color-border);
+}
+
+.asset-shell__drawer-user > * + * {
+  margin-left: 12px;
+}
+
+.asset-shell__drawer-user strong,
+.asset-shell__drawer-user span {
+  display: block;
+}
+
+.asset-shell__drawer-user span {
+  margin-top: 3px;
+  color: var(--asset-color-text-muted);
+  font-size: 13px;
+}
+
+.asset-shell__drawer-nav {
+  margin-top: 16px;
+}
+
+.asset-shell__drawer-nav > * + * {
+  margin-top: 6px;
+}
+
+.asset-shell__drawer-nav button,
+.asset-shell__drawer-logout {
+  display: flex;
+  width: 100%;
+  min-height: 44px;
+  align-items: center;
+  padding: 10px 12px;
+  color: var(--asset-color-text);
+  text-align: left;
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+  border-radius: var(--asset-radius-sm);
+}
+
+.asset-shell__drawer-nav button:hover,
+.asset-shell__drawer-logout:hover {
+  background: var(--asset-color-surface-muted);
+}
+
+.asset-shell__drawer-nav button[aria-disabled='true'] {
+  cursor: default;
+  opacity: 0.62;
+}
+
+.asset-shell__drawer-nav button > * + *,
+.asset-shell__drawer-logout > * + * {
+  margin-left: 10px;
+}
+
+.asset-shell__drawer-nav small {
+  margin-left: auto;
+  color: var(--asset-color-text-subtle);
+}
+
+.asset-shell__drawer-logout {
+  margin-top: 20px;
+  color: var(--asset-color-danger);
+  border-top: 1px solid var(--asset-color-border);
+  border-radius: 0;
+}
+
+@media (max-width: 767px) {
+  .asset-shell__rail {
+    display: none;
+  }
+
+  .asset-shell__workspace {
+    margin-left: 0;
+    padding-bottom: 68px;
+  }
+
+  .asset-shell__topbar {
+    min-height: 60px;
+    justify-content: space-between;
+    padding: 0 16px;
+    background: var(--asset-color-surface);
+  }
+
+  .asset-shell__mobile-brand,
+  .asset-shell__more-button {
+    display: flex;
+  }
+
+  .asset-shell__user-button {
+    display: none;
+  }
+
+  .asset-shell__content {
+    padding: 20px 16px 32px;
+  }
+
+  .asset-shell__mobile-nav {
+    position: fixed;
+    z-index: 25;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    display: flex;
+    min-height: 66px;
+    padding: 6px 4px calc(6px + env(safe-area-inset-bottom));
+    background: var(--asset-color-surface);
+    border-top: 1px solid var(--asset-color-border);
+    box-shadow: 0 -8px 22px rgba(23, 32, 51, 0.07);
+  }
+
+  .asset-shell__mobile-nav-item {
+    display: flex;
+    width: 25%;
+    min-height: 52px;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    color: var(--asset-color-text-muted);
+    cursor: pointer;
+    background: transparent;
+    border: 0;
+    border-radius: var(--asset-radius-sm);
+  }
+
+  .asset-shell__mobile-nav-item span {
+    margin-top: 4px;
+    font-size: 11px;
+    line-height: 1.2;
+  }
+
+  .asset-shell__mobile-nav-item.is-active {
+    color: var(--asset-color-brand);
+    background: var(--asset-color-brand-soft);
+  }
+
+  .asset-shell__mobile-nav-item[aria-disabled='true'] {
+    opacity: 0.55;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .asset-shell__rail-button,
+  .asset-shell__account-button {
+    transition: none;
+  }
+}

@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react'
 import { authApi } from '@/api'
 import { useAuthStore } from '@/store/auth'
 
-const {app} = window.SoybeanCommonMain.alias;
+const { app } = window.SoybeanCommonMain.alias
 
 export default function Login() {
   const navigate = useNavigate()
@@ -26,9 +26,9 @@ export default function Login() {
   useEffect(() => {
     const login = async () => {
       try {
-        await app.login.action.doLogin();
+        await app.login.action.doLogin()
       } catch (error) {
-        console.error('failed to login in web', error);
+        console.error('failed to login in web', error)
       }
     }
     login()
