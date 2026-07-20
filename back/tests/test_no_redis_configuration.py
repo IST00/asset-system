@@ -40,3 +40,52 @@ def test_project_files_have_no_redis_integration():
     ]
 
     assert redis_references == []
+
+
+def test_compose_uses_external_database_configuration():
+    compose = (REPOSITORY_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+
+    assert "\n  mysql:" not in compose
+    assert "\n  redis:" not in compose
+    assert "mysql_data" not in compose
+    for key in (
+        "DB_URL:",
+        "DB_HOST:",
+        "DB_PORT:",
+        "DB_NAME:",
+        "DB_USER:",
+        "DB_PASSWORD:",
+        "JWT_SECRET:",
+        "SECRET_KEY:",
+    ):
+        assert key not in compose
+    assert "env_file:" in compose
+    assert "${BACK_ENV_FILE:-./back/.env.deploy}" in compose
+    assert "FLASK_ENV: ${APP_ENV:-prod}" in compose
+    assert "depends_on:\n      - back" in compose
+
+
+def test_deployment_secrets_are_not_tracked_or_copied_into_image():
+    gitignore = (REPOSITORY_ROOT / ".gitignore").read_text(encoding="utf-8")
+    dockerignore = (BACKEND_ROOT / ".dockerignore").read_text(encoding="utf-8")
+    production_env = (BACKEND_ROOT / ".env.prod").read_text(encoding="utf-8")
+
+    assert "back/.env.deploy" in gitignore
+    assert ".env*" in dockerignore
+    sensitive_keys = {
+        "SECRET_KEY",
+        "JWT_SECRET",
+        "DB_URL",
+        "DB_HOST",
+        "DB_USER",
+        "DB_PASSWORD",
+        "DB_NAME",
+    }
+    unsafe_keys = []
+    for line in production_env.splitlines():
+        if not line or line.lstrip().startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        if key in sensitive_keys and "CHANGE_ME_IN_DEPLOYMENT" not in value:
+            unsafe_keys.append(key)
+    assert unsafe_keys == []

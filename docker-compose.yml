@@ -1,37 +1,13 @@
 services:
-  mysql:
-    image: mysql:8.0
-    environment:
-      MYSQL_ROOT_PASSWORD: rootpwd
-      MYSQL_DATABASE: scaffold
-      MYSQL_USER: scaffold
-      MYSQL_PASSWORD: scaffold
-    ports:
-      - "3306:3306"
-    volumes:
-      - mysql_data:/var/lib/mysql
-    healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
   back:
     build: ./back
+    env_file:
+      - ${BACK_ENV_FILE:-./back/.env.deploy}
     environment:
-      FLASK_ENV: prod
-      DB_HOST: mysql
-      DB_PORT: "3306"
-      DB_NAME: scaffold
-      DB_USER: scaffold
-      DB_PASSWORD: scaffold
-      JWT_SECRET: change-me-in-production-change-me-in-production
+      FLASK_ENV: ${APP_ENV:-prod}
     ports:
       - "8080:8080"
       - "8081:8081"
-    depends_on:
-      mysql:
-        condition: service_healthy
 
   front:
     build: ./front

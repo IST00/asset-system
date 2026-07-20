@@ -53,6 +53,7 @@ logs/
 .env
 .env.local
 .env.*.local
+back/.env.deploy
 
 # ----- Husky / lint-staged caches -----
 .eslintcache
