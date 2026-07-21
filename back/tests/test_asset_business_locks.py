@@ -8,9 +8,16 @@ from decimal import Decimal
 from threading import Barrier
 
 import app.services as services
+import pytest
 from app import create_app
 from app.common import BusinessException
-from app.enums import ApprovalChannel, ApprovalStatus, AssetStatus, ExecutionStatus
+from app.enums import (
+    ApprovalChannel,
+    ApprovalExecutionMode,
+    ApprovalStatus,
+    AssetStatus,
+    ExecutionStatus,
+)
 from app.extensions import db
 from app.models import (
     Asset,
@@ -31,6 +38,10 @@ def _operation_service():
     service = getattr(services, "operation_service", None)
     assert service is not None, "missing operation_service"
     return service
+
+
+def _target_data(assets: list[Asset]) -> dict[int, dict[str, int]]:
+    return {asset.id: {"location_id": asset.location_id} for asset in assets}
 
 
 def _seed_assets(prefix: str = "LOCK") -> tuple[Organization, list[User], list[Asset]]:
@@ -76,16 +87,19 @@ def _seed_assets(prefix: str = "LOCK") -> tuple[Organization, list[User], list[A
 
 
 def test_create_request_snapshots_and_locks_assets_in_stable_order(app) -> None:
-    organization, users, assets = _seed_assets()
+    _organization, users, assets = _seed_assets()
     service = _operation_service()
-    operation = service.create_request(
+    result = service.create_request(
         operation_type="TRANSFER",
         applicant_id=users[0].id,
         approval_channel=ApprovalChannel.INTERNAL.value,
-        organization_id=organization.id,
+        approval_execution_mode=ApprovalExecutionMode.AUTO_ON_APPROVAL.value,
         assets=list(reversed(assets)),
+        target_data_by_asset_id=_target_data(assets),
         idempotency_key="transfer-once",
     )
+    assert result.created is True
+    operation = result.operation
 
     assert operation.approval_status == ApprovalStatus.PENDING.value
     assert operation.execution_status == ExecutionStatus.NOT_STARTED.value
@@ -100,6 +114,7 @@ def test_create_request_snapshots_and_locks_assets_in_stable_order(app) -> None:
     assert snapshots[0].asset_status_snapshot == AssetStatus.IDLE.value
     assert snapshots[0].asset_version_snapshot == assets[0].version
     assert snapshots[0].before_data["location_id"] == assets[0].location_id
+    assert snapshots[0].target_data == {"location_id": assets[0].location_id}
     locks = db.session.query(AssetBusinessLock).order_by(AssetBusinessLock.id).all()
     assert [lock.asset_id for lock in locks] == [assets[0].id, assets[1].id]
     assert all(lock.operation_request_id == operation.id for lock in locks)
@@ -108,52 +123,112 @@ def test_create_request_snapshots_and_locks_assets_in_stable_order(app) -> None:
         operation_type="TRANSFER",
         applicant_id=users[0].id,
         approval_channel=ApprovalChannel.INTERNAL.value,
-        organization_id=organization.id,
+        approval_execution_mode=ApprovalExecutionMode.AUTO_ON_APPROVAL.value,
         assets=assets,
+        target_data_by_asset_id=_target_data(assets),
         idempotency_key="transfer-once",
     )
-    assert replay.id == operation.id
+    assert replay.created is False
+    assert replay.operation.id == operation.id
     assert db.session.query(OperationRequest).count() == 1
     assert db.session.query(AssetBusinessLock).count() == 2
 
 
-def test_create_request_validates_whole_batch_before_persisting(app) -> None:
-    organization, users, assets = _seed_assets("ATOMIC")
+def test_create_request_accepts_mixed_organizations_after_feature_validation(
+    app,
+) -> None:
+    _organization, users, assets = _seed_assets("ATOMIC")
     other = Organization(code="ATOMIC-OTHER", name="其它组织")
     db.session.add(other)
     db.session.flush()
     assets[1].organization_id = other.id
     db.session.flush()
 
-    try:
+    result = _operation_service().create_request(
+        operation_type="TRANSFER",
+        applicant_id=users[0].id,
+        approval_channel=ApprovalChannel.INTERNAL.value,
+        approval_execution_mode=ApprovalExecutionMode.AUTO_ON_APPROVAL.value,
+        assets=assets,
+        target_data_by_asset_id=_target_data(assets),
+        idempotency_key=None,
+    )
+
+    assert result.created is True
+    assert {
+        item.organization_id_snapshot
+        for item in db.session.query(OperationRequestAsset).all()
+    } == {asset.organization_id for asset in assets}
+
+
+@pytest.mark.parametrize("case", ["missing", "extra", "not-json"])
+def test_create_request_rejects_invalid_target_snapshots(app, case: str) -> None:
+    _organization, users, assets = _seed_assets(f"TARGET-{case.upper()}")
+    asset = assets[0]
+    if case == "missing":
+        target_data: dict[int, dict] = {}
+    elif case == "extra":
+        target_data = {asset.id: {}, assets[1].id: {}}
+    else:
+        target_data = {asset.id: {"bad": object()}}
+
+    with pytest.raises(BusinessException):
         _operation_service().create_request(
             operation_type="TRANSFER",
             applicant_id=users[0].id,
             approval_channel=ApprovalChannel.INTERNAL.value,
-            organization_id=organization.id,
-            assets=assets,
+            approval_execution_mode=ApprovalExecutionMode.AUTO_ON_APPROVAL.value,
+            assets=[asset],
+            target_data_by_asset_id=target_data,
             idempotency_key=None,
         )
-    except BusinessException as error:
-        assert "组织" in error.message
-    else:
-        raise AssertionError("mixed-organization request should fail")
-    assert db.session.query(OperationRequest).count() == 0
-    assert db.session.query(OperationRequestAsset).count() == 0
-    assert db.session.query(AssetBusinessLock).count() == 0
+
+
+def test_create_request_rejects_transient_asset_with_existing_database_id(
+    app,
+) -> None:
+    _organization, users, assets = _seed_assets("SPOOF")
+    real = assets[0]
+    spoof = Asset(
+        id=real.id,
+        asset_code="SPOOF-CODE",
+        asset_name="伪造资产",
+        status=AssetStatus.REPAIRING.value,
+        organization_id=real.organization_id,
+        category_id=real.category_id,
+        unit_id=real.unit_id,
+        original_amount=real.original_amount,
+        purchase_date=real.purchase_date,
+        manager_id=real.manager_id,
+        source_id=real.source_id,
+        location_id=real.location_id,
+        version=77,
+    )
+
+    with pytest.raises(BusinessException, match="持久化"):
+        _operation_service().create_request(
+            operation_type="TRANSFER",
+            applicant_id=users[0].id,
+            approval_channel=ApprovalChannel.INTERNAL.value,
+            approval_execution_mode=ApprovalExecutionMode.AUTO_ON_APPROVAL.value,
+            assets=[spoof],
+            target_data_by_asset_id={real.id: {"location_id": real.location_id}},
+            idempotency_key="spoof-request",
+        )
 
 
 def test_lock_conflict_rolls_back_new_request_and_returns_safe_context(app) -> None:
-    organization, users, assets = _seed_assets("CONFLICT")
+    _organization, users, assets = _seed_assets("CONFLICT")
     service = _operation_service()
     first = service.create_request(
         operation_type="TRANSFER",
         applicant_id=users[0].id,
         approval_channel=ApprovalChannel.INTERNAL.value,
-        organization_id=organization.id,
+        approval_execution_mode=ApprovalExecutionMode.AUTO_ON_APPROVAL.value,
         assets=[assets[0]],
+        target_data_by_asset_id=_target_data([assets[0]]),
         idempotency_key="first",
-    )
+    ).operation
     db.session.commit()
 
     try:
@@ -161,8 +236,9 @@ def test_lock_conflict_rolls_back_new_request_and_returns_safe_context(app) -> N
             operation_type="REPAIR",
             applicant_id=users[1].id,
             approval_channel=ApprovalChannel.INTERNAL.value,
-            organization_id=organization.id,
+            approval_execution_mode=ApprovalExecutionMode.AUTO_ON_APPROVAL.value,
             assets=[assets[0]],
+            target_data_by_asset_id=_target_data([assets[0]]),
             idempotency_key="second",
         )
     except BusinessException as error:
@@ -188,9 +264,8 @@ def test_concurrent_requests_for_same_asset_have_one_winner(tmp_path) -> None:
     concurrent_app = create_app(config=ConcurrentConfig)
     with concurrent_app.app_context():
         db.create_all()
-        organization, users, assets = _seed_assets("RACE")
+        _organization, users, assets = _seed_assets("RACE")
         db.session.commit()
-        organization_id = organization.id
         user_ids = [user.id for user in users]
         asset_id = assets[0].id
 
@@ -206,8 +281,11 @@ def test_concurrent_requests_for_same_asset_have_one_winner(tmp_path) -> None:
                     operation_type=f"RACE_{index}",
                     applicant_id=user_ids[index],
                     approval_channel=ApprovalChannel.INTERNAL.value,
-                    organization_id=organization_id,
+                    approval_execution_mode=(
+                        ApprovalExecutionMode.AUTO_ON_APPROVAL.value
+                    ),
                     assets=[asset],
+                    target_data_by_asset_id=_target_data([asset]),
                     idempotency_key=f"race-{index}",
                 )
                 db.session.commit()
@@ -234,9 +312,8 @@ def test_concurrent_same_idempotency_key_replays_one_request(tmp_path) -> None:
     concurrent_app = create_app(config=ConcurrentConfig)
     with concurrent_app.app_context():
         db.create_all()
-        organization, users, assets = _seed_assets("IDEMPOTENT")
+        _organization, users, assets = _seed_assets("IDEMPOTENT")
         db.session.commit()
-        organization_id = organization.id
         applicant_id = users[0].id
         asset_id = assets[0].id
 
@@ -247,16 +324,17 @@ def test_concurrent_same_idempotency_key_replays_one_request(tmp_path) -> None:
             asset = db.session.get(Asset, asset_id)
             assert asset is not None
             barrier.wait()
-            operation = _operation_service().create_request(
+            result = _operation_service().create_request(
                 operation_type="TRANSFER",
                 applicant_id=applicant_id,
                 approval_channel=ApprovalChannel.INTERNAL.value,
-                organization_id=organization_id,
+                approval_execution_mode=(ApprovalExecutionMode.AUTO_ON_APPROVAL.value),
                 assets=[asset],
+                target_data_by_asset_id=_target_data([asset]),
                 idempotency_key="same-request",
             )
             db.session.commit()
-            return operation.id
+            return result.operation.id
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         operation_ids = list(executor.map(lambda _index: submit(), range(2)))

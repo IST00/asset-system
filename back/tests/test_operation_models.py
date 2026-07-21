@@ -130,8 +130,26 @@ def test_operation_foundation_enums_expose_stable_persisted_values() -> None:
         "SUCCESS",
         "FAILED",
     }
-    assert _enum_values("ExecutionTriggerType") == {"APPROVAL", "RETRY"}
     assert _enum_values("UsageType") == {"PERSONAL", "PUBLIC"}
+    assert _enum_values("OperationType") == {
+        "STOCK_IN",
+        "PERSONAL_USE",
+        "PUBLIC_USE",
+        "PERSONAL_RETURN",
+        "PUBLIC_RETURN",
+        "TRANSFER",
+        "REPAIR_START",
+        "REPAIR_COMPLETE",
+    }
+    assert _enum_values("ApprovalExecutionMode") == {
+        "AUTO_ON_APPROVAL",
+        "MANUAL_CONFIRM",
+    }
+    assert _enum_values("ExecutionTriggerType") == {
+        "APPROVAL",
+        "CONFIRMATION",
+        "RETRY",
+    }
 
 
 def test_asset_exposes_nullable_usage_and_single_level_parent_fields() -> None:
@@ -201,6 +219,8 @@ def test_operation_request_has_lifecycle_and_idempotency_contract() -> None:
     assert columns["approval_channel"].nullable is False
     assert columns["approval_flow_version_id"].nullable is True
     assert columns["idempotency_key"].nullable is True
+    assert columns["approval_execution_mode"].nullable is False
+    assert columns["approval_execution_mode"].default.arg == "AUTO_ON_APPROVAL"
     assert (
         "applicant_id",
         "operation_type",

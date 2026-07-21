@@ -6,6 +6,7 @@ import logging
 
 from app.common import BusinessException, ResultCode
 from app.enums import (
+    ApprovalExecutionMode,
     ApprovalStatus,
     ExecutionAttemptStatus,
     ExecutionStatus,
@@ -56,6 +57,22 @@ def _persist_failed_attempt(
     return operation
 
 
+def _validate_trigger(operation: OperationRequest, trigger_type: str) -> None:
+    if trigger_type == ExecutionTriggerType.APPROVAL.value and (
+        operation.approval_execution_mode
+        != ApprovalExecutionMode.AUTO_ON_APPROVAL.value
+    ):
+        raise BusinessException(
+            "当前申请需要人工确认后执行", result_code=ResultCode.BAD_REQUEST
+        )
+    if trigger_type == ExecutionTriggerType.CONFIRMATION.value and (
+        operation.approval_execution_mode != ApprovalExecutionMode.MANUAL_CONFIRM.value
+    ):
+        raise BusinessException(
+            "当前申请不能由人工确认触发", result_code=ResultCode.BAD_REQUEST
+        )
+
+
 def execute(
     operation_request_id: int, actor_id: int, trigger_type: str
 ) -> OperationRequest:
@@ -66,10 +83,12 @@ def execute(
         raise BusinessException("只有审批通过的申请可以执行")
     if operation.execution_status == ExecutionStatus.SUCCESS.value:
         return operation
-    if trigger_type == ExecutionTriggerType.APPROVAL.value and (
-        operation.execution_status != ExecutionStatus.NOT_STARTED.value
-    ):
-        raise BusinessException("当前执行状态不能由审批触发")
+    _validate_trigger(operation, trigger_type)
+    if trigger_type in {
+        ExecutionTriggerType.APPROVAL.value,
+        ExecutionTriggerType.CONFIRMATION.value,
+    } and (operation.execution_status != ExecutionStatus.NOT_STARTED.value):
+        raise BusinessException("当前执行状态不能开始执行")
     if trigger_type == ExecutionTriggerType.RETRY.value and (
         operation.execution_status != ExecutionStatus.FAILED.value
     ):
@@ -109,6 +128,27 @@ def execute(
         )
 
 
+def execute_after_approval(
+    operation_request_id: int, actor_id: int
+) -> OperationRequest:
+    operation = _require_operation(operation_request_id)
+    if operation.approval_execution_mode == ApprovalExecutionMode.MANUAL_CONFIRM.value:
+        return operation
+    return execute(
+        operation_request_id,
+        actor_id,
+        ExecutionTriggerType.APPROVAL.value,
+    )
+
+
+def confirm(operation_request_id: int, actor_id: int) -> OperationRequest:
+    return execute(
+        operation_request_id,
+        actor_id,
+        ExecutionTriggerType.CONFIRMATION.value,
+    )
+
+
 def retry(operation_request_id: int, actor_id: int) -> OperationRequest:
     return execute(operation_request_id, actor_id, ExecutionTriggerType.RETRY.value)
 
@@ -132,4 +172,4 @@ def terminate(
     return operation
 
 
-__all__ = ["execute", "retry", "terminate"]
+__all__ = ["confirm", "execute", "execute_after_approval", "retry", "terminate"]
