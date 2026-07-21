@@ -8,7 +8,13 @@ from decimal import Decimal
 from threading import Event
 
 from app import create_app
-from app.enums import ApprovalStatus, AssetStatus, DataScope, ExecutionStatus
+from app.enums import (
+    ApprovalExecutionMode,
+    ApprovalStatus,
+    AssetStatus,
+    DataScope,
+    ExecutionStatus,
+)
 from app.extensions import db
 from app.models import (
     ApprovalStep,
@@ -55,7 +61,10 @@ class ApiFailingHandler:
         raise RuntimeError("simulated retry failure")
 
 
-def _seed_api_context(client) -> dict:
+def _seed_api_context(
+    client,
+    approval_execution_mode: str = ApprovalExecutionMode.AUTO_ON_APPROVAL.value,
+) -> dict:
     organization = Organization(code="API-ORG", name="API组织")
     unit = Unit(code="API-UNIT", name="API单位")
     source = AssetSource(code="API-SOURCE", name="API来源")
@@ -144,6 +153,7 @@ def _seed_api_context(client) -> dict:
         request_no="API-REQUEST",
         operation_type="API_TEST",
         applicant_id=applicant.id,
+        approval_execution_mode=approval_execution_mode,
         approval_status=ApprovalStatus.PENDING.value,
         execution_status=ExecutionStatus.NOT_STARTED.value,
     )
@@ -205,6 +215,7 @@ def test_common_request_and_my_task_queries_protect_amount_and_self_scope(
         f"/api/v1/operation-requests/{operation.id}",
         headers=context["applicant_headers"],
     ).get_json()["data"]
+    assert detail["approval_execution_mode"] == "AUTO_ON_APPROVAL"
     assert "original_amount" not in detail["assets"][0]["before_data"]
 
     tasks = client.get(
@@ -262,6 +273,27 @@ def test_common_approve_withdraw_retry_and_terminate_actions(client) -> None:
         json={"reason": "不再需要"},
     ).get_json()["data"]
     assert withdrawn["approval_status"] == ApprovalStatus.WITHDRAWN.value
+
+
+def test_internal_manual_confirmation_waits_for_feature_acceptance(client) -> None:
+    context = _seed_api_context(
+        client,
+        approval_execution_mode=ApprovalExecutionMode.MANUAL_CONFIRM.value,
+    )
+    operation_handler_registry.clear()
+    operation_handler_registry.register(ApiNoopHandler())
+
+    response = client.post(
+        f"/api/v1/approval-tasks/{context['task'].id}/approve",
+        headers=context["approver_headers"],
+        json={"opinion": "同意"},
+    )
+
+    assert response.status_code == 200
+    approved = response.get_json()["data"]
+    assert approved["approval_status"] == ApprovalStatus.APPROVED.value
+    assert approved["execution_status"] == ExecutionStatus.NOT_STARTED.value
+    assert db.session.query(OperationExecutionAttempt).count() == 0
 
 
 def test_approval_and_retry_actions_replay_by_idempotency_key(client) -> None:

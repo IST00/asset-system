@@ -6,8 +6,15 @@ from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 
 import app.services as services
+import pytest
 from app import create_app
-from app.enums import ApprovalChannel, ApprovalStatus, ExecutionStatus
+from app.common import BusinessException
+from app.enums import (
+    ApprovalChannel,
+    ApprovalExecutionMode,
+    ApprovalStatus,
+    ExecutionStatus,
+)
 from app.extensions import db
 from app.models import (
     ExternalApprovalEvent,
@@ -35,12 +42,18 @@ def _provider_service():
     return service
 
 
-def _operation(actor: User, channel: str, request_no: str) -> OperationRequest:
+def _operation(
+    actor: User,
+    channel: str,
+    request_no: str,
+    approval_execution_mode: str = ApprovalExecutionMode.AUTO_ON_APPROVAL.value,
+) -> OperationRequest:
     operation = OperationRequest(
         request_no=request_no,
         operation_type="PROVIDER_TEST",
         applicant_id=actor.id,
         approval_channel=channel,
+        approval_execution_mode=approval_execution_mode,
         approval_status=ApprovalStatus.PENDING.value,
         execution_status=ExecutionStatus.NOT_STARTED.value,
     )
@@ -119,6 +132,34 @@ def test_local_feishu_rejection_and_withdrawal_are_terminal(app) -> None:
     assert withdrawn.approval_status == ApprovalStatus.WITHDRAWN.value
 
 
+def test_feishu_manual_confirmation_approves_without_executing(app) -> None:
+    actor = User(username="provider-manual", password="x", enabled=True)
+    db.session.add(actor)
+    db.session.commit()
+    operation = _operation(
+        actor,
+        ApprovalChannel.FEISHU.value,
+        "PROVIDER-MANUAL",
+        ApprovalExecutionMode.MANUAL_CONFIRM.value,
+    )
+    operation_handler_registry.clear()
+    operation_handler_registry.register(NoopHandler())
+    service = _provider_service()
+
+    submitted = service.submit(operation.id, actor.id)
+    approved = service.handle_callback(
+        provider="FEISHU",
+        external_event_id="manual-approved",
+        external_instance_id=submitted.external_instance_id,
+        status="APPROVED",
+        actor_id=actor.id,
+    )
+
+    assert approved.approval_status == ApprovalStatus.APPROVED.value
+    assert approved.execution_status == ExecutionStatus.NOT_STARTED.value
+    assert db.session.query(OperationExecutionAttempt).count() == 0
+
+
 def test_direct_confirmation_approves_and_executes_without_tasks(app) -> None:
     actor = User(username="provider-direct", password="x", enabled=True)
     db.session.add(actor)
@@ -130,6 +171,17 @@ def test_direct_confirmation_approves_and_executes_without_tasks(app) -> None:
     confirmed = _provider_service().confirm_direct(operation.id, actor.id)
     assert confirmed.approval_status == ApprovalStatus.APPROVED.value
     assert confirmed.execution_status == ExecutionStatus.SUCCESS.value
+
+    manual = _operation(
+        actor,
+        ApprovalChannel.DIRECT.value,
+        "PROVIDER-DIRECT-MANUAL",
+        ApprovalExecutionMode.MANUAL_CONFIRM.value,
+    )
+    with pytest.raises(BusinessException, match="人工确认"):
+        _provider_service().confirm_direct(manual.id, actor.id)
+    db.session.refresh(manual)
+    assert manual.approval_status == ApprovalStatus.PENDING.value
 
 
 def test_concurrent_feishu_callbacks_are_idempotent_and_choose_one_terminal_state(

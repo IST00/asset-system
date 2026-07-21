@@ -17,7 +17,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.enums import ApprovalChannel, SignMode
+from app.enums import ApprovalChannel, ApprovalExecutionMode, SignMode
 from app.extensions import db
 from app.models.mixins import TimestampMixin
 
@@ -51,6 +51,12 @@ class OperationRequest(TimestampMixin, db.Model):  # type: ignore[misc,name-defi
         nullable=False,
         default=ApprovalChannel.INTERNAL.value,
         index=True,
+    )
+    approval_execution_mode: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default=ApprovalExecutionMode.AUTO_ON_APPROVAL.value,
+        server_default=ApprovalExecutionMode.AUTO_ON_APPROVAL.value,
     )
     approval_flow_version_id: Mapped[int | None] = mapped_column(
         ForeignKey("approval_flow_versions.id", ondelete="RESTRICT"),

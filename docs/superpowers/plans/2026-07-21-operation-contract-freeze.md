@@ -1150,7 +1150,7 @@ Expected: PASS with no multiple-head warning.
 cd back
 .venv/bin/ruff check .
 .venv/bin/ruff format --check .
-.venv/bin/mypy app/ config.py config_bootstrap.py
+.venv/bin/mypy app/ config.py
 .venv/bin/python -m pytest -q
 cd ..
 git diff --check

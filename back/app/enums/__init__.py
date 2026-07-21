@@ -37,6 +37,11 @@ class ApprovalChannel(StringEnum):
     DIRECT = "DIRECT"
 
 
+class ApprovalExecutionMode(StringEnum):
+    AUTO_ON_APPROVAL = "AUTO_ON_APPROVAL"
+    MANUAL_CONFIRM = "MANUAL_CONFIRM"
+
+
 class SignMode(StringEnum):
     OR_SIGN = "OR_SIGN"
     AND_SIGN = "AND_SIGN"
@@ -77,6 +82,7 @@ class ExecutionAttemptStatus(StringEnum):
 
 class ExecutionTriggerType(StringEnum):
     APPROVAL = "APPROVAL"
+    CONFIRMATION = "CONFIRMATION"
     RETRY = "RETRY"
 
 
@@ -100,6 +106,13 @@ class UsageType(StringEnum):
 
 class OperationType(StringEnum):
     STOCK_IN = "STOCK_IN"
+    PERSONAL_USE = "PERSONAL_USE"
+    PUBLIC_USE = "PUBLIC_USE"
+    PERSONAL_RETURN = "PERSONAL_RETURN"
+    PUBLIC_RETURN = "PUBLIC_RETURN"
+    TRANSFER = "TRANSFER"
+    REPAIR_START = "REPAIR_START"
+    REPAIR_COMPLETE = "REPAIR_COMPLETE"
 
 
 class ApprovalAction(StringEnum):
@@ -110,6 +123,7 @@ class ApprovalAction(StringEnum):
 __all__ = [
     "ApprovalAction",
     "ApprovalChannel",
+    "ApprovalExecutionMode",
     "ApprovalStatus",
     "AssigneeType",
     "AssetCodeStatus",

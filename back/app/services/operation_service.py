@@ -2,14 +2,23 @@
 
 from __future__ import annotations
 
+import json
+from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import false, func, or_, select
+from sqlalchemy import false, func, inspect, or_, select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import InstanceState
 
 from app.common import BusinessException, ResultCode
-from app.enums import ApprovalChannel, ApprovalStatus, ExecutionStatus
+from app.enums import (
+    ApprovalChannel,
+    ApprovalExecutionMode,
+    ApprovalStatus,
+    ExecutionStatus,
+)
 from app.extensions import db
 from app.models import (
     Asset,
@@ -35,6 +44,12 @@ from app.repositories.workflow_repository import (
     operation_request_repository,
 )
 from app.services import asset_lock_service, permission_service
+
+
+@dataclass(frozen=True)
+class CreateOperationResult:
+    operation: OperationRequest
+    created: bool
 
 
 def _request_no() -> str:
@@ -100,17 +115,30 @@ def get_by_idempotency_key(
     )
 
 
-def _validate_assets(organization_id: int, assets: list[Asset]) -> list[Asset]:
+def _validate_assets_and_targets(
+    assets: list[Asset],
+    target_data_by_asset_id: Mapping[int, Mapping[str, Any]],
+) -> list[Asset]:
     if not assets:
         raise BusinessException("申请至少包含一项资产")
+    current_session = db.session()
+    for asset in assets:
+        state: InstanceState[Asset] = inspect(asset)
+        if not state.persistent or state.session is not current_session:
+            raise BusinessException("申请资产必须是当前事务中的持久化资产")
     ordered = sorted(assets, key=lambda asset: asset.id)
     asset_ids = [asset.id for asset in ordered]
     if any(asset_id is None for asset_id in asset_ids) or len(set(asset_ids)) != len(
         asset_ids
     ):
         raise BusinessException("申请包含重复或未保存的资产")
-    if any(asset.organization_id != organization_id for asset in ordered):
-        raise BusinessException("申请资产必须属于同一目标组织")
+    if set(target_data_by_asset_id) != set(asset_ids):
+        raise BusinessException("申请资产与目标快照不一致")
+    for target in target_data_by_asset_id.values():
+        try:
+            json.dumps(dict(target), allow_nan=False)
+        except (TypeError, ValueError) as error:
+            raise BusinessException("资产目标快照不是有效 JSON") from error
     return ordered
 
 
@@ -119,23 +147,35 @@ def create_request(
     operation_type: str,
     applicant_id: int,
     approval_channel: str,
-    organization_id: int,
+    approval_execution_mode: str,
     assets: list[Asset],
+    target_data_by_asset_id: Mapping[int, Mapping[str, Any]],
     idempotency_key: str | None,
     parent_request_id: int | None = None,
-) -> OperationRequest:
+) -> CreateOperationResult:
     normalized_type = operation_type.strip().upper()
     if approval_channel not in {item.value for item in ApprovalChannel}:
         raise BusinessException("审批通道无效", result_code=ResultCode.BAD_REQUEST)
+    if approval_execution_mode not in {item.value for item in ApprovalExecutionMode}:
+        raise BusinessException(
+            "审批后执行模式无效", result_code=ResultCode.BAD_REQUEST
+        )
+    if (
+        approval_channel == ApprovalChannel.DIRECT.value
+        and approval_execution_mode == ApprovalExecutionMode.MANUAL_CONFIRM.value
+    ):
+        raise BusinessException(
+            "直接确认申请不能等待人工验收", result_code=ResultCode.BAD_REQUEST
+        )
     applicant = rbac_repository.find_user(applicant_id)
     if applicant is None or not applicant.enabled:
         raise BusinessException("申请人不存在或已停用")
-    ordered_assets = _validate_assets(organization_id, assets)
+    ordered_assets = _validate_assets_and_targets(assets, target_data_by_asset_id)
     normalized_key = idempotency_key.strip() if idempotency_key else None
     if normalized_key:
         existing = get_by_idempotency_key(applicant_id, normalized_type, normalized_key)
         if existing is not None:
-            return existing
+            return CreateOperationResult(operation=existing, created=False)
     if (
         parent_request_id is not None
         and operation_request_repository.get(parent_request_id) is None
@@ -150,6 +190,7 @@ def create_request(
                 applicant_id=applicant_id,
                 parent_request_id=parent_request_id,
                 approval_channel=approval_channel,
+                approval_execution_mode=approval_execution_mode,
                 idempotency_key=normalized_key,
                 approval_status=ApprovalStatus.PENDING.value,
                 execution_status=ExecutionStatus.NOT_STARTED.value,
@@ -163,7 +204,7 @@ def create_request(
         existing = get_by_idempotency_key(applicant_id, normalized_type, normalized_key)
         if existing is None:
             raise
-        return existing
+        return CreateOperationResult(operation=existing, created=False)
     for asset in ordered_assets:
         operation_request_asset_repository.add(
             OperationRequestAsset(
@@ -177,11 +218,11 @@ def create_request(
                 holder_snapshot=_holder_snapshot(asset),
                 location_snapshot=_location_snapshot(asset),
                 before_data=_before_data(asset),
-                target_data={},
+                target_data=dict(target_data_by_asset_id[asset.id]),
             )
         )
     asset_lock_service.acquire(operation, ordered_assets)
-    return operation
+    return CreateOperationResult(operation=operation, created=True)
 
 
 def release_locks(operation_request_id: int) -> None:
@@ -227,6 +268,7 @@ def _serialize(operation: OperationRequest, actor_id: int) -> dict[str, Any]:
         "operation_type": operation.operation_type,
         "applicant_id": operation.applicant_id,
         "approval_channel": operation.approval_channel,
+        "approval_execution_mode": operation.approval_execution_mode,
         "approval_status": operation.approval_status,
         "execution_status": operation.execution_status,
         "execution_error": operation.execution_error,
@@ -514,7 +556,7 @@ def approve_task(
     outcome = approval_engine.approve(operation.id, actor_id, opinion)
     db.session.commit()
     if outcome.request_approved:
-        operation = operation_executor.execute(operation.id, actor_id, "APPROVAL")
+        operation = operation_executor.execute_after_approval(operation.id, actor_id)
     if action_record is not None:
         action_record.status = "COMPLETED"
         db.session.commit()
@@ -639,6 +681,7 @@ def terminate_request(
 
 
 __all__ = [
+    "CreateOperationResult",
     "approve_task",
     "create_request",
     "get_by_idempotency_key",

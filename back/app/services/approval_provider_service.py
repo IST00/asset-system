@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from app.common import BusinessException, ResultCode
-from app.enums import ApprovalChannel, ApprovalStatus, ExecutionTriggerType
+from app.enums import ApprovalChannel, ApprovalExecutionMode, ApprovalStatus
 from app.extensions import db
 from app.models import ExternalApprovalEvent, OperationRequest
 from app.models.mixins import utc_now
@@ -128,9 +128,7 @@ def handle_callback(
     event.processed_at = utc_now()
     db.session.commit()
     if normalized_status == ApprovalStatus.APPROVED.value:
-        return operation_executor.execute(
-            operation.id, actor_id, ExecutionTriggerType.APPROVAL.value
-        )
+        return operation_executor.execute_after_approval(operation.id, actor_id)
     return operation
 
 
@@ -138,6 +136,10 @@ def confirm_direct(operation_request_id: int, actor_id: int) -> OperationRequest
     operation = _require_operation(operation_request_id)
     if operation.approval_channel != ApprovalChannel.DIRECT.value:
         raise BusinessException("只有直接确认申请可以执行此操作")
+    if operation.approval_execution_mode == ApprovalExecutionMode.MANUAL_CONFIRM.value:
+        raise BusinessException(
+            "直接确认申请不能等待人工确认", result_code=ResultCode.BAD_REQUEST
+        )
     if operation.approval_status == ApprovalStatus.PENDING.value:
         operation.approval_status = ApprovalStatus.APPROVED.value
         operation.approved_at = utc_now()
@@ -145,9 +147,7 @@ def confirm_direct(operation_request_id: int, actor_id: int) -> OperationRequest
         db.session.commit()
     if operation.approval_status != ApprovalStatus.APPROVED.value:
         raise BusinessException("当前申请不能直接确认")
-    return operation_executor.execute(
-        operation.id, actor_id, ExecutionTriggerType.APPROVAL.value
-    )
+    return operation_executor.execute_after_approval(operation.id, actor_id)
 
 
 __all__ = [

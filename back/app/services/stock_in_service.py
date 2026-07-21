@@ -392,7 +392,7 @@ def approve(
     outcome = approval_engine.approve(operation.id, actor_id, opinion)
     db.session.commit()
     if outcome.request_approved:
-        operation = operation_executor.execute(operation.id, actor_id, "APPROVAL")
+        operation = operation_executor.execute_after_approval(operation.id, actor_id)
     return _serialize(operation, actor_id)
 
 

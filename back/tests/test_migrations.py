@@ -12,6 +12,9 @@ MIGRATION = BACK_DIR / "migrations" / "versions" / "002_backend_foundation.py"
 OPERATION_MIGRATION = (
     BACK_DIR / "migrations" / "versions" / "003_operation_foundation.py"
 )
+CONTRACT_MIGRATION = (
+    BACK_DIR / "migrations" / "versions" / "004_operation_contract_freeze.py"
+)
 
 
 def test_backend_foundation_migration_follows_initial_revision() -> None:
@@ -32,6 +35,16 @@ def test_operation_foundation_migration_follows_backend_foundation() -> None:
     spec.loader.exec_module(module)
     assert module.revision == "003"
     assert module.down_revision == "002"
+
+
+def test_operation_contract_migration_follows_operation_foundation() -> None:
+    assert CONTRACT_MIGRATION.is_file()
+    spec = importlib.util.spec_from_file_location("migration_004", CONTRACT_MIGRATION)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.revision == "004"
+    assert module.down_revision == "003"
 
 
 def test_migrations_upgrade_clean_sqlite_database(tmp_path) -> None:
@@ -111,6 +124,7 @@ def test_migrations_upgrade_clean_sqlite_database(tmp_path) -> None:
     assert {
         "parent_request_id",
         "approval_channel",
+        "approval_execution_mode",
         "approval_flow_version_id",
         "external_instance_id",
         "idempotency_key",
@@ -162,6 +176,79 @@ def test_migrations_upgrade_clean_sqlite_database(tmp_path) -> None:
     assert "organization_id" not in downgraded_columns
     assert downgraded_roles["admin"] == "ADMIN"
     assert downgraded_roles["downgrade-user"] == "USER"
+
+
+def test_contract_migration_defaults_old_rows_and_downgrades_without_loss(
+    tmp_path,
+) -> None:
+    database = tmp_path / "contract-migration.db"
+    env = os.environ.copy()
+    env.update(
+        {
+            "FLASK_APP": "manage.py",
+            "FLASK_ENV": "dev",
+            "DB_URL": f"sqlite:///{database}",
+            "LOG_FILE_ENABLED": "false",
+        }
+    )
+    upgrade_003 = subprocess.run(
+        [str(BACK_DIR / ".venv" / "bin" / "flask"), "db", "upgrade", "003"],
+        cwd=BACK_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert upgrade_003.returncode == 0, upgrade_003.stdout + upgrade_003.stderr
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "INSERT INTO operation_requests "
+            "(request_no, operation_type, applicant_id, approval_channel, "
+            "approval_status, execution_status, flow_version, version, "
+            "created_at, updated_at) VALUES "
+            "('MIGRATION-004', 'STOCK_IN', 1, 'INTERNAL', 'PENDING', "
+            "'NOT_STARTED', 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+        )
+        connection.commit()
+
+    upgrade_004 = subprocess.run(
+        [str(BACK_DIR / ".venv" / "bin" / "flask"), "db", "upgrade", "004"],
+        cwd=BACK_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert upgrade_004.returncode == 0, upgrade_004.stdout + upgrade_004.stderr
+    with sqlite3.connect(database) as connection:
+        mode = connection.execute(
+            "SELECT approval_execution_mode FROM operation_requests "
+            "WHERE request_no = 'MIGRATION-004'"
+        ).fetchone()
+    assert mode == ("AUTO_ON_APPROVAL",)
+
+    downgrade = subprocess.run(
+        [str(BACK_DIR / ".venv" / "bin" / "flask"), "db", "downgrade", "003"],
+        cwd=BACK_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert downgrade.returncode == 0, downgrade.stdout + downgrade.stderr
+    with sqlite3.connect(database) as connection:
+        columns = {
+            row[1]
+            for row in connection.execute(
+                "PRAGMA table_info(operation_requests)"
+            ).fetchall()
+        }
+        request_no = connection.execute(
+            "SELECT request_no FROM operation_requests "
+            "WHERE request_no = 'MIGRATION-004'"
+        ).fetchone()
+    assert "approval_execution_mode" not in columns
+    assert request_no == ("MIGRATION-004",)
 
 
 def test_downgrade_preserves_all_and_sign_approval_records(tmp_path) -> None:

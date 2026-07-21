@@ -2,11 +2,24 @@
 
 from __future__ import annotations
 
-from sqlalchemy import ColumnElement, select
+from collections.abc import Mapping, Sequence
 
+from sqlalchemy import ColumnElement, select, update
+
+from app.common import BusinessException
 from app.extensions import db
 from app.models import Asset, AssetCodeReservation, AssetCodeSequence
 from app.repositories.base import BaseRepository
+
+
+_CAS_FIELDS = {
+    "status",
+    "usage_type",
+    "holder_user_id",
+    "public_object_id",
+    "usage_department_id",
+    "location_id",
+}
 
 
 class AssetCodeSequenceRepository(BaseRepository[AssetCodeSequence]):
@@ -78,6 +91,54 @@ class AssetRepository(BaseRepository[Asset]):
         self, asset_id: int, access_filter: ColumnElement[bool]
     ) -> Asset | None:
         return self.find_one(Asset.id == asset_id, access_filter)
+
+    def find_many_ordered(self, asset_ids: Sequence[int]) -> list[Asset]:
+        ids = sorted(set(asset_ids))
+        if not ids:
+            return []
+        statement = select(Asset).where(Asset.id.in_(ids)).order_by(Asset.id.asc())
+        return list(db.session.scalars(statement).all())
+
+    def find_direct_children(self, parent_ids: Sequence[int]) -> list[Asset]:
+        ids = sorted(set(parent_ids))
+        if not ids:
+            return []
+        statement = (
+            select(Asset).where(Asset.parent_asset_id.in_(ids)).order_by(Asset.id.asc())
+        )
+        return list(db.session.scalars(statement).all())
+
+    def find_many_for_update(self, asset_ids: Sequence[int]) -> list[Asset]:
+        ids = sorted(set(asset_ids))
+        if not ids:
+            return []
+        statement = (
+            select(Asset)
+            .where(Asset.id.in_(ids))
+            .order_by(Asset.id.asc())
+            .with_for_update()
+        )
+        return list(db.session.scalars(statement).all())
+
+    def cas_update(
+        self,
+        asset_id: int,
+        expected_version: int,
+        changes: Mapping[str, object],
+    ) -> bool:
+        invalid = set(changes) - _CAS_FIELDS
+        if invalid:
+            raise BusinessException(f"资产字段不允许更新: {', '.join(sorted(invalid))}")
+        if not changes:
+            raise BusinessException("资产更新内容不能为空")
+        statement = (
+            update(Asset)
+            .where(Asset.id == asset_id, Asset.version == expected_version)
+            .values(**dict(changes), version=Asset.version + 1)
+            .execution_options(synchronize_session=False)
+        )
+        result = db.session.execute(statement)
+        return result.rowcount == 1
 
 
 asset_code_sequence_repository = AssetCodeSequenceRepository()
