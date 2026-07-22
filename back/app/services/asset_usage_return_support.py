@@ -155,13 +155,16 @@ def serialize_operation(
     *,
     feature_data: Mapping[str, JsonValue] | None = None,
     allowed_actions: Sequence[str] = (),
+    assets: Sequence[OperationRequestAsset] | None = None,
+    can_view_amount: bool | None = None,
 ) -> dict[str, Any]:
     """Build an authorized DTO; JSON arrays must be lists, never tuples."""
-    can_view_amount = permission_service.has_permission(
-        actor_id,
-        "asset:amount:view",
+    include_amount = (
+        permission_service.has_permission(actor_id, "asset:amount:view")
+        if can_view_amount is None
+        else can_view_amount
     )
-    assets = operation_assets(operation.id)
+    snapshot_rows = operation_assets(operation.id) if assets is None else assets
     return {
         "id": operation.id,
         "request_no": operation.request_no,
@@ -191,24 +194,24 @@ def serialize_operation(
                 "organization_id": item.organization_id_snapshot,
                 "holder_snapshot": _normalize_json(
                     item.holder_snapshot,
-                    can_view_amount,
+                    include_amount,
                 ),
                 "location_snapshot": _normalize_json(
                     item.location_snapshot,
-                    can_view_amount,
+                    include_amount,
                 ),
                 "before_data": _normalize_json(
                     item.before_data,
-                    can_view_amount,
+                    include_amount,
                 ),
                 "target_data": _normalize_json(
                     item.target_data,
-                    can_view_amount,
+                    include_amount,
                 ),
             }
-            for item in assets
+            for item in snapshot_rows
         ],
-        "feature": _normalize_json(feature_data or {}, can_view_amount),
+        "feature": _normalize_json(feature_data or {}, include_amount),
         "allowed_actions": list(allowed_actions),
     }
 

@@ -8,7 +8,15 @@ from decimal import Decimal
 
 from sqlalchemy import select
 
-from app.enums import AssetStatus, DataScope, RecordStatus
+from app.enums import (
+    ApprovalChannel,
+    ApprovalExecutionMode,
+    AssetStatus,
+    DataScope,
+    OperationType,
+    RecordStatus,
+    UsageType,
+)
 from app.extensions import db
 from app.models import (
     Asset,
@@ -16,15 +24,19 @@ from app.models import (
     AssetLocation,
     AssetSource,
     Organization,
+    OperationRequest,
     Permission,
     PublicUsageObject,
     Role,
+    RoleDataScopeOrganization,
     RolePermission,
     Unit,
     User,
     UserRole,
 )
+from app.models.asset_usage_return import AssetUsageRequest
 from app.operations.registry import operation_handler_registry
+from app.services import operation_service
 
 
 @dataclass(frozen=True)
@@ -37,6 +49,14 @@ class UsageReturnContext:
     public_object: PublicUsageObject
     main_asset: Asset
     child_asset: Asset
+
+
+@dataclass(frozen=True)
+class CrossScopeUsageContext:
+    base: UsageReturnContext
+    applicant: User
+    other_organization: Organization
+    operation: OperationRequest
 
 
 def seed_usage_return_context() -> UsageReturnContext:
@@ -204,6 +224,130 @@ def grant_permissions(user: User | int, *codes: str) -> Role:
     return role
 
 
+def grant_scoped_manager_permission(
+    user: User | int,
+    organization_id: int,
+) -> Role:
+    user_id = user.id if isinstance(user, User) else user
+    role_code = f"UR-CUSTOM-{user_id}"
+    role = db.session.scalar(select(Role).where(Role.code == role_code))
+    if role is None:
+        role = Role(
+            code=role_code,
+            name=f"UR Custom Scope {user_id}",
+            data_scope=DataScope.CUSTOM.value,
+            enabled=True,
+        )
+        db.session.add(role)
+        db.session.flush()
+    else:
+        role.data_scope = DataScope.CUSTOM.value
+        role.enabled = True
+
+    user_role = db.session.scalar(
+        select(UserRole).where(
+            UserRole.user_id == user_id,
+            UserRole.role_id == role.id,
+        )
+    )
+    if user_role is None:
+        db.session.add(UserRole(user_id=user_id, role_id=role.id))
+
+    permission = db.session.scalar(
+        select(Permission).where(Permission.code == "asset:usage:manage")
+    )
+    if permission is None:
+        permission = Permission(
+            code="asset:usage:manage",
+            name="asset:usage:manage",
+            module="asset",
+            enabled=True,
+        )
+        db.session.add(permission)
+        db.session.flush()
+    else:
+        permission.enabled = True
+    role_permission = db.session.scalar(
+        select(RolePermission).where(
+            RolePermission.role_id == role.id,
+            RolePermission.permission_id == permission.id,
+        )
+    )
+    if role_permission is None:
+        db.session.add(RolePermission(role_id=role.id, permission_id=permission.id))
+
+    scope_link = db.session.scalar(
+        select(RoleDataScopeOrganization).where(
+            RoleDataScopeOrganization.role_id == role.id,
+            RoleDataScopeOrganization.organization_id == organization_id,
+        )
+    )
+    if scope_link is None:
+        db.session.add(
+            RoleDataScopeOrganization(
+                role_id=role.id,
+                organization_id=organization_id,
+            )
+        )
+    db.session.flush()
+    return role
+
+
+def seed_cross_scope_usage() -> CrossScopeUsageContext:
+    context = seed_usage_return_context()
+    applicant = User(
+        username="UR-cross-applicant",
+        password="x",
+        nickname="UR Cross Applicant",
+        organization_id=context.organization.id,
+        enabled=True,
+    )
+    other_organization = Organization(
+        code="UR-CROSS-ORG",
+        name="UR Cross Organization",
+        status=RecordStatus.ENABLED.value,
+    )
+    db.session.add_all([applicant, other_organization])
+    db.session.flush()
+    context.child_asset.organization_id = other_organization.id
+    target = {
+        "status": AssetStatus.IN_USE.value,
+        "usage_type": UsageType.PERSONAL.value,
+        "holder_user_id": context.employee.id,
+        "public_object_id": None,
+        "usage_department_id": context.organization.id,
+        "location_id": context.location.id,
+    }
+    operation = operation_service.create_request(
+        operation_type=OperationType.PERSONAL_USE.value,
+        applicant_id=applicant.id,
+        approval_channel=ApprovalChannel.FEISHU.value,
+        approval_execution_mode=ApprovalExecutionMode.AUTO_ON_APPROVAL.value,
+        assets=[context.main_asset, context.child_asset],
+        target_data_by_asset_id={
+            context.main_asset.id: target,
+            context.child_asset.id: target,
+        },
+        idempotency_key=None,
+    ).operation
+    db.session.add(
+        AssetUsageRequest(
+            operation_request_id=operation.id,
+            target_user_id=context.employee.id,
+            target_public_object_id=None,
+            usage_department_id=context.organization.id,
+            target_location_id=context.location.id,
+        )
+    )
+    db.session.flush()
+    return CrossScopeUsageContext(
+        base=context,
+        applicant=applicant,
+        other_organization=other_organization,
+        operation=operation,
+    )
+
+
 def register_usage_return_handlers() -> None:
     from app.operations.asset_usage_return_handlers import (
         PersonalReturnHandler,
@@ -224,8 +368,11 @@ def register_usage_return_handlers() -> None:
 
 
 __all__ = [
+    "CrossScopeUsageContext",
     "UsageReturnContext",
     "grant_permissions",
+    "grant_scoped_manager_permission",
     "register_usage_return_handlers",
+    "seed_cross_scope_usage",
     "seed_usage_return_context",
 ]

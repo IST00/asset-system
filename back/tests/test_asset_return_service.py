@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from types import ModuleType
 from typing import Any
 
@@ -39,10 +40,11 @@ from app.models import (
 )
 from app.models.asset_usage_return import AssetReturnItem, AssetReturnRequest
 from app.operations.registry import operation_handler_registry
-from app.services import approval_provider_service
+from app.services import approval_provider_service, operation_service
 from asset_usage_return_fixtures import (
     UsageReturnContext,
     grant_permissions,
+    grant_scoped_manager_permission,
     register_usage_return_handlers,
     seed_usage_return_context,
 )
@@ -198,6 +200,433 @@ def _assert_pending_organization_survives(
     db.session.rollback()
     pending_id = pending.id
     assert db.session.get(Organization, pending_id) is not None
+
+
+def test_return_applicant_can_view_own_detail_and_page(app) -> None:
+    context = seed_usage_return_context()
+    _set_personal_in_use(context)
+    _grant_self_return(context)
+    service = _return_service()
+    submitted = service.submit_personal(
+        _personal_payload(context),
+        context.employee.id,
+    )
+
+    detail = service.get(submitted["id"], context.employee.id)
+    result = service.page(
+        actor_id=context.employee.id,
+        page_index=0,
+        size=10,
+    )
+
+    assert detail["id"] == submitted["id"]
+    assert detail["feature"]["items"] == submitted["feature"]["items"]
+    assert detail["allowed_actions"] == []
+    assert result.total == 1
+    assert result.items == [detail]
+
+
+def test_return_manager_visibility_requires_scope_over_every_snapshot(app) -> None:
+    context = seed_usage_return_context()
+    other_organization = Organization(
+        code="UR-RETURN-QUERY-OTHER",
+        name="UR Return Query Other",
+        status=RecordStatus.ENABLED.value,
+    )
+    db.session.add(other_organization)
+    db.session.flush()
+    context.child_asset.organization_id = other_organization.id
+    _set_personal_in_use(context)
+    _grant_self_return(context)
+    service = _return_service()
+    submitted = service.submit_personal(
+        _personal_payload(context),
+        context.employee.id,
+    )
+    grant_scoped_manager_permission(context.manager, context.organization.id)
+    db.session.commit()
+
+    with pytest.raises(BusinessException, match="无权查看"):
+        service.get(submitted["id"], context.manager.id)
+    partial_page = service.page(
+        actor_id=context.manager.id,
+        page_index=0,
+        size=10,
+    )
+
+    assert partial_page.total == 0
+
+    grant_scoped_manager_permission(context.manager, other_organization.id)
+    db.session.commit()
+
+    detail = service.get(submitted["id"], context.manager.id)
+    full_page = service.page(
+        actor_id=context.manager.id,
+        page_index=0,
+        size=10,
+    )
+
+    assert detail["id"] == submitted["id"]
+    assert len(detail["assets"]) == 2
+    assert full_page.total == 1
+    assert [item["id"] for item in full_page.items] == [submitted["id"]]
+
+
+def test_return_limited_scope_manager_cannot_view_request_without_snapshots(
+    app,
+) -> None:
+    context = seed_usage_return_context()
+    _set_personal_in_use(context)
+    _grant_self_return(context)
+    service = _return_service()
+    submitted = service.submit_personal(
+        _personal_payload(context),
+        context.employee.id,
+    )
+    grant_scoped_manager_permission(context.manager, context.organization.id)
+    db.session.query(OperationRequestAsset).filter(
+        OperationRequestAsset.operation_request_id == submitted["id"]
+    ).delete(synchronize_session=False)
+    db.session.commit()
+
+    with pytest.raises(BusinessException, match="无权查看"):
+        service.get(submitted["id"], context.manager.id)
+
+    result = service.page(
+        actor_id=context.manager.id,
+        page_index=0,
+        size=10,
+    )
+
+    assert result.total == 0
+    assert result.items == []
+
+
+def test_return_pages_isolate_applicants_and_use_stable_newest_first_order(
+    app,
+) -> None:
+    context = seed_usage_return_context()
+    context.child_asset.parent_asset_id = None
+    _set_personal_in_use(context)
+    context.child_asset.holder_user_id = context.manager.id
+    _grant_self_return(context)
+    manager_role = grant_permissions(context.manager, "asset:return:self")
+    manager_role.data_scope = DataScope.SELF.value
+    db.session.flush()
+    service = _return_service()
+    first = service.submit_personal(
+        {"asset_ids": [context.main_asset.id]},
+        context.employee.id,
+    )
+    second = service.submit_personal(
+        {"asset_ids": [context.child_asset.id]},
+        context.manager.id,
+    )
+    operation_service.release_locks(first["id"])
+    db.session.commit()
+    third = service.submit_personal(
+        {"asset_ids": [context.main_asset.id]},
+        context.employee.id,
+    )
+    same_created_at = datetime(2026, 7, 22, 1, 2, 3, tzinfo=timezone.utc)
+    first_operation = db.session.get(OperationRequest, first["id"])
+    second_operation = db.session.get(OperationRequest, second["id"])
+    third_operation = db.session.get(OperationRequest, third["id"])
+    assert first_operation is not None
+    assert second_operation is not None
+    assert third_operation is not None
+    first_operation.created_at = same_created_at
+    second_operation.created_at = same_created_at
+    third_operation.created_at = datetime(
+        2026,
+        7,
+        21,
+        1,
+        2,
+        3,
+        tzinfo=timezone.utc,
+    )
+    db.session.commit()
+
+    employee_page = service.page(
+        actor_id=context.employee.id,
+        page_index=0,
+        size=10,
+    )
+    manager_own_page = service.page(
+        actor_id=context.manager.id,
+        page_index=0,
+        size=10,
+    )
+
+    assert employee_page.total == 2
+    assert [item["id"] for item in employee_page.items] == [
+        first["id"],
+        third["id"],
+    ]
+    assert manager_own_page.total == 1
+    assert [item["id"] for item in manager_own_page.items] == [second["id"]]
+
+    grant_permissions(context.manager, "asset:usage:manage")
+    db.session.commit()
+
+    newest_page = service.page(
+        actor_id=context.manager.id,
+        page_index=0,
+        size=1,
+    )
+    older_page = service.page(
+        actor_id=context.manager.id,
+        page_index=1,
+        size=1,
+    )
+    oldest_page = service.page(
+        actor_id=context.manager.id,
+        page_index=2,
+        size=1,
+    )
+
+    assert newest_page.total == 3
+    assert [item["id"] for item in newest_page.items] == [second["id"]]
+    assert older_page.total == 3
+    assert [item["id"] for item in older_page.items] == [first["id"]]
+    assert oldest_page.total == 3
+    assert [item["id"] for item in oldest_page.items] == [third["id"]]
+
+
+def test_return_page_query_count_is_constant_when_page_size_grows(app) -> None:
+    context = seed_usage_return_context()
+    _set_personal_in_use(context)
+    _grant_self_return(context)
+    service = _return_service()
+    for _index in range(5):
+        submitted = service.submit_personal(
+            _personal_payload(context),
+            context.employee.id,
+        )
+        operation_service.release_locks(submitted["id"])
+        db.session.commit()
+    actor_id = context.employee.id
+    engine = db.engine
+
+    def count_page(size: int) -> tuple[Any, int]:
+        db.session.remove()
+        select_count = 0
+
+        def record_statement(*args: object) -> None:
+            nonlocal select_count
+            if str(args[2]).lstrip().upper().startswith("SELECT"):
+                select_count += 1
+
+        event.listen(engine, "before_cursor_execute", record_statement)
+        try:
+            result = service.page(actor_id=actor_id, page_index=0, size=size)
+        finally:
+            event.remove(engine, "before_cursor_execute", record_statement)
+        return result, select_count
+
+    size_one, size_one_selects = count_page(1)
+    size_five, size_five_selects = count_page(5)
+
+    assert size_one.total == 5
+    assert size_five.total == 5
+    assert size_one.items == size_five.items[:1]
+    assert size_five_selects <= size_one_selects + 1, (
+        size_one_selects,
+        size_five_selects,
+    )
+
+
+def test_return_page_preloaded_rows_still_require_complete_inspection_items(
+    app,
+) -> None:
+    context = seed_usage_return_context()
+    _set_personal_in_use(context)
+    _grant_self_return(context)
+    service = _return_service()
+    service.submit_personal(
+        _personal_payload(context),
+        context.employee.id,
+    )
+    db.session.delete(db.session.query(AssetReturnItem).first())
+    db.session.commit()
+
+    with pytest.raises(BusinessException, match="明细不完整"):
+        service.page(
+            actor_id=context.employee.id,
+            page_index=0,
+            size=10,
+        )
+
+
+def test_confirm_return_action_requires_approved_personal_request_and_full_scope(
+    app,
+) -> None:
+    context = seed_usage_return_context()
+    other_organization = Organization(
+        code="UR-ACTION-OTHER",
+        name="UR Action Other",
+        status=RecordStatus.ENABLED.value,
+    )
+    db.session.add(other_organization)
+    db.session.flush()
+    context.child_asset.organization_id = other_organization.id
+    _set_personal_in_use(context)
+    _grant_self_return(context)
+    service = _return_service()
+    submitted = service.submit_personal(
+        _personal_payload(context),
+        context.employee.id,
+    )
+    grant_scoped_manager_permission(context.manager, context.organization.id)
+    grant_scoped_manager_permission(context.manager, other_organization.id)
+    db.session.commit()
+
+    pending_detail = service.get(submitted["id"], context.manager.id)
+
+    assert pending_detail["allowed_actions"] == []
+
+    _approve_personal(submitted, context.manager.id)
+
+    manager_detail = service.get(submitted["id"], context.manager.id)
+    manager_page = service.page(
+        actor_id=context.manager.id,
+        page_index=0,
+        size=10,
+    )
+    applicant_detail = service.get(submitted["id"], context.employee.id)
+    applicant_page = service.page(
+        actor_id=context.employee.id,
+        page_index=0,
+        size=10,
+    )
+
+    assert manager_detail["allowed_actions"] == ["CONFIRM_RETURN"]
+    assert manager_page.items[0]["allowed_actions"] == ["CONFIRM_RETURN"]
+    assert applicant_detail["allowed_actions"] == []
+    assert applicant_page.items[0]["allowed_actions"] == []
+
+
+def test_personal_return_applicant_cannot_receive_confirm_action_with_manage_scope(
+    app,
+) -> None:
+    context = seed_usage_return_context()
+    _set_personal_in_use(context)
+    grant_permissions(
+        context.employee,
+        "asset:return:self",
+        "asset:usage:manage",
+    )
+    service = _return_service()
+    submitted = service.submit_personal(
+        _personal_payload(context),
+        context.employee.id,
+    )
+    _approve_personal(submitted, context.manager.id)
+
+    detail = service.get(submitted["id"], context.employee.id)
+    result = service.page(
+        actor_id=context.employee.id,
+        page_index=0,
+        size=10,
+    )
+
+    assert detail["approval_status"] == ApprovalStatus.APPROVED.value
+    assert detail["execution_status"] == ExecutionStatus.NOT_STARTED.value
+    assert detail["approval_execution_mode"] == (
+        ApprovalExecutionMode.MANUAL_CONFIRM.value
+    )
+    assert detail["allowed_actions"] == []
+    assert result.items[0]["allowed_actions"] == []
+
+
+def test_personal_return_applicant_cannot_confirm_own_request_with_manage_scope(
+    app,
+) -> None:
+    context = seed_usage_return_context()
+    _set_personal_in_use(context)
+    grant_permissions(
+        context.employee,
+        "asset:return:self",
+        "asset:usage:manage",
+    )
+    operation_handler_registry.clear()
+    register_usage_return_handlers()
+    service = _return_service()
+    submitted = service.submit_personal(
+        _personal_payload(context),
+        context.employee.id,
+    )
+    _approve_personal(submitted, context.manager.id)
+
+    with pytest.raises(BusinessException, match="申请人不能验收"):
+        service.confirm(
+            submitted["id"],
+            _inspection_payload(context),
+            context.employee.id,
+        )
+
+    operation = db.session.get(OperationRequest, submitted["id"])
+    assert operation is not None
+    assert operation.approval_status == ApprovalStatus.APPROVED.value
+    assert operation.execution_status == ExecutionStatus.NOT_STARTED.value
+    detail = db.session.query(AssetReturnRequest).one()
+    assert detail.return_location_id is None
+    assert detail.confirmed_by is None
+    assert detail.confirmed_at is None
+    assert all(item.condition is None for item in db.session.query(AssetReturnItem))
+    assert db.session.query(OperationActionIdempotency).count() == 0
+    assert db.session.query(OperationExecutionAttempt).count() == 0
+    assert db.session.query(AssetLifecycleRecord).count() == 0
+    assert db.session.query(OperationLog).count() == 0
+    assert db.session.query(AssetBusinessLock).count() == 2
+
+
+def test_public_return_never_offers_manual_confirm_action(app) -> None:
+    context = seed_usage_return_context()
+    _set_public_in_use(context)
+    _grant_return_manage(context)
+    operation_handler_registry.clear()
+    register_usage_return_handlers()
+    service = _return_service()
+    payload = _inspection_payload(context)
+    payload["asset_ids"] = [context.main_asset.id]
+    submitted = service.submit_public(
+        payload,
+        context.manager.id,
+    )
+    snapshot = (
+        db.session.query(OperationRequestAsset)
+        .filter(OperationRequestAsset.asset_id == context.main_asset.id)
+        .one()
+    )
+    original_asset_name = snapshot.asset_name_snapshot
+    original_public_object_name = snapshot.before_data["public_object_name"]
+    original_location_name = snapshot.location_snapshot["name"]
+    context.main_asset.asset_name = "UR Current Renamed Return Asset"
+    context.public_object.name = "UR Current Renamed Public Object"
+    context.public_object.status = RecordStatus.DISABLED.value
+    context.location.name = "UR Current Renamed Return Origin"
+    context.location.status = RecordStatus.DISABLED.value
+    context.return_location.name = "UR Current Renamed Return Destination"
+    context.return_location.status = RecordStatus.DISABLED.value
+    db.session.commit()
+
+    detail = service.get(submitted["id"], context.manager.id)
+
+    assert detail["operation_type"] == OperationType.PUBLIC_RETURN.value
+    assert detail["approval_status"] == ApprovalStatus.APPROVED.value
+    assert detail["allowed_actions"] == []
+    asset_detail = next(
+        item for item in detail["assets"] if item["asset_id"] == context.main_asset.id
+    )
+    assert asset_detail["asset_name"] == original_asset_name
+    assert asset_detail["before_data"]["public_object_name"] == (
+        original_public_object_name
+    )
+    assert asset_detail["location_snapshot"]["name"] == original_location_name
+    assert detail["feature"]["return_location_id"] == context.return_location.id
+    assert detail["feature"]["items"] == submitted["feature"]["items"]
 
 
 def test_return_handlers_expose_exact_types_and_safe_messages() -> None:

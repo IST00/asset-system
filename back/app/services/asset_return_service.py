@@ -9,7 +9,7 @@ from typing import Any
 from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
 
-from app.common import BusinessException, ResultCode
+from app.common import BusinessException, PageResult, ResultCode
 from app.enums import (
     ApprovalChannel,
     ApprovalExecutionMode,
@@ -30,6 +30,7 @@ from app.models.mixins import utc_now
 from app.repositories.asset_usage_return_repository import (
     asset_return_item_repository,
     asset_return_request_repository,
+    find_operation_assets,
 )
 from app.repositories.operation_repository import (
     operation_action_idempotency_repository,
@@ -54,6 +55,7 @@ from app.services.asset_usage_return_support import (
 _SELF_RETURN_PERMISSION = "asset:return:self"
 _MANAGE_PERMISSION = "asset:usage:manage"
 _RETURN_CONFIRM_ACTION = "RETURN_CONFIRM"
+_CONFIRM_RETURN_ALLOWED_ACTION = "CONFIRM_RETURN"
 _PERSONAL_TARGET_FIELDS = frozenset(
     {
         "status",
@@ -386,6 +388,8 @@ def _load_aggregate(
     *,
     validate_targets: bool,
     snapshots: list[OperationRequestAsset] | None = None,
+    detail: AssetReturnRequest | None = None,
+    items: list[AssetReturnItem] | None = None,
 ) -> _ReturnAggregate:
     if operation.operation_type != operation_type:
         raise BusinessException("退回申请类型不匹配")
@@ -403,8 +407,12 @@ def _load_aggregate(
         )
     if not valid_operation_contract:
         raise BusinessException("退回申请审批执行方式与类型不匹配")
-    detail = asset_return_request_repository.find_by_operation(operation.id)
-    if detail is None:
+    detail_row = (
+        asset_return_request_repository.find_by_operation(operation.id)
+        if detail is None
+        else detail
+    )
+    if detail_row is None:
         raise BusinessException("退回申请详情不存在")
     snapshot_rows = (
         snapshots if snapshots is not None else operation_assets(operation.id)
@@ -419,27 +427,31 @@ def _load_aggregate(
     request_asset_ids = [snapshot.id for snapshot in snapshot_rows]
     if any(type(request_asset_id) is not int for request_asset_id in request_asset_ids):
         raise BusinessException("退回申请资产快照不完整")
-    items = asset_return_item_repository.find_by_operation(operation.id)
-    item_request_asset_ids = [item.operation_request_asset_id for item in items]
+    item_rows = (
+        asset_return_item_repository.find_by_operation(operation.id)
+        if items is None
+        else items
+    )
+    item_request_asset_ids = [item.operation_request_asset_id for item in item_rows]
     if (
-        len(items) != len(snapshot_rows)
+        len(item_rows) != len(snapshot_rows)
         or len(set(item_request_asset_ids)) != len(item_request_asset_ids)
         or set(item_request_asset_ids) != set(request_asset_ids)
     ):
         raise BusinessException("退回申请资产验收明细不完整")
-    _validate_feature_integrity(operation_type, detail, items)
+    _validate_feature_integrity(operation_type, detail_row, item_rows)
     if validate_targets:
-        expected, fields = _expected_target(operation_type, detail)
+        expected, fields = _expected_target(operation_type, detail_row)
         for snapshot in snapshot_rows:
             _validate_snapshot_integrity(operation, snapshot, operation_type)
             if not _target_matches(snapshot.target_data, expected, fields):
                 raise BusinessException("退回申请详情与资产目标快照不匹配")
     return _ReturnAggregate(
         operation=operation,
-        detail=detail,
+        detail=detail_row,
         snapshots=snapshot_rows,
         items_by_request_asset_id={
-            item.operation_request_asset_id: item for item in items
+            item.operation_request_asset_id: item for item in item_rows
         },
     )
 
@@ -463,22 +475,148 @@ def _feature_data(aggregate: _ReturnAggregate) -> dict[str, Any]:
     }
 
 
+def _allowed_actions(
+    aggregate: _ReturnAggregate,
+    *,
+    actor_id: int,
+    can_manage: bool,
+    organization_ids: set[int] | None,
+) -> tuple[str, ...]:
+    operation = aggregate.operation
+    if (
+        operation.operation_type != OperationType.PERSONAL_RETURN.value
+        or operation.approval_status != ApprovalStatus.APPROVED.value
+        or operation.execution_status != ExecutionStatus.NOT_STARTED.value
+        or operation.approval_execution_mode
+        != ApprovalExecutionMode.MANUAL_CONFIRM.value
+        or operation.applicant_id == actor_id
+        or not can_manage
+    ):
+        return ()
+    if organization_ids is not None and any(
+        snapshot.organization_id_snapshot not in organization_ids
+        for snapshot in aggregate.snapshots
+    ):
+        return ()
+    return (_CONFIRM_RETURN_ALLOWED_ACTION,)
+
+
 def _serialize(
     operation: OperationRequest,
     actor_id: int,
     operation_type: str,
     *,
     validate_targets: bool = True,
+    can_manage: bool = False,
+    organization_ids: set[int] | None = None,
+    detail: AssetReturnRequest | None = None,
+    snapshots: list[OperationRequestAsset] | None = None,
+    items: list[AssetReturnItem] | None = None,
+    can_view_amount: bool | None = None,
 ) -> dict[str, Any]:
     aggregate = _load_aggregate(
         operation,
         operation_type,
         validate_targets=validate_targets,
+        detail=detail,
+        snapshots=snapshots,
+        items=items,
     )
     return serialize_operation(
         operation,
         actor_id,
         feature_data=_feature_data(aggregate),
+        allowed_actions=_allowed_actions(
+            aggregate,
+            actor_id=actor_id,
+            can_manage=can_manage,
+            organization_ids=organization_ids,
+        ),
+        assets=aggregate.snapshots,
+        can_view_amount=can_view_amount,
+    )
+
+
+def get(operation_request_id: int, actor_id: int) -> dict[str, Any]:
+    can_manage = permission_service.has_permission(actor_id, _MANAGE_PERMISSION)
+    organization_ids = permission_service.accessible_organization_ids(actor_id)
+    can_view_amount = permission_service.has_permission(actor_id, "asset:amount:view")
+    visible = asset_return_request_repository.find_visible_return(
+        operation_request_id=operation_request_id,
+        actor_id=actor_id,
+        can_manage=can_manage,
+        organization_ids=organization_ids,
+    )
+    if visible is None:
+        raise BusinessException(
+            "无权查看或退回申请不存在",
+            result_code=ResultCode.FORBIDDEN,
+        )
+    operation, detail = visible
+    snapshots = find_operation_assets((operation.id,))
+    items = asset_return_item_repository.find_by_request_asset_ids(
+        [snapshot.id for snapshot in snapshots]
+    )
+    return _serialize(
+        operation,
+        actor_id,
+        operation.operation_type,
+        can_manage=can_manage,
+        organization_ids=organization_ids,
+        detail=detail,
+        snapshots=snapshots,
+        items=items,
+        can_view_amount=can_view_amount,
+    )
+
+
+def page(*, actor_id: int, page_index: int, size: int) -> PageResult:
+    can_manage = permission_service.has_permission(actor_id, _MANAGE_PERMISSION)
+    organization_ids = permission_service.accessible_organization_ids(actor_id)
+    can_view_amount = permission_service.has_permission(actor_id, "asset:amount:view")
+    result = asset_return_request_repository.page_returns(
+        actor_id=actor_id,
+        can_manage=can_manage,
+        organization_ids=organization_ids,
+        page=page_index,
+        size=size,
+    )
+    snapshots_by_operation_id: dict[int, list[OperationRequestAsset]] = {}
+    snapshot_operation_ids: dict[int, int] = {}
+    snapshot_rows = find_operation_assets(
+        [operation.id for operation, _detail in result.items]
+    )
+    for snapshot in snapshot_rows:
+        snapshots_by_operation_id.setdefault(
+            snapshot.operation_request_id,
+            [],
+        ).append(snapshot)
+        snapshot_operation_ids[snapshot.id] = snapshot.operation_request_id
+    items_by_operation_id: dict[int, list[AssetReturnItem]] = {}
+    for item in asset_return_item_repository.find_by_request_asset_ids(
+        [snapshot.id for snapshot in snapshot_rows]
+    ):
+        operation_id = snapshot_operation_ids.get(item.operation_request_asset_id)
+        if operation_id is not None:
+            items_by_operation_id.setdefault(operation_id, []).append(item)
+    return PageResult(
+        items=[
+            _serialize(
+                operation,
+                actor_id,
+                operation.operation_type,
+                can_manage=can_manage,
+                organization_ids=organization_ids,
+                detail=detail,
+                snapshots=snapshots_by_operation_id.get(operation.id, []),
+                items=items_by_operation_id.get(operation.id, []),
+                can_view_amount=can_view_amount,
+            )
+            for operation, detail in result.items
+        ],
+        total=result.total,
+        page=result.page,
+        size=result.size,
     )
 
 
@@ -859,6 +997,11 @@ def confirm(
     operation = operation_request_repository.get(operation_request_id)
     if operation is None:
         raise BusinessException("退回申请不存在", result_code=ResultCode.NOT_FOUND)
+    if operation.applicant_id == actor_id:
+        raise BusinessException(
+            "申请人不能验收自己的退库申请",
+            result_code=ResultCode.FORBIDDEN,
+        )
     snapshots = operation_assets(operation.id)
     _scope_snapshots(actor_id, snapshots)
     aggregate = _load_aggregate(
@@ -1024,4 +1167,4 @@ def submit_public(payload: dict[str, Any], actor_id: int) -> dict[str, Any]:
     return _serialize(operation, actor_id, OperationType.PUBLIC_RETURN.value)
 
 
-__all__ = ["confirm", "submit_personal", "submit_public"]
+__all__ = ["confirm", "get", "page", "submit_personal", "submit_public"]

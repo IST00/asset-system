@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.common import BusinessException, ResultCode
+from app.common import BusinessException, PageResult, ResultCode
 from app.enums import (
     ApprovalChannel,
     ApprovalExecutionMode,
@@ -12,10 +12,11 @@ from app.enums import (
     OperationType,
     UsageType,
 )
-from app.models import OperationRequest
+from app.models import OperationRequest, OperationRequestAsset
 from app.models.asset_usage_return import AssetUsageRequest
 from app.repositories.asset_usage_return_repository import (
     asset_usage_request_repository,
+    find_operation_assets,
 )
 from app.services import (
     approval_provider_service,
@@ -118,8 +119,8 @@ def _require_snapshot_consistency(
     operation: OperationRequest,
     detail: AssetUsageRequest,
     operation_type: str,
+    snapshots: list[OperationRequestAsset],
 ) -> None:
-    snapshots = operation_assets(operation.id)
     if not snapshots:
         raise BusinessException("领用申请资产目标快照不存在")
     for snapshot in snapshots:
@@ -135,41 +136,65 @@ def _require_snapshot_consistency(
 def _require_usage_detail(
     operation: OperationRequest,
     operation_type: str,
-) -> AssetUsageRequest:
-    detail = asset_usage_request_repository.find_by_operation(operation.id)
-    if detail is None:
+    *,
+    detail: AssetUsageRequest | None = None,
+    snapshots: list[OperationRequestAsset] | None = None,
+) -> tuple[AssetUsageRequest, list[OperationRequestAsset]]:
+    detail_row = (
+        asset_usage_request_repository.find_by_operation(operation.id)
+        if detail is None
+        else detail
+    )
+    if detail_row is None:
         raise BusinessException("领用申请详情不存在")
     if operation.operation_type != operation_type:
         raise BusinessException("领用申请类型与详情不匹配")
     if operation_type == OperationType.PERSONAL_USE.value:
         valid = (
-            detail.target_user_id is not None
-            and detail.target_public_object_id is None
-            and detail.usage_department_id is not None
+            detail_row.target_user_id is not None
+            and detail_row.target_public_object_id is None
+            and detail_row.usage_department_id is not None
         )
     else:
         valid = (
-            detail.target_user_id is None
-            and detail.target_public_object_id is not None
-            and detail.usage_department_id is None
-            and detail.target_location_id is not None
+            detail_row.target_user_id is None
+            and detail_row.target_public_object_id is not None
+            and detail_row.usage_department_id is None
+            and detail_row.target_location_id is not None
         )
     if not valid:
         raise BusinessException("领用申请类型与详情不匹配")
-    _require_snapshot_consistency(operation, detail, operation_type)
-    return detail
+    snapshot_rows = operation_assets(operation.id) if snapshots is None else snapshots
+    _require_snapshot_consistency(
+        operation,
+        detail_row,
+        operation_type,
+        snapshot_rows,
+    )
+    return detail_row, snapshot_rows
 
 
 def _serialize(
     operation: OperationRequest,
     actor_id: int,
     operation_type: str,
+    *,
+    detail: AssetUsageRequest | None = None,
+    snapshots: list[OperationRequestAsset] | None = None,
+    can_view_amount: bool | None = None,
 ) -> dict[str, Any]:
-    detail = _require_usage_detail(operation, operation_type)
+    detail_row, snapshot_rows = _require_usage_detail(
+        operation,
+        operation_type,
+        detail=detail,
+        snapshots=snapshots,
+    )
     return serialize_operation(
         operation,
         actor_id,
-        feature_data=_feature_data(detail),
+        feature_data=_feature_data(detail_row),
+        assets=snapshot_rows,
+        can_view_amount=can_view_amount,
     )
 
 
@@ -188,6 +213,70 @@ def _replay(
     if operation is None:
         return None
     return _serialize(operation, actor_id, operation_type)
+
+
+def get(operation_request_id: int, actor_id: int) -> dict[str, Any]:
+    can_manage = permission_service.has_permission(actor_id, _USAGE_PERMISSION)
+    organization_ids = permission_service.accessible_organization_ids(actor_id)
+    can_view_amount = permission_service.has_permission(actor_id, "asset:amount:view")
+    visible = asset_usage_request_repository.find_visible_usage(
+        operation_request_id=operation_request_id,
+        actor_id=actor_id,
+        can_manage=can_manage,
+        organization_ids=organization_ids,
+    )
+    if visible is None:
+        raise BusinessException(
+            "无权查看或领用申请不存在",
+            result_code=ResultCode.FORBIDDEN,
+        )
+    operation, detail = visible
+    snapshots = find_operation_assets((operation.id,))
+    return _serialize(
+        operation,
+        actor_id,
+        operation.operation_type,
+        detail=detail,
+        snapshots=snapshots,
+        can_view_amount=can_view_amount,
+    )
+
+
+def page(*, actor_id: int, page_index: int, size: int) -> PageResult:
+    can_manage = permission_service.has_permission(actor_id, _USAGE_PERMISSION)
+    organization_ids = permission_service.accessible_organization_ids(actor_id)
+    can_view_amount = permission_service.has_permission(actor_id, "asset:amount:view")
+    result = asset_usage_request_repository.page_usage(
+        actor_id=actor_id,
+        can_manage=can_manage,
+        organization_ids=organization_ids,
+        page=page_index,
+        size=size,
+    )
+    snapshots_by_operation_id: dict[int, list[OperationRequestAsset]] = {}
+    for snapshot in find_operation_assets(
+        [operation.id for operation, _detail in result.items]
+    ):
+        snapshots_by_operation_id.setdefault(
+            snapshot.operation_request_id,
+            [],
+        ).append(snapshot)
+    return PageResult(
+        items=[
+            _serialize(
+                operation,
+                actor_id,
+                operation.operation_type,
+                detail=detail,
+                snapshots=snapshots_by_operation_id.get(operation.id, []),
+                can_view_amount=can_view_amount,
+            )
+            for operation, detail in result.items
+        ],
+        total=result.total,
+        page=result.page,
+        size=result.size,
+    )
 
 
 def submit_personal(payload: dict[str, Any], actor_id: int) -> dict[str, Any]:
@@ -313,4 +402,4 @@ def submit_public(payload: dict[str, Any], actor_id: int) -> dict[str, Any]:
     return _serialize(operation, actor_id, OperationType.PUBLIC_USE.value)
 
 
-__all__ = ["submit_personal", "submit_public"]
+__all__ = ["get", "page", "submit_personal", "submit_public"]
