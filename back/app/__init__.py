@@ -82,10 +82,24 @@ def create_app(config: type[BaseConfig] | None = None) -> Flask:
     register_blueprints(app)
 
     from app.operations import operation_handler_registry
+    from app.operations.asset_usage_return_handlers import (
+        PersonalReturnHandler,
+        PersonalUsageHandler,
+        PublicReturnHandler,
+        PublicUsageHandler,
+    )
     from app.operations.stock_in_handler import StockInHandler
 
-    if not operation_handler_registry.contains(StockInHandler.operation_type):
-        operation_handler_registry.register(StockInHandler())
+    handler_types = (
+        StockInHandler,
+        PersonalUsageHandler,
+        PublicUsageHandler,
+        PersonalReturnHandler,
+        PublicReturnHandler,
+    )
+    for handler_type in handler_types:
+        if not operation_handler_registry.contains(handler_type.operation_type):
+            operation_handler_registry.register(handler_type())
 
     # --- global error handlers ---
     register_error_handlers(app)

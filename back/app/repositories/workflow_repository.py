@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from sqlalchemy import ColumnElement, false, func, or_, select, update
 
-from app.enums import ApprovalStatus, OperationType, RuntimeTaskStatus
+from app.enums import ApprovalStatus, ExecutionStatus, OperationType, RuntimeTaskStatus
 from app.extensions import db
 from app.models import (
     ApprovalRecord,
@@ -36,6 +36,29 @@ class OperationRequestRepository(BaseRepository[OperationRequest]):
             )
             .values(
                 approval_status=target_status,
+                version=OperationRequest.version + 1,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        return result.rowcount == 1
+
+    def claim_execution(
+        self,
+        operation_request_id: int,
+        expected_status: str,
+        expected_version: int,
+    ) -> bool:
+        result = db.session.execute(
+            update(OperationRequest)
+            .where(
+                OperationRequest.id == operation_request_id,
+                OperationRequest.approval_status == ApprovalStatus.APPROVED.value,
+                OperationRequest.execution_status == expected_status,
+                OperationRequest.version == expected_version,
+            )
+            .values(
+                execution_status=ExecutionStatus.PROCESSING.value,
+                execution_error=None,
                 version=OperationRequest.version + 1,
             )
             .execution_options(synchronize_session=False)

@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import importlib.util
+import inspect
+from io import StringIO
 import os
 import sqlite3
 import subprocess
 from pathlib import Path
+
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
 
 
 BACK_DIR = Path(__file__).resolve().parents[1]
@@ -14,6 +19,9 @@ OPERATION_MIGRATION = (
 )
 CONTRACT_MIGRATION = (
     BACK_DIR / "migrations" / "versions" / "004_operation_contract_freeze.py"
+)
+USAGE_RETURN_MIGRATION = (
+    BACK_DIR / "migrations" / "versions" / "005_asset_usage_return.py"
 )
 
 
@@ -45,6 +53,331 @@ def test_operation_contract_migration_follows_operation_foundation() -> None:
     spec.loader.exec_module(module)
     assert module.revision == "004"
     assert module.down_revision == "003"
+
+
+def test_asset_usage_return_migration_follows_operation_contract() -> None:
+    assert USAGE_RETURN_MIGRATION.is_file()
+    spec = importlib.util.spec_from_file_location(
+        "migration_005", USAGE_RETURN_MIGRATION
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.revision == "005"
+    assert module.down_revision == "004"
+
+
+def test_asset_usage_return_downgrade_keeps_fk_backing_indexes_until_table_drop() -> (
+    None
+):
+    spec = importlib.util.spec_from_file_location(
+        "migration_005_downgrade", USAGE_RETURN_MIGRATION
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    assert "drop_index" not in inspect.getsource(module.downgrade)
+
+
+def test_asset_usage_return_table_ddl_compiles_for_mysql(monkeypatch) -> None:
+    spec = importlib.util.spec_from_file_location(
+        "migration_005_mysql", USAGE_RETURN_MIGRATION
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.setattr(module, "_seed_permissions", lambda: None)
+    output = StringIO()
+    context = MigrationContext.configure(
+        dialect_name="mysql",
+        opts={"as_sql": True, "literal_binds": True, "output_buffer": output},
+    )
+
+    with Operations.context(context):
+        module.upgrade()
+
+    sql = output.getvalue()
+    assert sql.count("CREATE TABLE") == 3
+    assert sql.count("CREATE UNIQUE INDEX") == 3
+    assert sql.count("CREATE INDEX") == 6
+    assert "target_user_snapshot JSON" in sql
+    assert "return_location_snapshot JSON" in sql
+    assert "`condition` VARCHAR(16)" in sql
+    assert "ON DELETE CASCADE" in sql
+    assert "ON DELETE RESTRICT" in sql
+
+
+def test_asset_usage_return_migration_schema_permissions_and_downgrade(
+    tmp_path,
+) -> None:
+    database = tmp_path / "asset-usage-return-migration.db"
+    env = os.environ.copy()
+    env.update(
+        {
+            "FLASK_APP": "manage.py",
+            "FLASK_ENV": "dev",
+            "DB_URL": f"sqlite:///{database}",
+            "LOG_FILE_ENABLED": "false",
+        }
+    )
+    upgrade_004 = subprocess.run(
+        [str(BACK_DIR / ".venv" / "bin" / "flask"), "db", "upgrade", "004"],
+        cwd=BACK_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert upgrade_004.returncode == 0, upgrade_004.stdout + upgrade_004.stderr
+
+    upgrade_005 = subprocess.run(
+        [str(BACK_DIR / ".venv" / "bin" / "flask"), "db", "upgrade", "005"],
+        cwd=BACK_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert upgrade_005.returncode == 0, upgrade_005.stdout + upgrade_005.stderr
+
+    with sqlite3.connect(database) as connection:
+        usage_columns = {
+            row[1]: (row[2], row[3])
+            for row in connection.execute(
+                "PRAGMA table_info(asset_usage_requests)"
+            ).fetchall()
+        }
+        return_columns = {
+            row[1]: (row[2], row[3])
+            for row in connection.execute(
+                "PRAGMA table_info(asset_return_requests)"
+            ).fetchall()
+        }
+        item_columns = {
+            row[1]: (row[2], row[3])
+            for row in connection.execute(
+                "PRAGMA table_info(asset_return_items)"
+            ).fetchall()
+        }
+        usage_indexes = {
+            row[1]: bool(row[2])
+            for row in connection.execute(
+                "PRAGMA index_list(asset_usage_requests)"
+            ).fetchall()
+        }
+        return_indexes = {
+            row[1]: bool(row[2])
+            for row in connection.execute(
+                "PRAGMA index_list(asset_return_requests)"
+            ).fetchall()
+        }
+        item_indexes = {
+            row[1]: bool(row[2])
+            for row in connection.execute(
+                "PRAGMA index_list(asset_return_items)"
+            ).fetchall()
+        }
+        usage_foreign_keys = {
+            (row[2], row[3], row[4], row[6])
+            for row in connection.execute(
+                "PRAGMA foreign_key_list(asset_usage_requests)"
+            ).fetchall()
+        }
+        return_foreign_keys = {
+            (row[2], row[3], row[4], row[6])
+            for row in connection.execute(
+                "PRAGMA foreign_key_list(asset_return_requests)"
+            ).fetchall()
+        }
+        item_foreign_keys = {
+            (row[2], row[3], row[4], row[6])
+            for row in connection.execute(
+                "PRAGMA foreign_key_list(asset_return_items)"
+            ).fetchall()
+        }
+        permissions = connection.execute(
+            "SELECT code, name, module, enabled FROM permissions "
+            "WHERE code IN ('asset:usage:manage', 'asset:return:self') "
+            "ORDER BY code"
+        ).fetchall()
+        permission_roles = {
+            code: set(roles.split(","))
+            for code, roles in connection.execute(
+                "SELECT p.code, GROUP_CONCAT(r.code) "
+                "FROM permissions p "
+                "JOIN role_permissions rp ON rp.permission_id = p.id "
+                "JOIN roles r ON r.id = rp.role_id "
+                "WHERE p.code IN ('asset:usage:manage', 'asset:return:self') "
+                "GROUP BY p.code"
+            ).fetchall()
+        }
+
+        connection.execute(
+            "INSERT INTO operation_requests "
+            "(request_no, operation_type, applicant_id, approval_channel, "
+            "approval_execution_mode, approval_status, execution_status, "
+            "flow_version, version, created_at, updated_at) VALUES "
+            "('MIGRATION-005', 'PERSONAL_USE', 1, 'FEISHU', "
+            "'AUTO_ON_APPROVAL', 'PENDING', 'NOT_STARTED', 1, 1, "
+            "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+        )
+        operation_id = connection.execute(
+            "SELECT id FROM operation_requests WHERE request_no = 'MIGRATION-005'"
+        ).fetchone()[0]
+        connection.execute(
+            "INSERT INTO asset_usage_requests "
+            "(operation_request_id, target_user_snapshot, created_at, updated_at) "
+            'VALUES (?, \'{"id":1,"username":"admin","name":"Admin"}\', '
+            "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+            (operation_id,),
+        )
+        connection.commit()
+
+    assert usage_columns == {
+        "id": ("INTEGER", 1),
+        "operation_request_id": ("INTEGER", 1),
+        "target_user_id": ("INTEGER", 0),
+        "target_public_object_id": ("INTEGER", 0),
+        "usage_department_id": ("INTEGER", 0),
+        "target_location_id": ("INTEGER", 0),
+        "target_user_snapshot": ("JSON", 0),
+        "usage_department_snapshot": ("JSON", 0),
+        "target_public_object_snapshot": ("JSON", 0),
+        "target_location_snapshot": ("JSON", 0),
+        "created_at": ("DATETIME", 1),
+        "updated_at": ("DATETIME", 1),
+    }
+    assert return_columns == {
+        "id": ("INTEGER", 1),
+        "operation_request_id": ("INTEGER", 1),
+        "return_location_id": ("INTEGER", 0),
+        "confirmed_by": ("INTEGER", 0),
+        "confirmed_at": ("DATETIME", 0),
+        "return_location_snapshot": ("JSON", 0),
+        "confirmed_by_snapshot": ("JSON", 0),
+        "created_at": ("DATETIME", 1),
+        "updated_at": ("DATETIME", 1),
+    }
+    assert item_columns == {
+        "id": ("INTEGER", 1),
+        "operation_request_asset_id": ("INTEGER", 1),
+        "condition": ("VARCHAR(16)", 0),
+        "condition_description": ("TEXT", 0),
+        "created_at": ("DATETIME", 1),
+        "updated_at": ("DATETIME", 1),
+    }
+    assert usage_indexes == {
+        "ix_asset_usage_requests_operation_request_id": True,
+        "ix_asset_usage_requests_target_location_id": False,
+        "ix_asset_usage_requests_target_public_object_id": False,
+        "ix_asset_usage_requests_target_user_id": False,
+        "ix_asset_usage_requests_usage_department_id": False,
+    }
+    assert return_indexes == {
+        "ix_asset_return_requests_confirmed_by": False,
+        "ix_asset_return_requests_operation_request_id": True,
+        "ix_asset_return_requests_return_location_id": False,
+    }
+    assert item_indexes == {
+        "ix_asset_return_items_operation_request_asset_id": True,
+    }
+    assert usage_foreign_keys == {
+        ("operation_requests", "operation_request_id", "id", "CASCADE"),
+        ("users", "target_user_id", "id", "RESTRICT"),
+        ("public_usage_objects", "target_public_object_id", "id", "RESTRICT"),
+        ("organizations", "usage_department_id", "id", "RESTRICT"),
+        ("asset_locations", "target_location_id", "id", "RESTRICT"),
+    }
+    assert return_foreign_keys == {
+        ("operation_requests", "operation_request_id", "id", "CASCADE"),
+        ("asset_locations", "return_location_id", "id", "RESTRICT"),
+        ("users", "confirmed_by", "id", "RESTRICT"),
+    }
+    assert item_foreign_keys == {
+        (
+            "operation_request_assets",
+            "operation_request_asset_id",
+            "id",
+            "CASCADE",
+        ),
+    }
+    assert permissions == [
+        ("asset:return:self", "归还本人资产", "asset", 1),
+        ("asset:usage:manage", "管理资产领用退库", "asset", 1),
+    ]
+    assert permission_roles == {
+        "asset:usage:manage": {"SUPER_ADMIN", "ASSET_ADMIN"},
+        "asset:return:self": {"SUPER_ADMIN", "ASSET_ADMIN", "USER"},
+    }
+
+    downgrade = subprocess.run(
+        [str(BACK_DIR / ".venv" / "bin" / "flask"), "db", "downgrade", "004"],
+        cwd=BACK_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert downgrade.returncode == 0, downgrade.stdout + downgrade.stderr
+
+    with sqlite3.connect(database) as connection:
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
+        }
+        permissions_after_downgrade = connection.execute(
+            "SELECT code FROM permissions "
+            "WHERE code IN ('asset:usage:manage', 'asset:return:self')"
+        ).fetchall()
+        operation_after_downgrade = connection.execute(
+            "SELECT request_no FROM operation_requests "
+            "WHERE request_no = 'MIGRATION-005'"
+        ).fetchone()
+
+    assert {
+        "asset_usage_requests",
+        "asset_return_requests",
+        "asset_return_items",
+    }.isdisjoint(tables)
+    assert permissions_after_downgrade == []
+    assert operation_after_downgrade == ("MIGRATION-005",)
+
+    reupgrade = subprocess.run(
+        [str(BACK_DIR / ".venv" / "bin" / "flask"), "db", "upgrade", "005"],
+        cwd=BACK_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert reupgrade.returncode == 0, reupgrade.stdout + reupgrade.stderr
+    with sqlite3.connect(database) as connection:
+        reupgraded_tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
+        }
+        reupgraded_permissions = {
+            row[0]
+            for row in connection.execute(
+                "SELECT code FROM permissions "
+                "WHERE code IN ('asset:usage:manage', 'asset:return:self')"
+            ).fetchall()
+        }
+
+    assert {
+        "asset_usage_requests",
+        "asset_return_requests",
+        "asset_return_items",
+    } <= reupgraded_tables
+    assert reupgraded_permissions == {
+        "asset:usage:manage",
+        "asset:return:self",
+    }
 
 
 def test_migrations_upgrade_clean_sqlite_database(tmp_path) -> None:
@@ -80,7 +413,15 @@ def test_migrations_upgrade_clean_sqlite_database(tmp_path) -> None:
         columns = {
             row[1] for row in connection.execute("PRAGMA table_info(users)").fetchall()
         }
-    assert {"roles", "permissions", "assets", "operation_requests"} <= tables
+    assert {
+        "roles",
+        "permissions",
+        "assets",
+        "operation_requests",
+        "asset_usage_requests",
+        "asset_return_requests",
+        "asset_return_items",
+    } <= tables
     assert {
         "public_usage_objects",
         "operation_request_assets",
@@ -133,6 +474,23 @@ def test_migrations_upgrade_clean_sqlite_database(tmp_path) -> None:
         "termination_reason",
     } <= operation_columns
     assert stock_in_flow == ("STOCK_IN", 1, 1, "ROLE")
+
+    with sqlite3.connect(database) as connection:
+        permission_roles = {
+            code: set(roles.split(","))
+            for code, roles in connection.execute(
+                "SELECT p.code, GROUP_CONCAT(r.code) "
+                "FROM permissions p "
+                "JOIN role_permissions rp ON rp.permission_id = p.id "
+                "JOIN roles r ON r.id = rp.role_id "
+                "WHERE p.code IN ('asset:usage:manage', 'asset:return:self') "
+                "GROUP BY p.code"
+            ).fetchall()
+        }
+    assert permission_roles == {
+        "asset:usage:manage": {"SUPER_ADMIN", "ASSET_ADMIN"},
+        "asset:return:self": {"SUPER_ADMIN", "ASSET_ADMIN", "USER"},
+    }
 
     with sqlite3.connect(database) as connection:
         cursor = connection.execute(

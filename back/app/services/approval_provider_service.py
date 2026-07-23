@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 from app.common import BusinessException, ResultCode
-from app.enums import ApprovalChannel, ApprovalExecutionMode, ApprovalStatus
+from app.enums import (
+    ApprovalChannel,
+    ApprovalExecutionMode,
+    ApprovalStatus,
+    ExecutionStatus,
+)
 from app.extensions import db
 from app.models import ExternalApprovalEvent, OperationRequest
 from app.models.mixins import utc_now
@@ -19,6 +24,39 @@ def _require_operation(operation_request_id: int) -> OperationRequest:
     if operation is None:
         raise BusinessException("申请不存在", result_code=ResultCode.NOT_FOUND)
     return operation
+
+
+def _resume_auto_execution(
+    operation: OperationRequest,
+    actor_id: int,
+) -> OperationRequest:
+    if (
+        operation.approval_status == ApprovalStatus.APPROVED.value
+        and operation.execution_status == ExecutionStatus.NOT_STARTED.value
+        and operation.approval_execution_mode
+        == ApprovalExecutionMode.AUTO_ON_APPROVAL.value
+    ):
+        return operation_executor.execute_after_approval(operation.id, actor_id)
+    return operation
+
+
+def _require_matching_callback_event(
+    event: ExternalApprovalEvent,
+    operation_request_id: int,
+    external_instance_id: str,
+    normalized_status: str,
+) -> None:
+    payload = event.payload
+    if (
+        event.operation_request_id != operation_request_id
+        or event.external_instance_id != external_instance_id
+        or not isinstance(payload, dict)
+        or payload.get("status") != normalized_status
+    ):
+        raise BusinessException(
+            "审批回调与已处理事件不一致",
+            result_code=ResultCode.BAD_REQUEST,
+        )
 
 
 def submit(operation_request_id: int, actor_id: int) -> OperationRequest:
@@ -63,18 +101,8 @@ def handle_callback(
     actor_id: int,
 ) -> OperationRequest:
     normalized_provider = provider.strip().upper()
-    existing_event = external_approval_event_repository.find_by_event(
-        normalized_provider, external_event_id
-    )
-    if existing_event is not None:
-        return _require_operation(existing_event.operation_request_id)
     if not external_instance_id:
         raise BusinessException("外部审批实例标识不能为空")
-    operation = operation_request_repository.find_by_external_instance(
-        external_instance_id
-    )
-    if operation is None:
-        raise BusinessException("外部审批实例不存在", result_code=ResultCode.NOT_FOUND)
     normalized_status = status.strip().upper()
     if normalized_status not in {
         ApprovalStatus.APPROVED.value,
@@ -82,6 +110,23 @@ def handle_callback(
         ApprovalStatus.WITHDRAWN.value,
     }:
         raise BusinessException("外部审批状态无效")
+    operation = operation_request_repository.find_by_external_instance(
+        external_instance_id
+    )
+    if operation is None:
+        raise BusinessException("外部审批实例不存在", result_code=ResultCode.NOT_FOUND)
+    operation_id = operation.id
+    existing_event = external_approval_event_repository.find_by_event(
+        normalized_provider, external_event_id
+    )
+    if existing_event is not None:
+        _require_matching_callback_event(
+            existing_event,
+            operation_id,
+            external_instance_id,
+            normalized_status,
+        )
+        return _resume_auto_execution(operation, actor_id)
     try:
         event = external_approval_event_repository.add(
             ExternalApprovalEvent(
@@ -107,7 +152,16 @@ def handle_callback(
         )
         if duplicate is None:
             raise BusinessException("审批回调正在处理中，请稍后重试") from None
-        return _require_operation(duplicate.operation_request_id)
+        _require_matching_callback_event(
+            duplicate,
+            operation_id,
+            external_instance_id,
+            normalized_status,
+        )
+        return _resume_auto_execution(
+            _require_operation(operation_id),
+            actor_id,
+        )
 
     expected_version = operation.version
     if not operation_request_repository.transition_pending(
@@ -117,7 +171,7 @@ def handle_callback(
         event.processing_status = "IGNORED"
         event.processed_at = utc_now()
         db.session.commit()
-        return operation
+        return _resume_auto_execution(operation, actor_id)
 
     db.session.expire(operation, ["approval_status", "version"])
     if normalized_status == ApprovalStatus.APPROVED.value:
@@ -128,7 +182,7 @@ def handle_callback(
     event.processed_at = utc_now()
     db.session.commit()
     if normalized_status == ApprovalStatus.APPROVED.value:
-        return operation_executor.execute_after_approval(operation.id, actor_id)
+        return _resume_auto_execution(operation, actor_id)
     return operation
 
 
