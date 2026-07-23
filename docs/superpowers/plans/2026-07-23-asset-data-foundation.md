@@ -295,7 +295,7 @@ The SQLite round-trip test must:
 2. insert one legacy Asset and one pending StockInItem;
 3. upgrade to 006;
 4. assert both supplier tables and the fixed `SUP` sequence row;
-5. compare all 006 columns, nullability, indexes, unique indexes, and FKs with SQLAlchemy metadata;
+5. compare all columns, nullability, indexes, unique indexes, and FKs with a frozen revision-006 SQLAlchemy metadata contract declared in this migration test; never compare a historical migration to the live ORM tables that later revisions legitimately extend;
 6. assert Asset and StockInItem life values were copied from their category and expiry dates were calculated from their purchase dates;
 7. assert `custom_attributes == {}` and legacy Asset completeness is `COMPLETE`;
 8. assert all permission-role mappings below;
@@ -399,7 +399,7 @@ def _expiry(purchase_date: date, months: int) -> date:
     return date(year, month, min(purchase_date.day, monthrange(year, month)[1]))
 ```
 
-Read each legacy row joined to `asset_categories`, then update it with the category's `service_life_months`, the calculated date, `{}`, and `COMPLETE`. Do the same life/date/custom-attribute backfill for every legacy StockInItem. Bind JSON through a typed SQLAlchemy table (or an explicitly typed bind parameter), never through an untyped `sa.text` dict parameter:
+Read legacy rows joined to `asset_categories` in bounded primary-key keyset pages. For every page, calculate expiry in Python and issue one typed executemany UPDATE for the page rather than `.all()` plus one UPDATE round-trip per row. This keeps memory and database round-trips bounded without holding an unconsumed streaming cursor while writing on the same MySQL connection. Update each Asset with the category's `service_life_months`, the calculated date, `{}`, and `COMPLETE`; do the same life/date/custom-attribute backfill for every legacy StockInItem. Bind JSON through a typed SQLAlchemy table (or an explicitly typed bind parameter), never through an untyped `sa.text` dict parameter:
 
 ```python
 assets_table = sa.table(
@@ -434,12 +434,14 @@ Downgrade order is exact:
 ```python
 def downgrade() -> None:
     _assert_legacy_references_are_complete()
-    _delete_permission_assignments_then_permissions()
     _drop_stock_in_columns_and_constraints()
     _drop_asset_columns_and_constraints_and_restore_reference_nullability()
     op.drop_table("suppliers")
     op.drop_table("supplier_code_sequences")
+    _delete_permission_assignments_then_permissions()
 ```
+
+Schema DDL intentionally precedes permission DML on downgrade. MySQL implicitly commits around DDL; deleting permissions first would make a later ALTER/DROP failure permanently remove authorization rows while the database still reports revision 006. The NULL-reference preflight remains first and therefore still guarantees zero DML/DDL on its failure path.
 
 The precheck runs before destructive DDL:
 
