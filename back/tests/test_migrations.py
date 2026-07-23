@@ -23,6 +23,9 @@ CONTRACT_MIGRATION = (
 USAGE_RETURN_MIGRATION = (
     BACK_DIR / "migrations" / "versions" / "005_asset_usage_return.py"
 )
+ASSET_DATA_MIGRATION = (
+    BACK_DIR / "migrations" / "versions" / "006_asset_data_foundation.py"
+)
 
 
 def test_backend_foundation_migration_follows_initial_revision() -> None:
@@ -65,6 +68,16 @@ def test_asset_usage_return_migration_follows_operation_contract() -> None:
     spec.loader.exec_module(module)
     assert module.revision == "005"
     assert module.down_revision == "004"
+
+
+def test_asset_data_migration_follows_asset_usage_return() -> None:
+    assert ASSET_DATA_MIGRATION.is_file()
+    spec = importlib.util.spec_from_file_location("migration_006", ASSET_DATA_MIGRATION)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.revision == "006"
+    assert module.down_revision == "005"
 
 
 def test_asset_usage_return_downgrade_keeps_fk_backing_indexes_until_table_drop() -> (
