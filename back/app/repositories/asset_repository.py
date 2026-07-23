@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
-from sqlalchemy import ColumnElement, select, update
+from sqlalchemy import ColumnElement, exists, select, update
 
 from app.common import BusinessException
 from app.extensions import db
-from app.models import Asset, AssetCodeReservation, AssetCodeSequence
+from app.models import Asset, AssetBusinessLock, AssetCodeReservation, AssetCodeSequence
 from app.repositories.base import BaseRepository
 
 
@@ -139,6 +139,34 @@ class AssetRepository(BaseRepository[Asset]):
             .with_for_update()
         )
         return list(db.session.scalars(statement).all())
+
+    def complete_missing_fields(
+        self,
+        asset_id: int,
+        expected_version: int,
+        changes: Mapping[str, int],
+        resulting_completeness: str,
+    ) -> bool:
+        allowed = {"unit_id", "source_id", "location_id"}
+        if not changes or set(changes) - allowed:
+            raise BusinessException("待补充字段无效")
+        predicates = [Asset.id == asset_id, Asset.version == expected_version]
+        predicates.extend(getattr(Asset, key).is_(None) for key in changes)
+        predicates.append(
+            ~exists(select(1).where(AssetBusinessLock.asset_id == Asset.id))
+        )
+        statement = (
+            update(Asset)
+            .where(*predicates)
+            .values(
+                **dict(changes),
+                data_completeness=resulting_completeness,
+                version=Asset.version + 1,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        result = db.session.execute(statement)
+        return result.rowcount == 1
 
     def cas_update(
         self,
