@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 from decimal import Decimal
@@ -52,6 +53,7 @@ from app.repositories.supplier_repository import (
     supplier_repository,
 )
 from app.repositories.workflow_repository import stock_in_item_repository
+from app.security.passwords import hash_password
 from app.services import audit_service, permission_service, supplier_service
 from config import TestConfig
 
@@ -113,6 +115,44 @@ def _create_supplier(
     credit: str | None = "credit-001",
 ) -> dict[str, Any]:
     return supplier_service.create_supplier(_payload(name, credit), actor_id)
+
+
+def _supplier_http_headers(
+    client,
+    *,
+    username: str = "supplier-http-actor",
+    permission_codes: tuple[str, ...] = SUPPLIER_PERMISSIONS,
+) -> dict[str, str]:
+    actor = User(
+        username=username,
+        password=hash_password("admin123"),
+        enabled=True,
+    )
+    role = Role(
+        code=f"{username.upper()}_ROLE",
+        name=username,
+        data_scope=DataScope.ALL.value,
+    )
+    permissions = [
+        Permission(code=code, name=code, module="supplier") for code in permission_codes
+    ]
+    db.session.add_all([actor, role, *permissions])
+    db.session.flush()
+    db.session.add(UserRole(user_id=actor.id, role_id=role.id))
+    db.session.add_all(
+        [
+            RolePermission(role_id=role.id, permission_id=permission.id)
+            for permission in permissions
+        ]
+    )
+    db.session.commit()
+    login = client.post(
+        "/api/v1/auth/login",
+        json={"username": username, "password": "admin123"},
+    )
+    assert login.status_code == 200
+    token = login.get_json()["data"]["token"]
+    return {"Authorization": f"Bearer {token}"}
 
 
 def _concurrent_app(tmp_path: Path, database_name: str) -> Flask:
@@ -850,3 +890,202 @@ def test_same_version_concurrent_cas_has_one_winner_and_one_stale_failure(
             == 1
         )
         db.drop_all()
+
+
+def test_http_supplier_lifecycle_closes_status_and_version_loop(client) -> None:
+    headers = _supplier_http_headers(client)
+
+    created_response = client.post(
+        "/api/v1/suppliers",
+        headers=headers,
+        json={"name": "接口供应商"},
+    )
+    assert created_response.status_code == 200
+    created = created_response.get_json()["data"]
+    assert created["code"] == "SUP000001"
+    assert created["name"] == "接口供应商"
+    assert created["status"] == RecordStatus.ENABLED.value
+    assert created["version"] == 1
+
+    updated_response = client.post(
+        f"/api/v1/suppliers/{created['id']}/update",
+        headers=headers,
+        json={"name": "接口供应商有限公司", "version": 1},
+    )
+    assert updated_response.status_code == 200
+    updated = updated_response.get_json()["data"]
+    assert updated["name"] == "接口供应商有限公司"
+    assert updated["status"] == RecordStatus.ENABLED.value
+    assert updated["version"] == 2
+
+    listed_response = client.get("/api/v1/suppliers", headers=headers)
+    assert listed_response.status_code == 200
+    assert listed_response.get_json()["data"] == [updated]
+
+    disabled_response = client.post(
+        f"/api/v1/suppliers/{created['id']}/disable",
+        headers=headers,
+        json={"version": updated["version"]},
+    )
+    assert disabled_response.status_code == 200
+    disabled = disabled_response.get_json()["data"]
+    assert disabled["status"] == RecordStatus.DISABLED.value
+    assert disabled["version"] == 3
+
+    enabled_response = client.post(
+        f"/api/v1/suppliers/{created['id']}/enable",
+        headers=headers,
+        json={"version": disabled["version"]},
+    )
+    assert enabled_response.status_code == 200
+    enabled = enabled_response.get_json()["data"]
+    assert enabled["status"] == RecordStatus.ENABLED.value
+    assert enabled["version"] == 4
+
+    deleted_response = client.post(
+        f"/api/v1/suppliers/{created['id']}/delete",
+        headers=headers,
+        json={"version": enabled["version"], "reason": "测试删除"},
+    )
+    assert deleted_response.status_code == 200
+    assert deleted_response.get_json() == {"code": 200, "message": "OK"}
+    assert client.get("/api/v1/suppliers", headers=headers).get_json()["data"] == []
+
+
+def test_http_supplier_routes_require_jwt_and_exact_permission(client) -> None:
+    unauthorized = client.get("/api/v1/suppliers")
+    assert unauthorized.status_code == 401
+    assert unauthorized.get_json()["code"] == ResultCode.UNAUTHORIZED.code
+
+    view_only_headers = _supplier_http_headers(
+        client,
+        username="supplier-http-viewer",
+        permission_codes=("supplier:view",),
+    )
+    forbidden = client.post(
+        "/api/v1/suppliers",
+        headers=view_only_headers,
+        json={"name": "无创建权限供应商"},
+    )
+    assert forbidden.status_code == 200
+    assert forbidden.get_json()["code"] == ResultCode.FORBIDDEN.code
+
+
+def test_http_supplier_payload_validation_rejects_malformed_and_blank_text(
+    client,
+) -> None:
+    headers = _supplier_http_headers(client)
+
+    malformed = client.post(
+        "/api/v1/suppliers",
+        headers=headers,
+        data="{",
+        content_type="application/json",
+    )
+    assert malformed.status_code == 400
+    assert malformed.get_json()["code"] == ResultCode.BAD_REQUEST.code
+
+    blank_create = client.post(
+        "/api/v1/suppliers",
+        headers=headers,
+        json={"name": "   "},
+    )
+    assert blank_create.status_code == 400
+    assert "供应商名称不能为空" in blank_create.get_json()["message"]
+
+    created = client.post(
+        "/api/v1/suppliers",
+        headers=headers,
+        json={"name": "待校验供应商"},
+    ).get_json()["data"]
+    blank_update = client.post(
+        f"/api/v1/suppliers/{created['id']}/update",
+        headers=headers,
+        json={"name": "   ", "version": created["version"]},
+    )
+    assert blank_update.status_code == 400
+    assert "供应商名称不能为空" in blank_update.get_json()["message"]
+
+    blank_delete = client.post(
+        f"/api/v1/suppliers/{created['id']}/delete",
+        headers=headers,
+        json={"version": created["version"], "reason": "   "},
+    )
+    assert blank_delete.status_code == 400
+    assert "删除原因不能为空" in blank_delete.get_json()["message"]
+
+
+def test_http_supplier_blueprint_keeps_boundary_and_get_post_only(app) -> None:
+    routes = {
+        (rule.rule, method)
+        for rule in app.url_map.iter_rules()
+        if rule.rule.startswith("/api/v1/suppliers")
+        for method in rule.methods
+        if method not in {"HEAD", "OPTIONS"}
+    }
+    assert routes == {
+        ("/api/v1/suppliers", "GET"),
+        ("/api/v1/suppliers", "POST"),
+        ("/api/v1/suppliers/<int:supplier_id>/update", "POST"),
+        ("/api/v1/suppliers/<int:supplier_id>/disable", "POST"),
+        ("/api/v1/suppliers/<int:supplier_id>/enable", "POST"),
+        ("/api/v1/suppliers/<int:supplier_id>/delete", "POST"),
+    }
+
+    source_path = Path(__file__).parents[1] / "app" / "api" / "suppliers.py"
+    source = source_path.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    import_targets = {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    }
+    from_imports = [node for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)]
+    assert all(node.level == 0 and node.module is not None for node in from_imports)
+    import_targets.update(
+        f"{node.module}.{alias.name}" for node in from_imports for alias in node.names
+    )
+    assert not any(
+        target == "app.models" or target.startswith("app.models.")
+        for target in import_targets
+    )
+    assert not any(
+        target == "app.extensions" or target.startswith("app.extensions.")
+        for target in import_targets
+    )
+
+    service_imports = {
+        target
+        for target in import_targets
+        if target == "app.services" or target.startswith("app.services.")
+    }
+    assert service_imports == {"app.services.supplier_service"}
+
+    blueprint_decorators = {
+        decorator.func.attr
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        for decorator in node.decorator_list
+        if isinstance(decorator, ast.Call)
+        and isinstance(decorator.func, ast.Attribute)
+        and isinstance(decorator.func.value, ast.Name)
+        and decorator.func.value.id == "bp"
+    }
+    assert blueprint_decorators == {"get", "post"}
+
+    supplier_service_calls = {
+        node.func.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "supplier_service"
+    }
+    assert supplier_service_calls == {
+        "create_supplier",
+        "delete_supplier",
+        "list_suppliers",
+        "set_supplier_enabled",
+        "update_supplier",
+    }
