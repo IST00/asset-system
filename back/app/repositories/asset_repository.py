@@ -87,6 +87,10 @@ class AssetRepository(BaseRepository[Asset]):
     def find_by_normalized_serial(self, normalized_serial: str) -> Asset | None:
         return self.find_one(Asset.normalized_serial == normalized_serial)
 
+    def has_supplier_reference(self, supplier_id: int) -> bool:
+        statement = select(Asset.id).where(Asset.supplier_id == supplier_id).limit(1)
+        return db.session.scalar(statement) is not None
+
     def find_accessible(
         self, asset_id: int, access_filter: ColumnElement[bool]
     ) -> Asset | None:

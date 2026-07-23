@@ -19,6 +19,7 @@ from app.services import (
     approval_provider_service,
     rbac_service,
     stock_in_service,
+    supplier_service,
     user_service,
 )
 
@@ -41,5 +42,6 @@ __all__ = [
     "permission_service",
     "rbac_service",
     "stock_in_service",
+    "supplier_service",
     "user_service",
 ]
