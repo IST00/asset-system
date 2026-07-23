@@ -2,6 +2,8 @@
 
 from marshmallow import Schema, fields, validate
 
+from app.enums import AssetDataCompleteness
+
 
 class AssetPageQuerySchema(Schema):
     page = fields.Integer(load_default=0, validate=validate.Range(min=0))
@@ -14,6 +16,11 @@ class AssetPageQuerySchema(Schema):
     )
     serial_number = fields.String(
         required=False, allow_none=True, validate=validate.Length(max=191)
+    )
+    data_completeness = fields.String(
+        required=False,
+        allow_none=True,
+        validate=validate.OneOf([item.value for item in AssetDataCompleteness]),
     )
 
 

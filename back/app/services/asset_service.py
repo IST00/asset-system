@@ -4,15 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import ColumnElement, false, or_
-
 from app.common import BusinessException, PageResult, ResultCode
 from app.enums import (
     ApprovalStatus,
     AssetCodeStatus,
     AssetDataCompleteness,
     AssetStatus,
-    DataScope,
     ExecutionStatus,
 )
 from app.models import Asset
@@ -28,7 +25,13 @@ from app.repositories.workflow_repository import (
     stock_in_item_repository,
     stock_in_request_repository,
 )
-from app.services import asset_code_service, audit_service, permission_service
+from app.services import (
+    asset_access_service,
+    asset_code_service,
+    asset_data_service,
+    audit_service,
+    permission_service,
+)
 
 
 def stock_in_request(operation_request_id: int, actor_id: int) -> None:
@@ -103,18 +106,6 @@ def stock_in_request(operation_request_id: int, actor_id: int) -> None:
     stock_in_item_repository.release_serial_reservations(stock_in.id)
 
 
-def _access_filter(actor_id: int):
-    organization_ids = permission_service.accessible_organization_ids(actor_id)
-    if organization_ids is None:
-        return Asset.id.is_not(None)
-    conditions: list[ColumnElement[bool]] = []
-    if organization_ids:
-        conditions.append(Asset.organization_id.in_(organization_ids))
-    if DataScope.SELF.value in permission_service.get_data_scopes(actor_id):
-        conditions.append(Asset.manager_id == actor_id)
-    return or_(*conditions) if conditions else false()
-
-
 def _serialize(asset: Asset, include_amount: bool) -> dict[str, Any]:
     result: dict[str, Any] = {
         "id": asset.id,
@@ -124,7 +115,10 @@ def _serialize(asset: Asset, include_amount: bool) -> dict[str, Any]:
         "organization_id": asset.organization_id,
         "category_id": asset.category_id,
         "unit_id": asset.unit_id,
+        "supplier_id": asset.supplier_id,
         "purchase_date": asset.purchase_date.isoformat(),
+        "service_life_months": asset.service_life_months,
+        "expected_expiry_date": asset.expected_expiry_date.isoformat(),
         "manager_id": asset.manager_id,
         "source_id": asset.source_id,
         "location_id": asset.location_id,
@@ -132,6 +126,11 @@ def _serialize(asset: Asset, include_amount: bool) -> dict[str, Any]:
         "serial_number": asset.serial_number,
         "receipt_no": asset.receipt_no,
         "remark": asset.remark,
+        "custom_attributes": dict(asset.custom_attributes),
+        "data_completeness": asset.data_completeness,
+        "missing_fields": asset_data_service.missing_fields(
+            asset.unit_id, asset.source_id, asset.location_id
+        ),
         "created_at": asset.created_at,
         "updated_at": asset.updated_at,
     }
@@ -149,15 +148,18 @@ def page(
     asset_code: str | None = None,
     asset_name: str | None = None,
     serial_number: str | None = None,
+    data_completeness: str | None = None,
 ) -> PageResult:
     permission_service.require_permission(actor_id, "asset:view")
-    filters = [_access_filter(actor_id)]
+    filters = [asset_access_service.access_filter(actor_id)]
     if asset_code:
         filters.append(Asset.asset_code == asset_code.strip())
     if asset_name:
         filters.append(Asset.asset_name.contains(asset_name.strip(), autoescape=True))
     if serial_number and serial_number.strip():
         filters.append(Asset.normalized_serial == serial_number.strip().lower())
+    if data_completeness is not None:
+        filters.append(Asset.data_completeness == data_completeness)
     result = asset_repository.page(
         QuerySpec(
             filters=filters,
@@ -176,10 +178,7 @@ def page(
 
 
 def get(asset_id: int, actor_id: int) -> dict[str, Any]:
-    permission_service.require_permission(actor_id, "asset:view")
-    asset = asset_repository.find_accessible(asset_id, _access_filter(actor_id))
-    if asset is None:
-        raise BusinessException("资产不存在", result_code=ResultCode.NOT_FOUND)
+    asset = asset_access_service.get_accessible(asset_id, actor_id)
     return _serialize(
         asset, permission_service.has_permission(actor_id, "asset:amount:view")
     )

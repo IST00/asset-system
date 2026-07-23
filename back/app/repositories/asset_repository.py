@@ -124,6 +124,22 @@ class AssetRepository(BaseRepository[Asset]):
         )
         return list(db.session.scalars(statement).all())
 
+    def find_many_accessible_for_update(
+        self,
+        asset_ids: Sequence[int],
+        access_filter: ColumnElement[bool],
+    ) -> list[Asset]:
+        ids = sorted(set(asset_ids))
+        if not ids:
+            return []
+        statement = (
+            select(Asset)
+            .where(Asset.id.in_(ids), access_filter)
+            .order_by(Asset.id.asc())
+            .with_for_update()
+        )
+        return list(db.session.scalars(statement).all())
+
     def cas_update(
         self,
         asset_id: int,

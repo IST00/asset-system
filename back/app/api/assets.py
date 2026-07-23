@@ -26,6 +26,7 @@ def page() -> dict:
         asset_code=query.get("asset_code"),
         asset_name=query.get("asset_name"),
         serial_number=query.get("serial_number"),
+        data_completeness=query.get("data_completeness"),
     )
     return Result.success(result.to_dict()).to_dict()
 
