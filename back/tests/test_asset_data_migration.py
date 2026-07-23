@@ -1026,9 +1026,14 @@ def test_asset_data_migration_ddl_compiles_for_mysql(monkeypatch) -> None:
         module.downgrade()
 
     downgrade_sql = downgrade_output.getvalue()
-    assert downgrade_sql.index("SELECT 1 AS preflight_marker") < downgrade_sql.index(
-        "ALTER TABLE stock_in_items"
+    preflight_index = downgrade_sql.index("SELECT 1 AS preflight_marker")
+    first_schema_mutation = min(
+        downgrade_sql.index("ALTER TABLE stock_in_items"),
+        downgrade_sql.index("ALTER TABLE assets"),
+        downgrade_sql.index("DROP TABLE suppliers"),
+        downgrade_sql.index("DROP TABLE supplier_code_sequences"),
     )
+    assert preflight_index < first_schema_mutation
     assert downgrade_sql.index("DROP FOREIGN KEY fk_assets_supplier_id") < (
         downgrade_sql.index("DROP INDEX ix_assets_supplier_id")
     )
@@ -1045,7 +1050,16 @@ def test_asset_data_migration_ddl_compiles_for_mysql(monkeypatch) -> None:
     )
     for column_name in ("unit_id", "source_id", "location_id"):
         assert f"MODIFY {column_name} INTEGER NOT NULL" in downgrade_sql
-    assert downgrade_sql.index("DROP TABLE suppliers") < downgrade_sql.index(
+    supplier_table_drop = downgrade_sql.index("DROP TABLE suppliers")
+    assert (
+        downgrade_sql.index("DROP FOREIGN KEY fk_assets_supplier_id")
+        < supplier_table_drop
+    )
+    assert (
+        downgrade_sql.index("DROP FOREIGN KEY fk_stock_in_items_supplier_id")
+        < supplier_table_drop
+    )
+    assert supplier_table_drop < downgrade_sql.index(
         "DROP TABLE supplier_code_sequences"
     )
     assert downgrade_sql.index("DROP TABLE supplier_code_sequences") < (
