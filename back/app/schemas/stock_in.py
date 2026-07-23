@@ -1,5 +1,6 @@
 """Stock-in request schemas."""
 
+import json
 from decimal import Decimal
 
 from marshmallow import Schema, ValidationError, fields, validate, validates_schema
@@ -16,6 +17,10 @@ class StockInItemRequestSchema(Schema):
         required=False, allow_none=True, validate=validate.Length(max=255)
     )
     purchase_date = fields.Date(required=True)
+    supplier_id = fields.Integer(required=False, allow_none=True, strict=True)
+    service_life_months = fields.Integer(
+        required=False, strict=True, validate=validate.Range(min=1, max=1200)
+    )
     manager_id = fields.Integer(required=True, strict=True)
     source_id = fields.Integer(required=True, strict=True)
     location_id = fields.Integer(required=True, strict=True)
@@ -31,15 +36,35 @@ class StockInItemRequestSchema(Schema):
     remark = fields.String(
         required=False, allow_none=True, validate=validate.Length(max=2000)
     )
+    custom_attributes = fields.Dict(
+        keys=fields.String(validate=validate.Length(min=1, max=128)),
+        values=fields.Raw(),
+        load_default=dict,
+    )
 
     @validates_schema
-    def validate_zero_amount(self, data: dict, **_kwargs) -> None:
+    def validate_item(self, data: dict, **_kwargs) -> None:
         if (
             data["original_amount"] == Decimal("0.00")
             and not str(data.get("zero_amount_reason") or "").strip()
         ):
             raise ValidationError(
                 "零金额资产必须填写原因", field_name="zero_amount_reason"
+            )
+        try:
+            encoded_attributes = json.dumps(
+                data["custom_attributes"],
+                ensure_ascii=False,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
+        except (TypeError, ValueError):
+            raise ValidationError(
+                "自定义属性必须是合法JSON", field_name="custom_attributes"
+            ) from None
+        if len(encoded_attributes) > 16 * 1024:
+            raise ValidationError(
+                "自定义属性不能超过16KB", field_name="custom_attributes"
             )
 
 

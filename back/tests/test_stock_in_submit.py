@@ -1,17 +1,22 @@
 from __future__ import annotations
 
+import json
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 from threading import Barrier
 
+import pytest
+from marshmallow import ValidationError
 from sqlalchemy.exc import IntegrityError
 
 from app import create_app
-from app.enums import DataScope
+from app.enums import DataScope, FlowStatus, OperationType, RecordStatus, SignMode
 from app.extensions import db
 from app.models import (
-    ApprovalTask,
     ApprovalFlowDefinition,
+    ApprovalFlowLayer,
+    ApprovalFlowVersion,
+    ApprovalTask,
     AssetCategory,
     AssetCodeReservation,
     AssetCodeSequence,
@@ -23,12 +28,14 @@ from app.models import (
     Role,
     RolePermission,
     StockInItem,
+    StockInRequest,
+    Supplier,
     Unit,
     User,
     UserRole,
 )
 from app.security.passwords import hash_password
-from app.schemas.stock_in import CreateStockInRequestSchema
+from app.schemas.stock_in import CreateStockInRequestSchema, StockInItemRequestSchema
 from app.services import stock_in_service
 from config import TestConfig
 
@@ -112,6 +119,166 @@ def _item(context, **overrides):
     return item
 
 
+def _schema_item(**overrides: object) -> dict[str, object]:
+    item: dict[str, object] = {
+        "asset_name": "MacBook Air",
+        "category_id": 1,
+        "unit_id": 2,
+        "original_amount": "7999.00",
+        "purchase_date": date(2026, 7, 17).isoformat(),
+        "manager_id": 3,
+        "source_id": 4,
+        "location_id": 5,
+    }
+    item.update(overrides)
+    return item
+
+
+def test_stock_in_item_schema_accepts_frozen_fields_and_nested_json() -> None:
+    custom_attributes = {
+        "warranty": {"years": 3, "onsite": True},
+        "tags": ["laptop", None, 2026],
+    }
+
+    loaded = StockInItemRequestSchema().load(
+        _schema_item(
+            service_life_months=48,
+            supplier_id=None,
+            custom_attributes=custom_attributes,
+        )
+    )
+
+    assert loaded["service_life_months"] == 48
+    assert loaded["supplier_id"] is None
+    assert loaded["custom_attributes"] == custom_attributes
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("service_life_months", "48"),
+        ("service_life_months", True),
+        ("supplier_id", "1"),
+        ("supplier_id", True),
+    ],
+)
+def test_stock_in_item_schema_uses_strict_integers(field: str, value: object) -> None:
+    with pytest.raises(ValidationError) as error:
+        StockInItemRequestSchema().load(_schema_item(**{field: value}))
+
+    assert error.value.messages[field] == ["Not a valid integer."]
+
+
+@pytest.mark.parametrize("service_life_months", [0, 1201])
+def test_stock_in_item_schema_limits_service_life(
+    service_life_months: int,
+) -> None:
+    with pytest.raises(ValidationError) as error:
+        StockInItemRequestSchema().load(
+            _schema_item(service_life_months=service_life_months)
+        )
+
+    assert error.value.messages["service_life_months"] == [
+        "Must be greater than or equal to 1 and less than or equal to 1200."
+    ]
+
+
+@pytest.mark.parametrize(
+    "custom_attributes",
+    [
+        {"value": float("nan")},
+        {"value": float("inf")},
+        {"nested": {"value": {1, 2}}},
+        {"nested": {"value": object()}},
+    ],
+    ids=["nan", "infinity", "nested-set", "nested-object"],
+)
+def test_stock_in_item_schema_rejects_non_json_custom_attributes(
+    custom_attributes: dict[str, object],
+) -> None:
+    with pytest.raises(ValidationError) as error:
+        StockInItemRequestSchema().load(
+            _schema_item(custom_attributes=custom_attributes)
+        )
+
+    assert error.value.messages["custom_attributes"] == ["自定义属性必须是合法JSON"]
+
+
+def test_stock_in_item_schema_enforces_compact_json_utf8_limit() -> None:
+    compact_overhead = len(
+        json.dumps(
+            {"x": ""},
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    )
+    value_byte_limit = 16 * 1024 - compact_overhead
+    multibyte_character = "资"
+    character_bytes = len(multibyte_character.encode("utf-8"))
+    character_count, ascii_remainder = divmod(value_byte_limit, character_bytes)
+    at_limit = multibyte_character * character_count + "a" * ascii_remainder
+    assert len(at_limit.encode("utf-8")) == value_byte_limit
+
+    loaded = StockInItemRequestSchema().load(
+        _schema_item(custom_attributes={"x": at_limit})
+    )
+    assert loaded["custom_attributes"] == {"x": at_limit}
+
+    with pytest.raises(ValidationError) as error:
+        StockInItemRequestSchema().load(
+            _schema_item(custom_attributes={"x": f"{at_limit}a"})
+        )
+    assert error.value.messages["custom_attributes"] == ["自定义属性不能超过16KB"]
+
+
+@pytest.mark.parametrize("key", ["", "x" * 129])
+def test_stock_in_item_schema_limits_custom_attribute_keys(key: str) -> None:
+    with pytest.raises(ValidationError) as error:
+        StockInItemRequestSchema().load(_schema_item(custom_attributes={key: 1}))
+
+    assert "custom_attributes" in error.value.messages
+
+
+@pytest.mark.parametrize("field", ["unit_id", "source_id", "location_id"])
+def test_stock_in_item_schema_keeps_foundation_fields_required(field: str) -> None:
+    payload = _schema_item()
+    payload.pop(field)
+
+    with pytest.raises(ValidationError) as error:
+        StockInItemRequestSchema().load(payload)
+
+    assert field in error.value.messages
+
+
+@pytest.mark.parametrize("field", ["unit_id", "source_id", "location_id"])
+@pytest.mark.parametrize("value", ["1", True, 1.0])
+def test_stock_in_item_schema_keeps_foundation_fields_strict(
+    field: str,
+    value: object,
+) -> None:
+    with pytest.raises(ValidationError) as error:
+        StockInItemRequestSchema().load(_schema_item(**{field: value}))
+
+    assert error.value.messages[field] == ["Not a valid integer."]
+
+
+def test_item_validation_deep_copies_nested_custom_attributes(client) -> None:
+    context = _setup(client)
+    loaded = StockInItemRequestSchema().load(
+        _item(
+            context,
+            serial_number="VALIDATION-COPY",
+            custom_attributes={"nested": {"value": 1}},
+        )
+    )
+
+    validated = stock_in_service._validate_item(loaded, set())
+    validated["custom_attributes"]["nested"]["value"] = 2
+
+    assert loaded["custom_attributes"] == {"nested": {"value": 1}}
+
+
 def test_submit_reserves_codes_and_snapshots_approvers(client) -> None:
     context = _setup(client)
     response = client.post(
@@ -137,6 +304,148 @@ def test_submit_reserves_codes_and_snapshots_approvers(client) -> None:
     ]
     assert db.session.query(AssetCodeReservation).count() == 2
     assert db.session.query(ApprovalTask).one().approver_id == context["approver"].id
+
+
+def test_submit_without_service_life_uses_category_default(client) -> None:
+    context = _setup(client)
+
+    body = client.post(
+        "/api/v1/stock-in-requests",
+        headers=context["headers"],
+        json={
+            "organization_id": context["organization"].id,
+            "items": [_item(context, serial_number="DEFAULT-LIFE")],
+        },
+    ).get_json()
+
+    assert body["code"] == 200
+    item = body["data"]["items"][0]
+    assert item["supplier_id"] is None
+    assert item["supplier_snapshot"] is None
+    assert item["service_life_months"] == 36
+    assert item["expected_expiry_date"] == "2029-07-17"
+    assert item["custom_attributes"] == {}
+
+
+def test_item_serialization_deep_copies_nested_custom_attributes(client) -> None:
+    context = _setup(client)
+    body = client.post(
+        "/api/v1/stock-in-requests",
+        headers=context["headers"],
+        json={
+            "organization_id": context["organization"].id,
+            "items": [
+                _item(
+                    context,
+                    serial_number="SERIALIZATION-COPY",
+                    custom_attributes={"nested": {"value": 1}},
+                )
+            ],
+        },
+    ).get_json()
+    assert body["code"] == 200
+    item = db.session.query(StockInItem).one()
+
+    serialized = stock_in_service._serialize_item(item, include_amount=False)
+    serialized["custom_attributes"]["nested"]["value"] = 2
+
+    assert item.custom_attributes == {"nested": {"value": 1}}
+
+
+def test_explicit_service_life_requires_permission_before_business_writes(
+    client,
+) -> None:
+    context = _setup(client)
+
+    response = client.post(
+        "/api/v1/stock-in-requests",
+        headers=context["headers"],
+        json={
+            "organization_id": context["organization"].id,
+            "items": [
+                _item(
+                    context,
+                    serial_number="LIFE-NO-PERMISSION",
+                    service_life_months=48,
+                )
+            ],
+        },
+    )
+    body = response.get_json()
+
+    assert body["code"] == 403
+    assert body["message"] == "无操作权限"
+    assert db.session.query(ApprovalFlowDefinition).count() == 0
+    assert db.session.query(OperationRequest).count() == 0
+    assert db.session.query(StockInRequest).count() == 0
+    assert db.session.query(StockInItem).count() == 0
+    assert db.session.query(AssetCodeSequence).count() == 0
+    assert db.session.query(AssetCodeReservation).count() == 0
+
+
+def test_disabled_supplier_is_rejected_before_business_writes(client) -> None:
+    context = _setup(client)
+    supplier = Supplier(
+        code="SUP-DISABLED",
+        name="停用供应商",
+        status=RecordStatus.DISABLED.value,
+    )
+    db.session.add(supplier)
+    db.session.commit()
+
+    response = client.post(
+        "/api/v1/stock-in-requests",
+        headers=context["headers"],
+        json={
+            "organization_id": context["organization"].id,
+            "items": [
+                _item(
+                    context,
+                    serial_number="DISABLED-SUPPLIER",
+                    supplier_id=supplier.id,
+                )
+            ],
+        },
+    )
+    body = response.get_json()
+
+    assert body["code"] == 1000
+    assert body["message"] == "供应商不存在或已停用"
+    assert db.session.query(ApprovalFlowDefinition).count() == 0
+    assert db.session.query(OperationRequest).count() == 0
+    assert db.session.query(StockInRequest).count() == 0
+    assert db.session.query(StockInItem).count() == 0
+    assert db.session.query(AssetCodeSequence).count() == 0
+    assert db.session.query(AssetCodeReservation).count() == 0
+
+
+def test_missing_supplier_is_rejected_before_business_writes(client) -> None:
+    context = _setup(client)
+
+    response = client.post(
+        "/api/v1/stock-in-requests",
+        headers=context["headers"],
+        json={
+            "organization_id": context["organization"].id,
+            "items": [
+                _item(
+                    context,
+                    serial_number="MISSING-SUPPLIER",
+                    supplier_id=999_999,
+                )
+            ],
+        },
+    )
+    body = response.get_json()
+
+    assert body["code"] == 1000
+    assert body["message"] == "供应商不存在"
+    assert db.session.query(ApprovalFlowDefinition).count() == 0
+    assert db.session.query(OperationRequest).count() == 0
+    assert db.session.query(StockInRequest).count() == 0
+    assert db.session.query(StockInItem).count() == 0
+    assert db.session.query(AssetCodeSequence).count() == 0
+    assert db.session.query(AssetCodeReservation).count() == 0
 
 
 def test_submit_replays_same_idempotency_key_without_new_business_rows(client) -> None:
@@ -223,6 +532,57 @@ def test_submit_without_approver_creates_nothing(client) -> None:
     assert "审批人" in response.get_json()["message"]
     assert db.session.query(OperationRequest).count() == 0
     assert db.session.query(AssetCodeSequence).count() == 0
+
+
+def test_invalid_published_flow_rolls_back_all_submission_writes(client) -> None:
+    context = _setup(client)
+    definition = ApprovalFlowDefinition(
+        operation_type=OperationType.STOCK_IN.value,
+        name="无有效审批人入库流",
+        status=FlowStatus.PUBLISHED.value,
+    )
+    db.session.add(definition)
+    db.session.flush()
+    version = ApprovalFlowVersion(
+        flow_definition_id=definition.id,
+        version_no=1,
+        status=FlowStatus.PUBLISHED.value,
+    )
+    db.session.add(version)
+    db.session.flush()
+    db.session.add(
+        ApprovalFlowLayer(
+            flow_version_id=version.id,
+            level_no=1,
+            sign_mode=SignMode.OR_SIGN.value,
+            allow_self_approval=False,
+        )
+    )
+    db.session.commit()
+
+    body = client.post(
+        "/api/v1/stock-in-requests",
+        headers=context["headers"],
+        json={
+            "organization_id": context["organization"].id,
+            "items": [
+                _item(
+                    context,
+                    serial_number="INVALID-FLOW-ROLLBACK",
+                )
+            ],
+        },
+    ).get_json()
+
+    assert body["code"] == 1000
+    assert body["message"] == "审批第 1 层没有有效审批人"
+    db.session.commit()
+    db.session.remove()
+    assert db.session.query(OperationRequest).count() == 0
+    assert db.session.query(StockInRequest).count() == 0
+    assert db.session.query(StockInItem).count() == 0
+    assert db.session.query(AssetCodeSequence).count() == 0
+    assert db.session.query(AssetCodeReservation).count() == 0
 
 
 def test_non_testing_submit_requires_prepublished_stock_in_flow(app, client) -> None:

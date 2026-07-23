@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
@@ -46,6 +47,7 @@ from app.services import (
     operation_executor,
     organization_service,
     permission_service,
+    supplier_service,
 )
 
 
@@ -68,11 +70,16 @@ def _serialize_item(item: StockInItem, include_amount: bool) -> dict[str, Any]:
         "asset_name": item.asset_name,
         "category_id": item.category_id,
         "unit_id": item.unit_id,
+        "supplier_id": item.supplier_id,
+        "supplier_snapshot": deepcopy(item.supplier_snapshot),
         "purchase_date": item.purchase_date.isoformat(),
+        "service_life_months": item.service_life_months,
+        "expected_expiry_date": item.expected_expiry_date.isoformat(),
         "manager_id": item.manager_id,
         "source_id": item.source_id,
         "location_id": item.location_id,
         "serial_number": item.serial_number,
+        "custom_attributes": deepcopy(item.custom_attributes),
     }
     if include_amount:
         result["original_amount"] = f"{item.original_amount:.2f}"
@@ -120,6 +127,9 @@ def _validate_item(item: dict[str, Any], seen_serials: set[str]) -> dict[str, An
     master_data_service.require_enabled_unit(item["unit_id"])
     master_data_service.require_enabled_source(item["source_id"])
     master_data_service.require_selectable_location(item["location_id"])
+    supplier = None
+    if item.get("supplier_id") is not None:
+        supplier = supplier_service.require_enabled_supplier(item["supplier_id"])
     manager = rbac_repository.find_user(item["manager_id"])
     if manager is None or not manager.enabled:
         raise BusinessException("资产责任管理员不存在或已停用")
@@ -151,11 +161,19 @@ def _validate_item(item: dict[str, Any], seen_serials: set[str]) -> dict[str, An
     normalized["original_amount"] = amount
     normalized["serial_number"] = serial
     normalized["normalized_serial"] = normalized_serial
-    normalized["service_life_months"] = category.service_life_months
-    normalized["expected_expiry_date"] = asset_data_service.calculate_expected_expiry(
-        item["purchase_date"], category.service_life_months
+    normalized["supplier_id"] = supplier.id if supplier is not None else None
+    normalized["supplier_snapshot"] = (
+        {"id": supplier.id, "code": supplier.code, "name": supplier.name}
+        if supplier is not None
+        else None
     )
-    normalized["custom_attributes"] = {}
+    normalized["service_life_months"] = item.get(
+        "service_life_months", category.service_life_months
+    )
+    normalized["expected_expiry_date"] = asset_data_service.calculate_expected_expiry(
+        item["purchase_date"], normalized["service_life_months"]
+    )
+    normalized["custom_attributes"] = deepcopy(item["custom_attributes"])
     return normalized
 
 
@@ -210,6 +228,8 @@ def _stock_in_flow(candidates: list[int]) -> ApprovalFlowVersion:
 
 def submit(payload: dict[str, Any], actor_id: int) -> dict[str, Any]:
     permission_service.require_permission(actor_id, "stock-in:create")
+    if any("service_life_months" in item for item in payload["items"]):
+        permission_service.require_permission(actor_id, "asset:service-life:update")
     organization_id = payload["organization_id"]
     permission_service.require_organization_scope(actor_id, organization_id)
     idempotency_key = (
@@ -228,7 +248,6 @@ def submit(payload: dict[str, Any], actor_id: int) -> dict[str, Any]:
     )
     if not candidates:
         raise BusinessException("未找到符合条件的入库审批人")
-    flow_version = _stock_in_flow(candidates)
 
     seen_serials: set[str] = set()
     try:
@@ -245,47 +264,47 @@ def submit(payload: dict[str, Any], actor_id: int) -> dict[str, Any]:
         if existing is None:
             raise
         return _serialize(existing, actor_id)
-
-    operation = OperationRequest(
-        request_no=_request_no(),
-        operation_type=OperationType.STOCK_IN.value,
-        applicant_id=actor_id,
-        approval_channel=ApprovalChannel.INTERNAL.value,
-        approval_flow_version_id=flow_version.id,
-        idempotency_key=idempotency_key,
-        approval_status=ApprovalStatus.PENDING.value,
-        execution_status=ExecutionStatus.NOT_STARTED.value,
-        flow_version=1,
-        submitted_at=utc_now(),
-    )
     try:
-        operation_request_repository.add(operation)
-    except IntegrityError as exc:
-        message = str(exc.orig).lower()
-        is_idempotency_conflict = idempotency_key is not None and (
-            "uq_operation_request_idempotency" in message
-            or "operation_requests.applicant_id, "
-            "operation_requests.operation_type, "
-            "operation_requests.idempotency_key"
-            in message
+        flow_version = _stock_in_flow(candidates)
+        operation = OperationRequest(
+            request_no=_request_no(),
+            operation_type=OperationType.STOCK_IN.value,
+            applicant_id=actor_id,
+            approval_channel=ApprovalChannel.INTERNAL.value,
+            approval_flow_version_id=flow_version.id,
+            idempotency_key=idempotency_key,
+            approval_status=ApprovalStatus.PENDING.value,
+            execution_status=ExecutionStatus.NOT_STARTED.value,
+            flow_version=1,
+            submitted_at=utc_now(),
         )
-        if not is_idempotency_conflict:
-            raise
-        db.session.rollback()
-        existing = operation_request_repository.find_by_idempotency_key(
-            actor_id, OperationType.STOCK_IN.value, idempotency_key
+        try:
+            operation_request_repository.add(operation)
+        except IntegrityError as exc:
+            message = str(exc.orig).lower()
+            is_idempotency_conflict = idempotency_key is not None and (
+                "uq_operation_request_idempotency" in message
+                or "operation_requests.applicant_id, "
+                "operation_requests.operation_type, "
+                "operation_requests.idempotency_key"
+                in message
+            )
+            if not is_idempotency_conflict:
+                raise
+            db.session.rollback()
+            existing = operation_request_repository.find_by_idempotency_key(
+                actor_id, OperationType.STOCK_IN.value, idempotency_key
+            )
+            if existing is None:
+                raise
+            return _serialize(existing, actor_id)
+        stock_in = StockInRequest(
+            operation_request_id=operation.id,
+            organization_id=organization_id,
+            remark=payload.get("remark"),
         )
-        if existing is None:
-            raise
-        return _serialize(existing, actor_id)
-    stock_in = StockInRequest(
-        operation_request_id=operation.id,
-        organization_id=organization_id,
-        remark=payload.get("remark"),
-    )
-    stock_in_request_repository.add(stock_in)
+        stock_in_request_repository.add(stock_in)
 
-    try:
         for item in validated_items:
             category = item.pop("category")
             allocated = asset_code_service.allocate(top_organization, category)
@@ -295,6 +314,8 @@ def submit(payload: dict[str, Any], actor_id: int) -> dict[str, Any]:
                 asset_name=item["asset_name"].strip(),
                 category_id=category.id,
                 unit_id=item["unit_id"],
+                supplier_id=item["supplier_id"],
+                supplier_snapshot=item["supplier_snapshot"],
                 original_amount=item["original_amount"],
                 zero_amount_reason=(item.get("zero_amount_reason") or None),
                 purchase_date=item["purchase_date"],
@@ -312,15 +333,20 @@ def submit(payload: dict[str, Any], actor_id: int) -> dict[str, Any]:
                 custom_attributes=item["custom_attributes"],
             )
             stock_in_item_repository.add(stock_item)
-            asset_code_service.reserve(operation.id, stock_item.id, allocated)
+            asset_code_service.reserve_for_stock_in(
+                operation.id, stock_item.id, allocated
+            )
+        approval_engine.initialize(operation, flow_version.id, organization_id)
+        db.session.commit()
     except IntegrityError as exc:
         db.session.rollback()
         if "serial_reservation_key" in str(exc.orig).lower():
             raise BusinessException("设备序列号已被其他申请占用") from None
         raise
+    except Exception:
+        db.session.rollback()
+        raise
 
-    approval_engine.initialize(operation, flow_version.id, organization_id)
-    db.session.commit()
     return _serialize(operation, actor_id)
 
 

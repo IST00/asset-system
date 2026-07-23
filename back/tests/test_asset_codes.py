@@ -111,6 +111,13 @@ def test_sequences_are_isolated_by_top_organization_and_category(app) -> None:
     assert other_org.asset_code == "358465-10100-0001"
 
 
+def test_stock_in_reservation_api_has_only_scoped_name() -> None:
+    assert callable(asset_code_service.reserve_for_stock_in)
+    assert "reserve_for_stock_in" in asset_code_service.__all__
+    assert not hasattr(asset_code_service, "reserve")
+    assert "reserve" not in asset_code_service.__all__
+
+
 def test_sequence_expands_and_void_codes_are_never_reused(app) -> None:
     (
         organization,
@@ -135,7 +142,9 @@ def test_sequence_expands_and_void_codes_are_never_reused(app) -> None:
 
     allocated = asset_code_service.allocate(organization, category)
     item = _item(stock_in, allocated.asset_code, category, unit, source, location, user)
-    reservation = asset_code_service.reserve(operation.id, item.id, allocated)
+    reservation = asset_code_service.reserve_for_stock_in(
+        operation.id, item.id, allocated
+    )
     asset_code_service.void_for_request(operation.id)
     next_code = asset_code_service.allocate(organization, category)
 

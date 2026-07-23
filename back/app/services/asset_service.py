@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any
 
 from app.common import BusinessException, PageResult, ResultCode
@@ -75,7 +76,7 @@ def stock_in_request(operation_request_id: int, actor_id: int) -> None:
             original_amount=item.original_amount,
             zero_amount_reason=item.zero_amount_reason,
             purchase_date=item.purchase_date,
-            supplier_id=None,
+            supplier_id=item.supplier_id,
             service_life_months=item.service_life_months,
             expected_expiry_date=item.expected_expiry_date,
             manager_id=item.manager_id,
@@ -86,7 +87,7 @@ def stock_in_request(operation_request_id: int, actor_id: int) -> None:
             normalized_serial=item.normalized_serial,
             receipt_no=item.receipt_no,
             remark=item.remark,
-            custom_attributes=dict(item.custom_attributes),
+            custom_attributes=deepcopy(item.custom_attributes),
             data_completeness=AssetDataCompleteness.COMPLETE.value,
             created_from_request_id=operation.id,
         )

@@ -39,7 +39,7 @@ def allocate(top_organization: Organization, category: AssetCategory) -> Allocat
     )
 
 
-def reserve(
+def reserve_for_stock_in(
     operation_request_id: int, stock_in_item_id: int, allocated: AllocatedCode
 ) -> AssetCodeReservation:
     reservation = AssetCodeReservation(
@@ -71,4 +71,10 @@ def activate(reservation_id: int, asset_id: int) -> None:
     db.session.flush()
 
 
-__all__ = ["AllocatedCode", "activate", "allocate", "reserve", "void_for_request"]
+__all__ = [
+    "AllocatedCode",
+    "activate",
+    "allocate",
+    "reserve_for_stock_in",
+    "void_for_request",
+]
