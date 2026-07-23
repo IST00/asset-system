@@ -12,6 +12,7 @@ from sqlalchemy import select
 from app.enums import (
     ApprovalChannel,
     ApprovalExecutionMode,
+    AssetDataCompleteness,
     AssetStatus,
     DataScope,
     OperationType,
@@ -148,9 +149,13 @@ def seed_usage_return_context() -> UsageReturnContext:
         unit_id=unit.id,
         original_amount=Decimal("100.00"),
         purchase_date=date(2026, 7, 21),
+        service_life_months=36,
+        expected_expiry_date=date(2029, 1, 1),
         manager_id=manager.id,
         source_id=source.id,
         location_id=location.id,
+        custom_attributes={},
+        data_completeness=AssetDataCompleteness.COMPLETE.value,
     )
     db.session.add(main_asset)
     db.session.flush()
@@ -164,9 +169,13 @@ def seed_usage_return_context() -> UsageReturnContext:
         unit_id=unit.id,
         original_amount=Decimal("10.00"),
         purchase_date=date(2026, 7, 21),
+        service_life_months=36,
+        expected_expiry_date=date(2029, 1, 1),
         manager_id=manager.id,
         source_id=source.id,
         location_id=location.id,
+        custom_attributes={},
+        data_completeness=AssetDataCompleteness.COMPLETE.value,
     )
     db.session.add(child_asset)
     db.session.flush()

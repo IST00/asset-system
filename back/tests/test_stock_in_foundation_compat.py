@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from app.enums import DataScope
+from app.enums import AssetDataCompleteness, DataScope
 from app.extensions import db
 from app.models import (
     Asset,
@@ -20,6 +20,7 @@ from app.models import (
     Permission,
     Role,
     RolePermission,
+    StockInItem,
     Unit,
     User,
     UserRole,
@@ -147,6 +148,10 @@ def test_stock_in_http_contract_survives_operation_foundation(client) -> None:
     assert submitted["approval_status"] == "PENDING"
     assert submitted["execution_status"] == "NOT_STARTED"
     assert submitted["items"][0]["asset_code"] == "COMPAT-COMPAT-CATEGORY-0001"
+    stock_item = db.session.query(StockInItem).one()
+    assert stock_item.service_life_months == 36
+    assert stock_item.expected_expiry_date == date(2029, 7, 17)
+    assert stock_item.custom_attributes == {}
     operation = db.session.get(OperationRequest, submitted["id"])
     assert operation is not None
     assert operation.approval_flow_version_id is not None
@@ -166,6 +171,8 @@ def test_stock_in_http_contract_survives_operation_foundation(client) -> None:
     assert listed["total"] == 1
     assert listed["items"][0]["id"] == submitted["id"]
 
+    context["category"].service_life_months = 120
+    db.session.commit()
     approved_response = client.post(
         f"/api/v1/stock-in-requests/{submitted['id']}/approve",
         headers=context["approver_headers"],
@@ -176,7 +183,11 @@ def test_stock_in_http_contract_survives_operation_foundation(client) -> None:
     assert approved_body["code"] == 200
     assert approved_body["data"]["approval_status"] == "APPROVED"
     assert approved_body["data"]["execution_status"] == "SUCCESS"
-    assert db.session.query(Asset).count() == 1
+    asset = db.session.query(Asset).one()
+    assert asset.service_life_months == 36
+    assert asset.expected_expiry_date == date(2029, 7, 17)
+    assert asset.custom_attributes == {}
+    assert asset.data_completeness == AssetDataCompleteness.COMPLETE.value
     assert db.session.query(AssetCodeReservation).one().status == "ACTIVE"
     assert db.session.query(AssetLifecycleRecord).count() == 1
     assert db.session.query(OperationLog).count() == 1

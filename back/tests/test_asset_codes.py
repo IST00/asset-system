@@ -79,9 +79,12 @@ def _item(stock_in, code, category, unit, source, location, user):
         unit_id=unit.id,
         original_amount=Decimal("1.00"),
         purchase_date=date(2026, 7, 17),
+        service_life_months=36,
+        expected_expiry_date=date(2029, 1, 1),
         manager_id=user.id,
         source_id=source.id,
         location_id=location.id,
+        custom_attributes={},
     )
     db.session.add(item)
     db.session.flush()

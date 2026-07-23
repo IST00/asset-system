@@ -3,6 +3,7 @@
 from app.services import (
     auth_service,
     asset_code_service,
+    asset_data_service,
     asset_relation_service,
     approval_service,
     asset_service,
@@ -24,6 +25,7 @@ from app.services import (
 __all__ = [
     "auth_service",
     "asset_code_service",
+    "asset_data_service",
     "asset_relation_service",
     "approval_service",
     "approval_flow_service",

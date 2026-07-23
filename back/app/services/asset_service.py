@@ -7,8 +7,14 @@ from typing import Any
 from sqlalchemy import ColumnElement, false, or_
 
 from app.common import BusinessException, PageResult, ResultCode
-from app.enums import DataScope
-from app.enums import ApprovalStatus, AssetCodeStatus, AssetStatus, ExecutionStatus
+from app.enums import (
+    ApprovalStatus,
+    AssetCodeStatus,
+    AssetDataCompleteness,
+    AssetStatus,
+    DataScope,
+    ExecutionStatus,
+)
 from app.models import Asset
 from app.repositories import (
     QuerySpec,
@@ -66,6 +72,9 @@ def stock_in_request(operation_request_id: int, actor_id: int) -> None:
             original_amount=item.original_amount,
             zero_amount_reason=item.zero_amount_reason,
             purchase_date=item.purchase_date,
+            supplier_id=None,
+            service_life_months=item.service_life_months,
+            expected_expiry_date=item.expected_expiry_date,
             manager_id=item.manager_id,
             source_id=item.source_id,
             location_id=item.location_id,
@@ -74,6 +83,8 @@ def stock_in_request(operation_request_id: int, actor_id: int) -> None:
             normalized_serial=item.normalized_serial,
             receipt_no=item.receipt_no,
             remark=item.remark,
+            custom_attributes=dict(item.custom_attributes),
+            data_completeness=AssetDataCompleteness.COMPLETE.value,
             created_from_request_id=operation.id,
         )
         asset_repository.add(asset)

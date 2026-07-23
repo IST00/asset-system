@@ -41,6 +41,7 @@ from app.repositories.workflow_repository import (
 from app.services import (
     approval_engine,
     asset_code_service,
+    asset_data_service,
     master_data_service,
     operation_executor,
     organization_service,
@@ -150,6 +151,11 @@ def _validate_item(item: dict[str, Any], seen_serials: set[str]) -> dict[str, An
     normalized["original_amount"] = amount
     normalized["serial_number"] = serial
     normalized["normalized_serial"] = normalized_serial
+    normalized["service_life_months"] = category.service_life_months
+    normalized["expected_expiry_date"] = asset_data_service.calculate_expected_expiry(
+        item["purchase_date"], category.service_life_months
+    )
+    normalized["custom_attributes"] = {}
     return normalized
 
 
@@ -292,6 +298,8 @@ def submit(payload: dict[str, Any], actor_id: int) -> dict[str, Any]:
                 original_amount=item["original_amount"],
                 zero_amount_reason=(item.get("zero_amount_reason") or None),
                 purchase_date=item["purchase_date"],
+                service_life_months=item["service_life_months"],
+                expected_expiry_date=item["expected_expiry_date"],
                 manager_id=item["manager_id"],
                 source_id=item["source_id"],
                 location_id=item["location_id"],
@@ -301,6 +309,7 @@ def submit(payload: dict[str, Any], actor_id: int) -> dict[str, Any]:
                 serial_reservation_key=item["normalized_serial"],
                 receipt_no=item.get("receipt_no"),
                 remark=item.get("remark"),
+                custom_attributes=item["custom_attributes"],
             )
             stock_in_item_repository.add(stock_item)
             asset_code_service.reserve(operation.id, stock_item.id, allocated)

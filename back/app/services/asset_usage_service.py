@@ -373,7 +373,14 @@ def submit_personal(payload: dict[str, Any], actor_id: int) -> dict[str, Any]:
     if target_location_id is not None:
         target_location = require_location(target_location_id)
     else:
-        for retained_location_id in sorted({asset.location_id for asset in assets}):
+        retained_location_ids = {asset.location_id for asset in assets}
+        if None in retained_location_ids:
+            raise BusinessException("存放地点不存在或已停用")
+        for retained_location_id in sorted(
+            location_id
+            for location_id in retained_location_ids
+            if location_id is not None
+        ):
             require_location(retained_location_id)
 
     target_data_by_asset_id = {

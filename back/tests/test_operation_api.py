@@ -11,6 +11,7 @@ from app import create_app
 from app.enums import (
     ApprovalExecutionMode,
     ApprovalStatus,
+    AssetDataCompleteness,
     AssetStatus,
     DataScope,
     ExecutionStatus,
@@ -143,9 +144,13 @@ def _seed_api_context(
         unit_id=unit.id,
         original_amount=Decimal("100.00"),
         purchase_date=date(2026, 7, 17),
+        service_life_months=36,
+        expected_expiry_date=date(2029, 1, 1),
         manager_id=applicant.id,
         source_id=source.id,
         location_id=location.id,
+        custom_attributes={},
+        data_completeness=AssetDataCompleteness.COMPLETE.value,
     )
     db.session.add(asset)
     db.session.flush()
@@ -549,9 +554,13 @@ def test_retry_and_terminate_require_all_asset_organizations_in_scope(client) ->
         unit_id=template.unit_id,
         original_amount=template.original_amount,
         purchase_date=template.purchase_date,
+        service_life_months=36,
+        expected_expiry_date=date(2029, 1, 1),
         manager_id=template.manager_id,
         source_id=template.source_id,
         location_id=template.location_id,
+        custom_attributes={},
+        data_completeness=AssetDataCompleteness.COMPLETE.value,
     )
     db.session.add(foreign_asset)
     db.session.flush()

@@ -13,6 +13,7 @@ from app.enums import (
     ApprovalChannel,
     ApprovalExecutionMode,
     ApprovalStatus,
+    AssetDataCompleteness,
     AssetStatus,
     ExecutionStatus,
     ExecutionTriggerType,
@@ -138,9 +139,13 @@ def _seed_approved_operation(
         unit_id=unit.id,
         original_amount=Decimal("1.00"),
         purchase_date=date(2026, 7, 17),
+        service_life_months=36,
+        expected_expiry_date=date(2029, 1, 1),
         manager_id=actor.id,
         source_id=source.id,
         location_id=location.id,
+        custom_attributes={},
+        data_completeness=AssetDataCompleteness.COMPLETE.value,
     )
     db.session.add(asset)
     db.session.flush()
@@ -299,9 +304,13 @@ def test_cas_conflict_rolls_back_whole_batch_and_success_audit(app) -> None:
         unit_id=first.unit_id,
         original_amount=Decimal("1.00"),
         purchase_date=date(2026, 7, 17),
+        service_life_months=36,
+        expected_expiry_date=date(2029, 1, 1),
         manager_id=actor.id,
         source_id=first.source_id,
         location_id=first.location_id,
+        custom_attributes={},
+        data_completeness=AssetDataCompleteness.COMPLETE.value,
     )
     db.session.add(second)
     db.session.flush()

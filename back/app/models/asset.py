@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal
+from typing import Any
 
 from sqlalchemy import (
     Date,
     ForeignKey,
     Integer,
+    JSON,
     Numeric,
     String,
     Text,
@@ -16,7 +18,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.enums import RecordStatus
+from app.enums import AssetDataCompleteness, RecordStatus
 from app.extensions import db
 from app.models.mixins import TimestampMixin
 
@@ -114,21 +116,26 @@ class Asset(TimestampMixin, db.Model):  # type: ignore[misc,name-defined]
         nullable=False,
         index=True,
     )
-    unit_id: Mapped[int] = mapped_column(
-        ForeignKey("units.id", ondelete="RESTRICT"), nullable=False, index=True
+    unit_id: Mapped[int | None] = mapped_column(
+        ForeignKey("units.id", ondelete="RESTRICT"), nullable=True, index=True
+    )
+    supplier_id: Mapped[int | None] = mapped_column(
+        ForeignKey("suppliers.id", ondelete="RESTRICT"), nullable=True, index=True
     )
     original_amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
     zero_amount_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
     purchase_date: Mapped[date] = mapped_column(Date, nullable=False)
+    service_life_months: Mapped[int] = mapped_column(Integer, nullable=False)
+    expected_expiry_date: Mapped[date] = mapped_column(Date, nullable=False)
     manager_id: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True
     )
-    source_id: Mapped[int] = mapped_column(
-        ForeignKey("asset_sources.id", ondelete="RESTRICT"), nullable=False, index=True
+    source_id: Mapped[int | None] = mapped_column(
+        ForeignKey("asset_sources.id", ondelete="RESTRICT"), nullable=True, index=True
     )
-    location_id: Mapped[int] = mapped_column(
+    location_id: Mapped[int | None] = mapped_column(
         ForeignKey("asset_locations.id", ondelete="RESTRICT"),
-        nullable=False,
+        nullable=True,
         index=True,
     )
     specification_model: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -138,6 +145,15 @@ class Asset(TimestampMixin, db.Model):  # type: ignore[misc,name-defined]
     )
     receipt_no: Mapped[str | None] = mapped_column(String(128), nullable=True)
     remark: Mapped[str | None] = mapped_column(Text, nullable=True)
+    custom_attributes: Mapped[dict[str, Any]] = mapped_column(
+        JSON, nullable=False, default=dict
+    )
+    data_completeness: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default=AssetDataCompleteness.COMPLETE.value,
+        index=True,
+    )
     created_from_request_id: Mapped[int | None] = mapped_column(
         ForeignKey("operation_requests.id", ondelete="RESTRICT"),
         nullable=True,

@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Any
 
 from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
     Integer,
+    JSON,
     Numeric,
     String,
     Text,
@@ -129,9 +131,17 @@ class StockInItem(TimestampMixin, db.Model):  # type: ignore[misc,name-defined]
     unit_id: Mapped[int] = mapped_column(
         ForeignKey("units.id", ondelete="RESTRICT"), nullable=False, index=True
     )
+    supplier_id: Mapped[int | None] = mapped_column(
+        ForeignKey("suppliers.id", ondelete="RESTRICT"), nullable=True, index=True
+    )
+    supplier_snapshot: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON, nullable=True
+    )
     original_amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
     zero_amount_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
     purchase_date: Mapped[date] = mapped_column(Date, nullable=False)
+    service_life_months: Mapped[int] = mapped_column(Integer, nullable=False)
+    expected_expiry_date: Mapped[date] = mapped_column(Date, nullable=False)
     manager_id: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True
     )
@@ -153,6 +163,9 @@ class StockInItem(TimestampMixin, db.Model):  # type: ignore[misc,name-defined]
     )
     receipt_no: Mapped[str | None] = mapped_column(String(128), nullable=True)
     remark: Mapped[str | None] = mapped_column(Text, nullable=True)
+    custom_attributes: Mapped[dict[str, Any]] = mapped_column(
+        JSON, nullable=False, default=dict
+    )
 
 
 class ApprovalStep(TimestampMixin, db.Model):  # type: ignore[misc,name-defined]

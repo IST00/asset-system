@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 
-from app.enums import AssetStatus, DataScope
+from app.enums import AssetDataCompleteness, AssetStatus, DataScope
 from app.extensions import db
 from app.models import (
     Asset,
@@ -82,9 +82,13 @@ def _asset_fixture():
         unit_id=unit.id,
         original_amount=Decimal("8999.00"),
         purchase_date=date(2026, 7, 17),
+        service_life_months=36,
+        expected_expiry_date=date(2029, 1, 1),
         manager_id=manager.id,
         source_id=source.id,
         location_id=location.id,
+        custom_attributes={},
+        data_completeness=AssetDataCompleteness.COMPLETE.value,
         normalized_serial="asset-sn",
         serial_number="ASSET-SN",
     )
