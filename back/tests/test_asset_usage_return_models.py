@@ -8,7 +8,7 @@ from decimal import Decimal
 from typing import get_type_hints
 
 import pytest
-from sqlalchemy import DateTime, String, Text, func, select
+from sqlalchemy import JSON, DateTime, String, Text, func, select
 from sqlalchemy.exc import IntegrityError
 
 from app.enums import ApprovalStatus, AssetStatus, ExecutionStatus
@@ -199,6 +199,32 @@ def test_return_request_columns_define_confirmation_contract() -> None:
     assert columns.confirmed_at.nullable is True
     assert isinstance(columns.confirmed_at.type, DateTime)
     assert columns.confirmed_at.type.timezone is True
+
+
+def test_feature_snapshot_columns_are_nullable_json() -> None:
+    usage_columns = AssetUsageRequest.__table__.columns
+    usage_snapshot_columns = {
+        "target_user_snapshot",
+        "usage_department_snapshot",
+        "target_public_object_snapshot",
+        "target_location_snapshot",
+    }
+    assert usage_snapshot_columns <= set(usage_columns.keys())
+    for column_name in usage_snapshot_columns:
+        assert usage_columns[column_name].nullable is True
+        assert isinstance(usage_columns[column_name].type, JSON)
+        assert usage_columns[column_name].type.none_as_null is True
+
+    return_columns = AssetReturnRequest.__table__.columns
+    return_snapshot_columns = {
+        "return_location_snapshot",
+        "confirmed_by_snapshot",
+    }
+    assert return_snapshot_columns <= set(return_columns.keys())
+    for column_name in return_snapshot_columns:
+        assert return_columns[column_name].nullable is True
+        assert isinstance(return_columns[column_name].type, JSON)
+        assert return_columns[column_name].type.none_as_null is True
 
 
 def test_return_item_columns_define_condition_contract() -> None:

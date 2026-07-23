@@ -13,6 +13,7 @@ from app.models import (
     AssetLocation,
     OperationRequest,
     OperationRequestAsset,
+    Organization,
     PublicUsageObject,
     User,
 )
@@ -96,6 +97,70 @@ def require_public_target(public_object_id: int) -> PublicUsageObject:
 
 def require_location(location_id: int) -> AssetLocation:
     return master_data_service.require_selectable_location(location_id)
+
+
+def build_user_snapshot(user: User) -> dict[str, str | int]:
+    return {
+        "id": user.id,
+        "username": user.username,
+        "name": user.nickname or user.username,
+    }
+
+
+def build_named_snapshot(
+    value: Organization | PublicUsageObject | AssetLocation,
+) -> dict[str, str | int]:
+    return {"id": value.id, "code": value.code, "name": value.name}
+
+
+def validate_user_snapshot(
+    value: object,
+    expected_id: int | None,
+    label: str,
+) -> dict[str, str | int] | None:
+    if expected_id is None:
+        if value is not None:
+            raise BusinessException(f"{label}快照与关联标识不匹配")
+        return None
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"id", "username", "name"}
+        or type(value["id"]) is not int
+        or value["id"] != expected_id
+        or not isinstance(value["username"], str)
+        or not isinstance(value["name"], str)
+    ):
+        raise BusinessException(f"{label}快照与关联标识不匹配")
+    return {
+        "id": value["id"],
+        "username": value["username"],
+        "name": value["name"],
+    }
+
+
+def validate_named_snapshot(
+    value: object,
+    expected_id: int | None,
+    label: str,
+) -> dict[str, str | int] | None:
+    if expected_id is None:
+        if value is not None:
+            raise BusinessException(f"{label}快照与关联标识不匹配")
+        return None
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"id", "code", "name"}
+        or type(value["id"]) is not int
+        or value["id"] != expected_id
+        or not isinstance(value["code"], str)
+        or not isinstance(value["name"], str)
+    ):
+        raise BusinessException(f"{label}快照与关联标识不匹配")
+    return {
+        "id": value["id"],
+        "code": value["code"],
+        "name": value["name"],
+    }
 
 
 def operation_assets(operation_request_id: int) -> list[OperationRequestAsset]:
@@ -217,6 +282,8 @@ def serialize_operation(
 
 
 __all__ = [
+    "build_named_snapshot",
+    "build_user_snapshot",
     "expand_assets",
     "operation_assets",
     "require_assets_in_scope",
@@ -227,4 +294,6 @@ __all__ = [
     "require_public_assets",
     "require_public_target",
     "serialize_operation",
+    "validate_named_snapshot",
+    "validate_user_snapshot",
 ]

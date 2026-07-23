@@ -32,6 +32,8 @@ from app.services.asset_usage_return_support import (
     require_location,
     require_personal_target,
     require_public_target,
+    validate_named_snapshot,
+    validate_user_snapshot,
 )
 
 _TARGET_FIELDS = frozenset(
@@ -300,6 +302,26 @@ def _load_context(
     detail = _require_detail(operation.id)
     if operation.operation_type != operation_type:
         raise BusinessException("领用申请类型与处理器不匹配")
+    validate_user_snapshot(
+        detail.target_user_snapshot,
+        detail.target_user_id,
+        "领用人",
+    )
+    validate_named_snapshot(
+        detail.usage_department_snapshot,
+        detail.usage_department_id,
+        "使用部门",
+    )
+    validate_named_snapshot(
+        detail.target_public_object_snapshot,
+        detail.target_public_object_id,
+        "公共领用对象",
+    )
+    validate_named_snapshot(
+        detail.target_location_snapshot,
+        detail.target_location_id,
+        "统一目标地点",
+    )
 
     snapshots = operation_request_asset_repository.find_by_request(operation.id)
     if not snapshots:
@@ -374,6 +396,16 @@ def _require_return_detail(operation_request_id: int) -> AssetReturnRequest:
         or not isinstance(detail.confirmed_at, datetime)
     ):
         raise BusinessException("退回申请验收详情不完整")
+    validate_named_snapshot(
+        detail.return_location_snapshot,
+        detail.return_location_id,
+        "退库地点",
+    )
+    validate_user_snapshot(
+        detail.confirmed_by_snapshot,
+        detail.confirmed_by,
+        "验收人",
+    )
     require_location(detail.return_location_id)
     return detail
 

@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from threading import Barrier, Lock
 
 import pytest
 
 from app import create_app
+from app.api import asset_returns, asset_usage, local_feishu
 from app.common import BusinessException, ResultCode
 from app.enums import ApprovalChannel, ApprovalStatus, ExecutionStatus, OperationType
 from app.extensions import db
@@ -31,9 +33,29 @@ from asset_usage_return_fixtures import (
     grant_permissions,
     grant_scoped_manager_permission,
     register_usage_return_handlers,
+    seed_http_context,
     seed_usage_return_context,
 )
 from config import TestConfig
+
+
+@pytest.fixture()
+def feature_app():
+    app = create_app(config=TestConfig)
+    app.register_blueprint(asset_usage.bp)
+    app.register_blueprint(asset_returns.bp)
+    app.register_blueprint(local_feishu.bp)
+    register_usage_return_handlers()
+    with app.app_context():
+        db.create_all()
+        yield app
+        db.session.remove()
+        db.drop_all()
+
+
+@pytest.fixture()
+def feature_client(feature_app):
+    return feature_app.test_client()
 
 
 class _PostCallbackBarrierRepository:
@@ -623,3 +645,315 @@ def test_mock_service_rejects_unsupported_operation_type(app) -> None:
 
     assert raised.value.code == ResultCode.BAD_REQUEST.code
     assert db.session.query(ExternalApprovalEvent).count() == 0
+
+
+def _set_public_assets_in_use(context: UsageReturnContext) -> None:
+    for asset in (context.main_asset, context.child_asset):
+        asset.status = "IN_USE"
+        asset.usage_type = "PUBLIC"
+        asset.holder_user_id = None
+        asset.public_object_id = context.public_object.id
+        asset.usage_department_id = None
+    db.session.commit()
+
+
+def _inspection_payload(context: UsageReturnContext) -> dict[str, object]:
+    return {
+        "return_location_id": context.return_location.id,
+        "items": [
+            {"asset_id": context.main_asset.id, "condition": "NORMAL"},
+            {"asset_id": context.child_asset.id, "condition": "NORMAL"},
+        ],
+    }
+
+
+def test_personal_usage_post_returns_common_envelope(feature_client) -> None:
+    context, headers = seed_http_context(feature_client)
+
+    response = feature_client.post(
+        "/api/v1/asset-usage-requests/personal",
+        headers=headers.manager,
+        json={
+            "asset_ids": [context.main_asset.id],
+            "target_user_id": context.employee.id,
+        },
+    )
+
+    body = response.get_json()
+    assert response.status_code == 200
+    assert body["code"] == 200
+    assert body["data"]["operation_type"] == OperationType.PERSONAL_USE.value
+
+
+def test_public_usage_post_returns_common_envelope(feature_client) -> None:
+    context, headers = seed_http_context(feature_client)
+
+    response = feature_client.post(
+        "/api/v1/asset-usage-requests/public",
+        headers=headers.manager,
+        json={
+            "asset_ids": [context.main_asset.id],
+            "public_object_id": context.public_object.id,
+            "location_id": context.location.id,
+        },
+    )
+
+    body = response.get_json()
+    assert response.status_code == 200
+    assert body["code"] == 200
+    assert body["data"]["operation_type"] == OperationType.PUBLIC_USE.value
+
+
+def test_usage_page_and_detail_get_return_common_envelopes(feature_client) -> None:
+    context, headers = seed_http_context(feature_client)
+    created = feature_client.post(
+        "/api/v1/asset-usage-requests/personal",
+        headers=headers.manager,
+        json={
+            "asset_ids": [context.main_asset.id],
+            "target_user_id": context.employee.id,
+            "location_id": context.return_location.id,
+        },
+    ).get_json()["data"]
+    expected_user = {
+        "id": context.employee.id,
+        "username": context.employee.username,
+        "name": context.employee.nickname,
+    }
+    expected_department = {
+        "id": context.organization.id,
+        "code": context.organization.code,
+        "name": context.organization.name,
+    }
+    expected_location = {
+        "id": context.return_location.id,
+        "code": context.return_location.code,
+        "name": context.return_location.name,
+    }
+    context.employee.nickname = "UR HTTP Employee Renamed"
+    context.employee.enabled = False
+    context.organization.name = "UR HTTP Organization Renamed"
+    context.organization.status = "DISABLED"
+    context.return_location.name = "UR HTTP Location Renamed"
+    context.return_location.status = "DISABLED"
+    db.session.commit()
+
+    page_response = feature_client.get(
+        "/api/v1/asset-usage-requests?page=0&size=10",
+        headers=headers.manager,
+    )
+    detail_response = feature_client.get(
+        f"/api/v1/asset-usage-requests/{created['id']}",
+        headers=headers.manager,
+    )
+
+    page_body = page_response.get_json()
+    detail_body = detail_response.get_json()
+    assert page_response.status_code == 200
+    assert page_body["code"] == 200
+    assert page_body["data"]["total"] == 1
+    assert page_body["data"]["items"][0]["id"] == created["id"]
+    assert detail_response.status_code == 200
+    assert detail_body["code"] == 200
+    assert detail_body["data"]["id"] == created["id"]
+    for item in (page_body["data"]["items"][0], detail_body["data"]):
+        feature = item["feature"]
+        assert feature.get("target_user_snapshot") == expected_user
+        assert feature.get("usage_department_snapshot") == expected_department
+        assert feature.get("target_public_object_snapshot") is None
+        assert feature.get("target_location_snapshot") == expected_location
+
+
+def test_employee_can_post_self_personal_return(feature_client) -> None:
+    context, headers = seed_http_context(feature_client)
+    _set_personal_assets_in_use(context)
+    db.session.commit()
+
+    response = feature_client.post(
+        "/api/v1/asset-return-requests/personal",
+        headers=headers.employee,
+        json={"asset_ids": [context.main_asset.id]},
+    )
+
+    body = response.get_json()
+    assert response.status_code == 200
+    assert body["code"] == 200
+    assert body["data"]["operation_type"] == OperationType.PERSONAL_RETURN.value
+
+
+def test_manager_can_confirm_mock_approved_personal_return(feature_client) -> None:
+    context, headers = seed_http_context(feature_client)
+    _set_personal_assets_in_use(context)
+    db.session.commit()
+    submitted = feature_client.post(
+        "/api/v1/asset-return-requests/personal",
+        headers=headers.employee,
+        json={"asset_ids": [context.main_asset.id]},
+    ).get_json()["data"]
+    approved = feature_client.post(
+        f"/api/v1/asset-return-requests/{submitted['id']}/mock-feishu-action",
+        headers=headers.manager,
+        json={
+            "action": "APPROVE",
+            "external_event_id": "http-return-approved-for-confirm",
+        },
+    )
+    assert approved.get_json()["data"]["approval_status"] == (
+        ApprovalStatus.APPROVED.value
+    )
+
+    response = feature_client.post(
+        f"/api/v1/asset-return-requests/{submitted['id']}/confirm",
+        headers=headers.manager,
+        json=_inspection_payload(context),
+    )
+
+    body = response.get_json()
+    assert response.status_code == 200
+    assert body["code"] == 200
+    assert body["data"]["operation_type"] == OperationType.PERSONAL_RETURN.value
+    assert body["data"]["execution_status"] == ExecutionStatus.SUCCESS.value
+
+
+def test_public_return_post_returns_common_envelope(feature_client) -> None:
+    context, headers = seed_http_context(feature_client)
+    _set_public_assets_in_use(context)
+
+    response = feature_client.post(
+        "/api/v1/asset-return-requests/public",
+        headers=headers.manager,
+        json={
+            "asset_ids": [context.main_asset.id],
+            **_inspection_payload(context),
+        },
+    )
+
+    body = response.get_json()
+    assert response.status_code == 200
+    assert body["code"] == 200
+    assert body["data"]["operation_type"] == OperationType.PUBLIC_RETURN.value
+
+
+def test_usage_mock_feishu_route_uses_authenticated_employee(feature_client) -> None:
+    context, headers = seed_http_context(feature_client)
+    submitted = feature_client.post(
+        "/api/v1/asset-usage-requests/personal",
+        headers=headers.manager,
+        json={
+            "asset_ids": [context.main_asset.id],
+            "target_user_id": context.employee.id,
+        },
+    ).get_json()["data"]
+
+    response = feature_client.post(
+        f"/api/v1/asset-usage-requests/{submitted['id']}/mock-feishu-action",
+        headers=headers.employee,
+        json={
+            "action": "APPROVE",
+            "external_event_id": "  http-usage-approved  ",
+        },
+    )
+
+    body = response.get_json()
+    assert response.status_code == 200
+    assert body["code"] == 200
+    assert body["data"]["approval_status"] == ApprovalStatus.APPROVED.value
+
+
+def test_return_mock_feishu_route_uses_authenticated_manager(feature_client) -> None:
+    context, headers = seed_http_context(feature_client)
+    _set_personal_assets_in_use(context)
+    db.session.commit()
+    submitted = feature_client.post(
+        "/api/v1/asset-return-requests/personal",
+        headers=headers.employee,
+        json={"asset_ids": [context.main_asset.id]},
+    ).get_json()["data"]
+
+    response = feature_client.post(
+        f"/api/v1/asset-return-requests/{submitted['id']}/mock-feishu-action",
+        headers=headers.manager,
+        json={
+            "action": "APPROVE",
+            "external_event_id": "  http-return-approved  ",
+        },
+    )
+
+    body = response.get_json()
+    assert response.status_code == 200
+    assert body["code"] == 200
+    assert body["data"]["approval_status"] == ApprovalStatus.APPROVED.value
+
+
+def test_mock_feishu_route_is_hidden_when_local_mode_is_disabled(
+    feature_app,
+    feature_client,
+) -> None:
+    context, headers = seed_http_context(feature_client)
+    submitted = feature_client.post(
+        "/api/v1/asset-usage-requests/personal",
+        headers=headers.manager,
+        json={
+            "asset_ids": [context.main_asset.id],
+            "target_user_id": context.employee.id,
+        },
+    ).get_json()["data"]
+    feature_app.config.update(
+        TESTING=False,
+        DEBUG=False,
+        LOCAL_FEISHU_ENABLED=False,
+    )
+
+    response = feature_client.post(
+        f"/api/v1/asset-usage-requests/{submitted['id']}/mock-feishu-action",
+        headers=headers.employee,
+        json={
+            "action": "APPROVE",
+            "external_event_id": "http-disabled-mock",
+        },
+    )
+
+    body = response.get_json()
+    assert response.status_code == 200
+    assert body["code"] == ResultCode.NOT_FOUND.code
+    assert "data" not in body
+
+
+def test_malformed_usage_schema_returns_http_400_envelope(feature_client) -> None:
+    _context, headers = seed_http_context(feature_client)
+
+    response = feature_client.post(
+        "/api/v1/asset-usage-requests/personal",
+        headers=headers.manager,
+        json={"asset_ids": []},
+    )
+
+    body = response.get_json()
+    assert response.status_code == 400
+    assert body["code"] == ResultCode.BAD_REQUEST.code
+    assert "data" not in body
+
+
+def test_blueprints_expose_only_get_and_post(feature_app) -> None:
+    methods = {
+        method
+        for rule in feature_app.url_map.iter_rules()
+        if "asset-usage" in rule.rule or "asset-return" in rule.rule
+        for method in rule.methods
+        if method not in {"HEAD", "OPTIONS"}
+    }
+    assert methods <= {"GET", "POST"}
+
+
+def test_feature_blueprint_sources_keep_http_boundary_rules() -> None:
+    api_dir = Path(__file__).parents[1] / "app" / "api"
+    for filename in ("asset_usage.py", "asset_returns.py", "local_feishu.py"):
+        source = (api_dir / filename).read_text(encoding="utf-8")
+        assert "app.models" not in source
+        assert "app.extensions" not in source
+        assert "@bp.put" not in source
+        assert "@bp.patch" not in source
+        assert "@bp.delete" not in source
+        assert 'methods=["PUT"' not in source
+        assert 'methods=["PATCH"' not in source
+        assert 'methods=["DELETE"' not in source

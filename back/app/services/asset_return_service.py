@@ -8,6 +8,7 @@ from typing import Any
 
 from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm.attributes import set_committed_value
 
 from app.common import BusinessException, PageResult, ResultCode
 from app.enums import (
@@ -21,9 +22,11 @@ from app.enums import (
 )
 from app.extensions import db
 from app.models import (
+    AssetLocation,
     OperationActionIdempotency,
     OperationRequest,
     OperationRequestAsset,
+    User,
 )
 from app.models.asset_usage_return import AssetReturnItem, AssetReturnRequest
 from app.models.mixins import utc_now
@@ -43,6 +46,8 @@ from app.services import (
     permission_service,
 )
 from app.services.asset_usage_return_support import (
+    build_named_snapshot,
+    build_user_snapshot,
     expand_assets,
     operation_assets,
     require_assets_in_scope,
@@ -50,6 +55,8 @@ from app.services.asset_usage_return_support import (
     require_personal_assets,
     require_public_assets,
     serialize_operation,
+    validate_named_snapshot,
+    validate_user_snapshot,
 )
 
 _SELF_RETURN_PERMISSION = "asset:return:self"
@@ -124,15 +131,26 @@ def _asset_ids(payload: dict[str, Any]) -> list[int]:
     return values
 
 
-def _return_location(payload: dict[str, Any]) -> int:
+def _return_location_id(payload: dict[str, Any]) -> int:
     value = payload.get("return_location_id")
     if type(value) is not int:
         raise BusinessException(
             "退回地点格式无效",
             result_code=ResultCode.BAD_REQUEST,
         )
-    require_location(value)
     return value
+
+
+def _return_location(payload: dict[str, Any]) -> AssetLocation:
+    return_location_id = _return_location_id(payload)
+    return require_location(return_location_id)
+
+
+def _require_actor(actor_id: int) -> User:
+    actor = db.session.get(User, actor_id)
+    if actor is None:
+        raise BusinessException("操作人不存在", result_code=ResultCode.NOT_FOUND)
+    return actor
 
 
 def _inspections(payload: dict[str, Any], asset_ids: list[int]) -> list[_Inspection]:
@@ -270,12 +288,32 @@ def _validate_feature_integrity(
     if operation_type == OperationType.PUBLIC_RETURN.value and not is_confirmed:
         raise BusinessException("公共退回申请验收详情不完整")
     if is_empty:
+        validate_named_snapshot(
+            detail.return_location_snapshot,
+            None,
+            "退库地点",
+        )
+        validate_user_snapshot(
+            detail.confirmed_by_snapshot,
+            None,
+            "验收人",
+        )
         if any(
             item.condition is not None or item.condition_description is not None
             for item in items
         ):
             raise BusinessException("退回申请验收详情与资产明细不匹配")
         return
+    validate_named_snapshot(
+        detail.return_location_snapshot,
+        detail.return_location_id,
+        "退库地点",
+    )
+    validate_user_snapshot(
+        detail.confirmed_by_snapshot,
+        detail.confirmed_by,
+        "验收人",
+    )
     for item in items:
         _validate_persisted_item(item)
 
@@ -460,7 +498,9 @@ def _feature_data(aggregate: _ReturnAggregate) -> dict[str, Any]:
     confirmed_at = aggregate.detail.confirmed_at
     return {
         "return_location_id": aggregate.detail.return_location_id,
+        "return_location_snapshot": aggregate.detail.return_location_snapshot,
         "confirmed_by": aggregate.detail.confirmed_by,
+        "confirmed_by_snapshot": aggregate.detail.confirmed_by_snapshot,
         "confirmed_at": confirmed_at.isoformat() if confirmed_at is not None else None,
         "items": [
             {
@@ -644,7 +684,9 @@ def _add_empty_return_rows(operation: OperationRequest) -> None:
         AssetReturnRequest(
             operation_request_id=operation.id,
             return_location_id=None,
+            return_location_snapshot=None,
             confirmed_by=None,
+            confirmed_by_snapshot=None,
             confirmed_at=None,
         )
     )
@@ -804,6 +846,7 @@ def _replay_confirmation_action(
     if operation.execution_status in {
         ExecutionStatus.SUCCESS.value,
         ExecutionStatus.FAILED.value,
+        ExecutionStatus.TERMINATED.value,
     }:
         _complete_confirmation_action(operation_id, actor_id, action_key)
         return _serialize(
@@ -888,6 +931,8 @@ def _claim_and_apply_inspection(
     inspections: list[_Inspection],
     return_location_id: int,
     actor_id: int,
+    return_location_snapshot: dict[str, str | int],
+    confirmed_by_snapshot: dict[str, str | int],
 ) -> bool:
     confirmed_at = utc_now()
     result = db.session.execute(
@@ -895,21 +940,35 @@ def _claim_and_apply_inspection(
         .where(
             AssetReturnRequest.id == aggregate.detail.id,
             AssetReturnRequest.return_location_id.is_(None),
+            AssetReturnRequest.return_location_snapshot.is_(None),
             AssetReturnRequest.confirmed_by.is_(None),
+            AssetReturnRequest.confirmed_by_snapshot.is_(None),
             AssetReturnRequest.confirmed_at.is_(None),
         )
         .values(
             return_location_id=return_location_id,
+            return_location_snapshot=return_location_snapshot,
             confirmed_by=actor_id,
+            confirmed_by_snapshot=confirmed_by_snapshot,
             confirmed_at=confirmed_at,
         )
         .execution_options(synchronize_session=False)
     )
     if result.rowcount != 1:
         return False
-    aggregate.detail.return_location_id = return_location_id
-    aggregate.detail.confirmed_by = actor_id
-    aggregate.detail.confirmed_at = confirmed_at
+    set_committed_value(aggregate.detail, "return_location_id", return_location_id)
+    set_committed_value(
+        aggregate.detail,
+        "return_location_snapshot",
+        return_location_snapshot,
+    )
+    set_committed_value(aggregate.detail, "confirmed_by", actor_id)
+    set_committed_value(
+        aggregate.detail,
+        "confirmed_by_snapshot",
+        confirmed_by_snapshot,
+    )
+    set_committed_value(aggregate.detail, "confirmed_at", confirmed_at)
     by_asset_id = {item.asset_id: item for item in inspections}
     for snapshot in aggregate.snapshots:
         inspection = by_asset_id[snapshot.asset_id]
@@ -965,6 +1024,7 @@ def _recover_no_key_personal_confirmation(
     if operation.execution_status in {
         ExecutionStatus.SUCCESS.value,
         ExecutionStatus.FAILED.value,
+        ExecutionStatus.TERMINATED.value,
     }:
         serialized = _serialize(
             operation,
@@ -984,6 +1044,41 @@ def _recover_no_key_personal_confirmation(
         actor_id,
         OperationType.PERSONAL_RETURN.value,
     )
+
+
+def _recover_keyed_personal_confirmation(
+    operation_request_id: int,
+    actor_id: int,
+    idempotency_key: str,
+    return_location_id: int,
+    inspections: list[_Inspection],
+) -> dict[str, Any]:
+    operation, aggregate = _restart_read_transaction_and_lock_return(
+        operation_request_id,
+        OperationType.PERSONAL_RETURN.value,
+    )
+    existing_action = operation_action_idempotency_repository.find_by_key(
+        operation.id,
+        actor_id,
+        _RETURN_CONFIRM_ACTION,
+        idempotency_key,
+    )
+    if existing_action is None:
+        db.session.rollback()
+        db.session.remove()
+        raise BusinessException("退库申请已由其他验收请求确认")
+    if aggregate.detail.return_location_id is None:
+        return _replay_confirmation_action(existing_action, actor_id)
+    if not _inspection_matches_winner(
+        aggregate,
+        inspections,
+        return_location_id,
+        actor_id,
+    ):
+        db.session.rollback()
+        db.session.remove()
+        raise BusinessException("退库申请已由其他验收请求确认")
+    return _replay_confirmation_action(existing_action, actor_id)
 
 
 def confirm(
@@ -1014,6 +1109,15 @@ def confirm(
         raise BusinessException("只有审批通过的个人退库申请可以验收")
     if operation.approval_execution_mode != ApprovalExecutionMode.MANUAL_CONFIRM.value:
         raise BusinessException("当前退回申请不支持人工验收")
+
+    snapshot_asset_ids = [snapshot.asset_id for snapshot in snapshots]
+    return_location_id = _return_location_id(payload)
+    inspections = _inspections(payload, snapshot_asset_ids)
+    terminal_execution = operation.execution_status in {
+        ExecutionStatus.SUCCESS.value,
+        ExecutionStatus.FAILED.value,
+        ExecutionStatus.TERMINATED.value,
+    }
     if idempotency_key is not None:
         existing_action = operation_action_idempotency_repository.find_by_key(
             operation.id,
@@ -1021,49 +1125,47 @@ def confirm(
             _RETURN_CONFIRM_ACTION,
             idempotency_key,
         )
-        if existing_action is not None:
-            return _replay_confirmation_action(existing_action, actor_id)
-
-    if operation.execution_status == ExecutionStatus.SUCCESS.value:
-        return _serialize(
-            operation,
-            actor_id,
-            OperationType.PERSONAL_RETURN.value,
-        )
-    if (
-        operation.execution_status == ExecutionStatus.FAILED.value
-        and idempotency_key is None
-    ):
-        return _serialize(
-            operation,
-            actor_id,
-            OperationType.PERSONAL_RETURN.value,
-        )
-
-    if operation.execution_status != ExecutionStatus.NOT_STARTED.value:
-        raise BusinessException("当前执行状态不能开始退库验收")
-
-    snapshot_asset_ids = [snapshot.asset_id for snapshot in snapshots]
-    return_location_id = _return_location(payload)
-    inspections = _inspections(payload, snapshot_asset_ids)
-    if aggregate.detail.return_location_id is not None:
-        if idempotency_key is not None:
-            raise BusinessException("退库申请已由其他验收请求确认")
+        if (
+            existing_action is not None
+            or terminal_execution
+            or aggregate.detail.return_location_id is not None
+        ):
+            return _recover_keyed_personal_confirmation(
+                operation.id,
+                actor_id,
+                idempotency_key,
+                return_location_id,
+                inspections,
+            )
+    elif terminal_execution or aggregate.detail.return_location_id is not None:
         return _recover_no_key_personal_confirmation(
             operation.id,
             actor_id,
             return_location_id,
             inspections,
         )
+
+    if operation.execution_status != ExecutionStatus.NOT_STARTED.value:
+        raise BusinessException("当前执行状态不能开始退库验收")
+
+    return_location = require_location(return_location_id)
+    confirmed_by = _require_actor(actor_id)
     if not _claim_and_apply_inspection(
         aggregate,
         inspections,
         return_location_id,
         actor_id,
+        build_named_snapshot(return_location),
+        build_user_snapshot(confirmed_by),
     ):
         if idempotency_key is not None:
-            db.session.rollback()
-            raise BusinessException("退库申请已由其他验收请求确认")
+            return _recover_keyed_personal_confirmation(
+                operation.id,
+                actor_id,
+                idempotency_key,
+                return_location_id,
+                inspections,
+            )
         return _recover_no_key_personal_confirmation(
             operation.id,
             actor_id,
@@ -1078,13 +1180,14 @@ def confirm(
     if replayed is not None:
         return replayed
 
+    action_key = action_record.idempotency_key if action_record is not None else None
     db.session.commit()
     operation = operation_executor.confirm(operation.id, actor_id)
-    if action_record is not None:
+    if action_key is not None:
         _complete_confirmation_action(
             operation.id,
             actor_id,
-            action_record.idempotency_key,
+            action_key,
         )
     return _serialize(
         operation,
@@ -1096,14 +1199,16 @@ def confirm(
 def _add_confirmed_return_rows(
     operation: OperationRequest,
     inspections: list[_Inspection],
-    return_location_id: int,
-    actor_id: int,
+    return_location: AssetLocation,
+    confirmed_by: User,
 ) -> None:
     asset_return_request_repository.add(
         AssetReturnRequest(
             operation_request_id=operation.id,
-            return_location_id=return_location_id,
-            confirmed_by=actor_id,
+            return_location_id=return_location.id,
+            return_location_snapshot=build_named_snapshot(return_location),
+            confirmed_by=confirmed_by.id,
+            confirmed_by_snapshot=build_user_snapshot(confirmed_by),
             confirmed_at=utc_now(),
         )
     )
@@ -1136,7 +1241,9 @@ def submit_public(payload: dict[str, Any], actor_id: int) -> dict[str, Any]:
     require_public_assets(assets)
     asset_ids = [asset.id for asset in assets]
     inspections = _inspections(payload, asset_ids)
-    return_location_id = _return_location(payload)
+    return_location = _return_location(payload)
+    return_location_id = return_location.id
+    confirmed_by = _require_actor(actor_id)
     target = {
         "status": AssetStatus.IDLE.value,
         "usage_type": None,
@@ -1160,8 +1267,8 @@ def submit_public(payload: dict[str, Any], actor_id: int) -> dict[str, Any]:
     _add_confirmed_return_rows(
         created.operation,
         inspections,
-        return_location_id,
-        actor_id,
+        return_location,
+        confirmed_by,
     )
     operation = approval_provider_service.confirm_direct(created.operation.id, actor_id)
     return _serialize(operation, actor_id, OperationType.PUBLIC_RETURN.value)

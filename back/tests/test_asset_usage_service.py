@@ -142,9 +142,21 @@ def _create_pending_public_usage(
         AssetUsageRequest(
             operation_request_id=operation.id,
             target_user_id=None,
+            target_user_snapshot=None,
             target_public_object_id=context.public_object.id,
+            target_public_object_snapshot={
+                "id": context.public_object.id,
+                "code": context.public_object.code,
+                "name": context.public_object.name,
+            },
             usage_department_id=None,
+            usage_department_snapshot=None,
             target_location_id=context.return_location.id,
+            target_location_snapshot={
+                "id": context.return_location.id,
+                "code": context.return_location.code,
+                "name": context.return_location.name,
+            },
         )
     )
     db.session.commit()
@@ -178,9 +190,21 @@ def _seed_personal_usage_request(
         AssetUsageRequest(
             operation_request_id=operation.id,
             target_user_id=context.manager.id,
+            target_user_snapshot={
+                "id": context.manager.id,
+                "username": context.manager.username,
+                "name": context.manager.nickname or context.manager.username,
+            },
             target_public_object_id=None,
+            target_public_object_snapshot=None,
             usage_department_id=context.organization.id,
+            usage_department_snapshot={
+                "id": context.organization.id,
+                "code": context.organization.code,
+                "name": context.organization.name,
+            },
             target_location_id=None,
+            target_location_snapshot=None,
         )
     )
     db.session.flush()
@@ -193,6 +217,40 @@ def _assert_no_usage_request_data() -> None:
     assert db.session.query(OperationRequestAsset).count() == 0
     assert db.session.query(AssetUsageRequest).count() == 0
     assert db.session.query(AssetBusinessLock).count() == 0
+
+
+def _stage_pending_usage_organization(
+    pending_kind: str,
+    sentinel: Organization,
+) -> Organization:
+    if pending_kind == "new":
+        pending = Organization(
+            code="USAGE-PENDING-NEW",
+            name="Usage Pending New",
+            status=RecordStatus.ENABLED.value,
+        )
+        db.session.add(pending)
+        return pending
+    if pending_kind == "dirty":
+        sentinel.name = "Usage Pending Dirty"
+        return sentinel
+    db.session.delete(sentinel)
+    return sentinel
+
+
+def _assert_pending_usage_organization_survives(
+    pending_kind: str,
+    pending: Organization,
+) -> None:
+    session = db.session()
+    if pending_kind == "new":
+        assert pending in session.new
+        assert pending.id is None
+        return
+    if pending_kind == "dirty":
+        assert pending in session.dirty
+        return
+    assert pending in session.deleted
 
 
 def _assets(context: UsageReturnContext) -> list[Asset]:
@@ -602,9 +660,21 @@ def test_personal_usage_submit_expands_child_and_retains_each_location(app) -> N
     assert result["external_instance_id"] == f"LOCAL-FEISHU-{result['id']}"
     assert result["feature"] == {
         "target_user_id": context.employee.id,
+        "target_user_snapshot": {
+            "id": context.employee.id,
+            "username": context.employee.username,
+            "name": context.employee.nickname,
+        },
         "target_public_object_id": None,
+        "target_public_object_snapshot": None,
         "usage_department_id": context.organization.id,
+        "usage_department_snapshot": {
+            "id": context.organization.id,
+            "code": context.organization.code,
+            "name": context.organization.name,
+        },
         "target_location_id": None,
+        "target_location_snapshot": None,
     }
     assert [item["asset_id"] for item in result["assets"]] == [
         context.main_asset.id,
@@ -636,6 +706,28 @@ def test_personal_usage_submit_expands_child_and_retains_each_location(app) -> N
     assert db.session.query(OperationLog).count() == 0
 
 
+@pytest.mark.parametrize("invalid_location", ["disabled", "nonselectable"])
+def test_personal_usage_without_location_rejects_invalid_retained_location(
+    app,
+    invalid_location: str,
+) -> None:
+    context = seed_usage_return_context()
+    context.child_asset.location_id = context.return_location.id
+    if invalid_location == "disabled":
+        context.return_location.status = RecordStatus.DISABLED.value
+    else:
+        context.return_location.is_selectable = False
+    _grant_usage(context)
+
+    with pytest.raises(BusinessException, match="地点"):
+        _usage_service().submit_personal(
+            _personal_payload(context),
+            context.manager.id,
+        )
+
+    _assert_no_usage_request_data()
+
+
 def test_personal_usage_common_location_is_snapshotted_for_every_asset(app) -> None:
     context = seed_usage_return_context()
     _grant_usage(context)
@@ -652,6 +744,73 @@ def test_personal_usage_common_location_is_snapshotted_for_every_asset(app) -> N
     assert db.session.query(AssetUsageRequest).one().target_location_id == (
         context.return_location.id
     )
+
+
+def test_personal_usage_target_snapshots_survive_master_data_changes(app) -> None:
+    context = seed_usage_return_context()
+    _grant_usage(context)
+    service = _usage_service()
+    expected_user = {
+        "id": context.employee.id,
+        "username": context.employee.username,
+        "name": context.employee.nickname,
+    }
+    expected_department = {
+        "id": context.organization.id,
+        "code": context.organization.code,
+        "name": context.organization.name,
+    }
+    expected_location = {
+        "id": context.return_location.id,
+        "code": context.return_location.code,
+        "name": context.return_location.name,
+    }
+    submitted = service.submit_personal(
+        _personal_payload(context, location_id=context.return_location.id),
+        context.manager.id,
+    )
+    context.employee.username = "UR-employee-renamed"
+    context.employee.nickname = "UR Employee Renamed"
+    context.employee.enabled = False
+    context.organization.name = "UR Organization Renamed"
+    context.organization.status = RecordStatus.DISABLED.value
+    context.return_location.name = "UR Target Location Renamed"
+    context.return_location.status = RecordStatus.DISABLED.value
+    db.session.commit()
+
+    detail = service.get(submitted["id"], context.manager.id)
+    page_item = service.page(
+        actor_id=context.manager.id,
+        page_index=0,
+        size=10,
+    ).items[0]
+
+    for item in (detail, page_item):
+        feature = item["feature"]
+        assert feature.get("target_user_snapshot") == expected_user
+        assert feature.get("usage_department_snapshot") == expected_department
+        assert feature.get("target_public_object_snapshot") is None
+        assert feature.get("target_location_snapshot") == expected_location
+
+
+def test_usage_query_rejects_feature_snapshot_foreign_key_mismatch(app) -> None:
+    context = seed_usage_return_context()
+    _grant_usage(context)
+    service = _usage_service()
+    submitted = service.submit_personal(
+        _personal_payload(context, location_id=context.return_location.id),
+        context.manager.id,
+    )
+    detail = db.session.query(AssetUsageRequest).one()
+    detail.target_user_snapshot = {
+        "id": context.manager.id,
+        "username": context.employee.username,
+        "name": context.employee.nickname,
+    }
+    db.session.commit()
+
+    with pytest.raises(BusinessException, match="快照"):
+        service.get(submitted["id"], context.manager.id)
 
 
 def test_personal_usage_replays_trimmed_key_before_mutable_validation(app) -> None:
@@ -868,6 +1027,183 @@ def test_personal_approval_executes_batch_once_and_releases_locks(app) -> None:
     assert db.session.query(OperationLog).count() == 1
 
 
+def test_personal_callback_replay_resumes_after_approval_commit_crash(
+    app,
+    monkeypatch,
+) -> None:
+    context = seed_usage_return_context()
+    _grant_usage(context)
+    _register_usage_handlers()
+    service = _usage_service()
+    submitted = service.submit_personal(
+        _personal_payload(context),
+        context.manager.id,
+    )
+    operation_id = submitted["id"]
+    external_instance_id = submitted["external_instance_id"]
+    actor_id = context.manager.id
+    from app.services import operation_executor
+
+    original_execute = operation_executor.execute_after_approval
+    execute_calls = 0
+
+    def crash_once_after_approval_commit(
+        operation_request_id: int,
+        triggered_by: int,
+    ) -> OperationRequest:
+        nonlocal execute_calls
+        execute_calls += 1
+        if execute_calls == 1:
+            raise RuntimeError("crash after callback approval commit")
+        return original_execute(operation_request_id, triggered_by)
+
+    monkeypatch.setattr(
+        operation_executor,
+        "execute_after_approval",
+        crash_once_after_approval_commit,
+    )
+
+    with pytest.raises(RuntimeError, match="callback approval commit"):
+        approval_provider_service.handle_callback(
+            provider="FEISHU",
+            external_event_id="personal-approval-crash",
+            external_instance_id=external_instance_id,
+            status=ApprovalStatus.APPROVED.value,
+            actor_id=actor_id,
+        )
+
+    interrupted = db.session.get(OperationRequest, operation_id)
+    assert interrupted is not None
+    assert interrupted.approval_status == ApprovalStatus.APPROVED.value
+    assert interrupted.execution_status == ExecutionStatus.NOT_STARTED.value
+    assert db.session.query(ExternalApprovalEvent).count() == 1
+    assert db.session.query(OperationExecutionAttempt).count() == 0
+    assert db.session.query(AssetBusinessLock).count() == 2
+
+    with pytest.raises(BusinessException, match="回调"):
+        approval_provider_service.handle_callback(
+            provider="FEISHU",
+            external_event_id="personal-approval-crash",
+            external_instance_id=external_instance_id,
+            status=ApprovalStatus.REJECTED.value,
+            actor_id=actor_id,
+        )
+
+    assert execute_calls == 1
+    db.session.expire_all()
+    still_interrupted = db.session.get(OperationRequest, operation_id)
+    assert still_interrupted is not None
+    assert still_interrupted.approval_status == ApprovalStatus.APPROVED.value
+    assert still_interrupted.execution_status == ExecutionStatus.NOT_STARTED.value
+    for asset in _assets(context):
+        assert asset.status == AssetStatus.IDLE.value
+        assert asset.version == 1
+    assert db.session.query(OperationExecutionAttempt).count() == 0
+    assert db.session.query(AssetLifecycleRecord).count() == 0
+    assert db.session.query(OperationLog).count() == 0
+    assert db.session.query(AssetBusinessLock).count() == 2
+
+    recovered = approval_provider_service.handle_callback(
+        provider="FEISHU",
+        external_event_id="personal-approval-crash",
+        external_instance_id=external_instance_id,
+        status=ApprovalStatus.APPROVED.value,
+        actor_id=actor_id,
+    )
+
+    assert recovered.execution_status == ExecutionStatus.SUCCESS.value
+    assert execute_calls == 2
+    assert db.session.query(OperationRequest).count() == 1
+    assert db.session.query(ExternalApprovalEvent).count() == 1
+    assert db.session.query(OperationExecutionAttempt).count() == 1
+    assert db.session.query(AssetLifecycleRecord).count() == 2
+    assert db.session.query(OperationLog).count() == 1
+    assert db.session.query(AssetBusinessLock).count() == 0
+
+
+def test_callback_event_cannot_resume_another_operation(
+    app,
+    monkeypatch,
+) -> None:
+    context = seed_usage_return_context()
+    _grant_usage(context)
+    _register_usage_handlers()
+    submitted_a = _usage_service().submit_personal(
+        _personal_payload(context),
+        context.manager.id,
+    )
+    operation_a_id = submitted_a["id"]
+    actor_id = context.manager.id
+    from app.services import operation_executor
+
+    original_execute = operation_executor.execute_after_approval
+    execute_calls = 0
+
+    def crash_once_after_approval_commit(
+        operation_request_id: int,
+        triggered_by: int,
+    ) -> OperationRequest:
+        nonlocal execute_calls
+        execute_calls += 1
+        if execute_calls == 1:
+            raise RuntimeError("crash before cross-operation replay")
+        return original_execute(operation_request_id, triggered_by)
+
+    monkeypatch.setattr(
+        operation_executor,
+        "execute_after_approval",
+        crash_once_after_approval_commit,
+    )
+    with pytest.raises(RuntimeError, match="cross-operation"):
+        approval_provider_service.handle_callback(
+            provider="FEISHU",
+            external_event_id="shared-cross-operation-event",
+            external_instance_id=submitted_a["external_instance_id"],
+            status=ApprovalStatus.APPROVED.value,
+            actor_id=actor_id,
+        )
+
+    operation_b = OperationRequest(
+        request_no="USAGE-CROSS-EVENT-B",
+        operation_type="CROSS_EVENT_SENTINEL",
+        applicant_id=actor_id,
+        approval_channel=ApprovalChannel.FEISHU.value,
+        approval_execution_mode=ApprovalExecutionMode.AUTO_ON_APPROVAL.value,
+        approval_status=ApprovalStatus.PENDING.value,
+        execution_status=ExecutionStatus.NOT_STARTED.value,
+    )
+    db.session.add(operation_b)
+    db.session.commit()
+    submitted_b = approval_provider_service.submit(operation_b.id, actor_id)
+
+    with pytest.raises(BusinessException, match="回调"):
+        approval_provider_service.handle_callback(
+            provider="FEISHU",
+            external_event_id="shared-cross-operation-event",
+            external_instance_id=submitted_b.external_instance_id,
+            status=ApprovalStatus.APPROVED.value,
+            actor_id=actor_id,
+        )
+
+    assert execute_calls == 1
+    db.session.expire_all()
+    persisted_a = db.session.get(OperationRequest, operation_a_id)
+    persisted_b = db.session.get(OperationRequest, operation_b.id)
+    assert persisted_a is not None
+    assert persisted_b is not None
+    assert persisted_a.approval_status == ApprovalStatus.APPROVED.value
+    assert persisted_a.execution_status == ExecutionStatus.NOT_STARTED.value
+    assert persisted_b.approval_status == ApprovalStatus.PENDING.value
+    assert persisted_b.execution_status == ExecutionStatus.NOT_STARTED.value
+    for asset in _assets(context):
+        assert asset.status == AssetStatus.IDLE.value
+        assert asset.version == 1
+    assert db.session.query(OperationExecutionAttempt).count() == 0
+    assert db.session.query(AssetLifecycleRecord).count() == 0
+    assert db.session.query(OperationLog).count() == 0
+    assert db.session.query(AssetBusinessLock).count() == 2
+
+
 def test_personal_rejection_releases_locks_without_execution(app) -> None:
     context = seed_usage_return_context()
     context.child_asset.location_id = context.return_location.id
@@ -974,9 +1310,21 @@ def test_public_usage_direct_submission_executes_expanded_batch(app) -> None:
     assert result["external_instance_id"] is None
     assert result["feature"] == {
         "target_user_id": None,
+        "target_user_snapshot": None,
         "target_public_object_id": context.public_object.id,
+        "target_public_object_snapshot": {
+            "id": context.public_object.id,
+            "code": context.public_object.code,
+            "name": context.public_object.name,
+        },
         "usage_department_id": None,
+        "usage_department_snapshot": None,
         "target_location_id": context.return_location.id,
+        "target_location_snapshot": {
+            "id": context.return_location.id,
+            "code": context.return_location.code,
+            "name": context.return_location.name,
+        },
     }
     assert len(result["assets"]) == 2
     for item in result["assets"]:
@@ -1004,6 +1352,94 @@ def test_public_usage_direct_submission_executes_expanded_batch(app) -> None:
     assert db.session.query(AssetLifecycleRecord).count() == 2
     assert db.session.query(OperationLog).count() == 1
     assert db.session.query(OperationExecutionAttempt).one().status == "SUCCESS"
+    assert db.session.query(AssetBusinessLock).count() == 0
+
+
+def test_public_usage_target_snapshots_survive_master_data_changes(app) -> None:
+    context = seed_usage_return_context()
+    _grant_usage(context)
+    _register_usage_handlers()
+    service = _usage_service()
+    expected_public_object = {
+        "id": context.public_object.id,
+        "code": context.public_object.code,
+        "name": context.public_object.name,
+    }
+    expected_location = {
+        "id": context.return_location.id,
+        "code": context.return_location.code,
+        "name": context.return_location.name,
+    }
+    submitted = service.submit_public(_public_payload(context), context.manager.id)
+    context.public_object.name = "UR Public Object Renamed"
+    context.public_object.status = RecordStatus.DISABLED.value
+    context.return_location.name = "UR Public Target Renamed"
+    context.return_location.status = RecordStatus.DISABLED.value
+    db.session.commit()
+
+    detail = service.get(submitted["id"], context.manager.id)
+    page_item = service.page(
+        actor_id=context.manager.id,
+        page_index=0,
+        size=10,
+    ).items[0]
+
+    for item in (detail, page_item):
+        feature = item["feature"]
+        assert feature.get("target_user_snapshot") is None
+        assert feature.get("usage_department_snapshot") is None
+        assert feature.get("target_public_object_snapshot") == expected_public_object
+        assert feature.get("target_location_snapshot") == expected_location
+
+
+def test_public_usage_replay_resumes_after_direct_approval_commit_crash(
+    app,
+    monkeypatch,
+) -> None:
+    context = seed_usage_return_context()
+    _grant_usage(context)
+    _register_usage_handlers()
+    service = _usage_service()
+    payload = _public_payload(context, key="public-approval-crash")
+    actor_id = context.manager.id
+    from app.services import operation_executor
+
+    original_execute = operation_executor.execute_after_approval
+    execute_calls = 0
+
+    def crash_once_after_approval_commit(
+        operation_request_id: int,
+        triggered_by: int,
+    ) -> OperationRequest:
+        nonlocal execute_calls
+        execute_calls += 1
+        if execute_calls == 1:
+            raise RuntimeError("crash after direct approval commit")
+        return original_execute(operation_request_id, triggered_by)
+
+    monkeypatch.setattr(
+        operation_executor,
+        "execute_after_approval",
+        crash_once_after_approval_commit,
+    )
+
+    with pytest.raises(RuntimeError, match="direct approval commit"):
+        service.submit_public(payload, actor_id)
+
+    interrupted = db.session.query(OperationRequest).one()
+    assert interrupted.approval_status == ApprovalStatus.APPROVED.value
+    assert interrupted.execution_status == ExecutionStatus.NOT_STARTED.value
+    assert db.session.query(OperationExecutionAttempt).count() == 0
+    assert db.session.query(AssetBusinessLock).count() == 2
+
+    recovered = service.submit_public(payload, actor_id)
+
+    assert recovered["execution_status"] == ExecutionStatus.SUCCESS.value
+    assert execute_calls == 2
+    assert db.session.query(OperationRequest).count() == 1
+    assert db.session.query(OperationExecutionAttempt).count() == 1
+    assert db.session.query(AssetLifecycleRecord).count() == 2
+    assert db.session.query(OperationLog).count() == 1
     assert db.session.query(AssetBusinessLock).count() == 0
 
 
@@ -1042,6 +1478,7 @@ def test_public_usage_rejects_disabled_target_before_request(
         context.public_object.status = RecordStatus.DISABLED.value
     else:
         context.return_location.status = RecordStatus.DISABLED.value
+    db.session.commit()
 
     with pytest.raises(BusinessException):
         _usage_service().submit_public(
@@ -1065,6 +1502,7 @@ def test_public_usage_idempotent_replay_executes_and_audits_once(app) -> None:
         context.manager.id,
     )
     context.public_object.status = RecordStatus.DISABLED.value
+    db.session.commit()
     replayed = service.submit_public(
         {
             "asset_ids": [999_999],
@@ -1083,6 +1521,45 @@ def test_public_usage_idempotent_replay_executes_and_audits_once(app) -> None:
     assert db.session.query(AssetLifecycleRecord).count() == 2
     assert db.session.query(OperationLog).count() == 1
     assert db.session.query(AssetBusinessLock).count() == 0
+
+
+@pytest.mark.parametrize("pending_kind", ["new", "dirty", "deleted"])
+def test_public_usage_replay_rejects_pending_unit_of_work_before_query(
+    app,
+    pending_kind: str,
+) -> None:
+    context = seed_usage_return_context()
+    _grant_usage(context)
+    db.session.commit()
+    _register_usage_handlers()
+    service = _usage_service()
+    payload = _public_payload(context, key=f"public-pending-{pending_kind}")
+    actor_id = context.manager.id
+    completed = service.submit_public(payload, actor_id)
+    assert completed["execution_status"] == ExecutionStatus.SUCCESS.value
+    sentinel = Organization(
+        code=f"USAGE-PENDING-SENTINEL-{pending_kind}",
+        name=f"Usage Pending Sentinel {pending_kind}",
+        status=RecordStatus.ENABLED.value,
+    )
+    db.session.add(sentinel)
+    db.session.commit()
+    pending = _stage_pending_usage_organization(pending_kind, sentinel)
+    statements: list[str] = []
+    engine = db.engine
+
+    def record_statement(*args: object) -> None:
+        statements.append(str(args[2]))
+
+    event.listen(engine, "before_cursor_execute", record_statement)
+    try:
+        with pytest.raises(RuntimeError, match="pending business writes"):
+            service.submit_public(payload, actor_id)
+    finally:
+        event.remove(engine, "before_cursor_execute", record_statement)
+
+    assert statements == []
+    _assert_pending_usage_organization_survives(pending_kind, pending)
 
 
 @pytest.mark.parametrize("mismatch", ["public_object", "common_location"])
@@ -1292,6 +1769,80 @@ def test_usage_handler_rejects_boolean_value_for_integer_target_id(app) -> None:
         submitted["id"],
         "个人领用执行失败，请联系管理员或稍后重试",
     )
+
+
+@pytest.mark.parametrize(
+    "snapshot_field",
+    [
+        "target_user_snapshot",
+        "usage_department_snapshot",
+        "target_public_object_snapshot",
+        "target_location_snapshot",
+    ],
+)
+def test_usage_generic_retry_rejects_tampered_feature_snapshot(
+    app,
+    snapshot_field: str,
+) -> None:
+    context = seed_usage_return_context()
+    _grant_usage(context)
+    _register_usage_handlers()
+    submitted = _usage_service().submit_personal(
+        _personal_payload(context),
+        context.manager.id,
+    )
+    context.employee.enabled = False
+    db.session.commit()
+
+    failed = approval_provider_service.handle_callback(
+        provider="FEISHU",
+        external_event_id=f"personal-feature-snapshot-{snapshot_field}",
+        external_instance_id=submitted["external_instance_id"],
+        status=ApprovalStatus.APPROVED.value,
+        actor_id=context.manager.id,
+    )
+    assert failed.execution_status == ExecutionStatus.FAILED.value
+
+    context.employee.enabled = True
+    detail = db.session.query(AssetUsageRequest).one()
+    if snapshot_field == "target_user_snapshot":
+        detail.target_user_snapshot = {
+            **detail.target_user_snapshot,
+            "id": context.manager.id,
+        }
+    elif snapshot_field == "usage_department_snapshot":
+        detail.usage_department_snapshot = {
+            **detail.usage_department_snapshot,
+            "id": context.organization.id + 10_000,
+        }
+    elif snapshot_field == "target_public_object_snapshot":
+        detail.target_public_object_snapshot = {
+            "id": context.public_object.id,
+            "code": context.public_object.code,
+            "name": context.public_object.name,
+        }
+    else:
+        detail.target_location_snapshot = {
+            "id": context.return_location.id,
+            "code": context.return_location.code,
+            "name": context.return_location.name,
+        }
+    db.session.commit()
+
+    from app.services import operation_executor
+
+    retried = operation_executor.retry(submitted["id"], context.manager.id)
+
+    assert retried.execution_status == ExecutionStatus.FAILED.value
+    assert [asset.status for asset in _assets(context)] == [
+        AssetStatus.IDLE.value,
+        AssetStatus.IDLE.value,
+    ]
+    assert [asset.version for asset in _assets(context)] == [1, 1]
+    assert db.session.query(OperationExecutionAttempt).count() == 2
+    assert db.session.query(AssetLifecycleRecord).count() == 0
+    assert db.session.query(OperationLog).count() == 0
+    assert db.session.query(AssetBusinessLock).count() == 2
 
 
 def test_usage_handler_cas_conflict_rolls_back_whole_batch(

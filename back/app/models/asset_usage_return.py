@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.extensions import db
@@ -39,6 +39,18 @@ class AssetUsageRequest(TimestampMixin, db.Model):  # type: ignore[misc,name-def
         nullable=True,
         index=True,
     )
+    target_user_snapshot: Mapped[dict | None] = mapped_column(
+        JSON(none_as_null=True), nullable=True
+    )
+    usage_department_snapshot: Mapped[dict | None] = mapped_column(
+        JSON(none_as_null=True), nullable=True
+    )
+    target_public_object_snapshot: Mapped[dict | None] = mapped_column(
+        JSON(none_as_null=True), nullable=True
+    )
+    target_location_snapshot: Mapped[dict | None] = mapped_column(
+        JSON(none_as_null=True), nullable=True
+    )
 
 
 class AssetReturnRequest(TimestampMixin, db.Model):  # type: ignore[misc,name-defined]
@@ -61,6 +73,12 @@ class AssetReturnRequest(TimestampMixin, db.Model):  # type: ignore[misc,name-de
     )
     confirmed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+    return_location_snapshot: Mapped[dict | None] = mapped_column(
+        JSON(none_as_null=True), nullable=True
+    )
+    confirmed_by_snapshot: Mapped[dict | None] = mapped_column(
+        JSON(none_as_null=True), nullable=True
     )
 
 

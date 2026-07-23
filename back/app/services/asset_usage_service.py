@@ -8,22 +8,30 @@ from app.common import BusinessException, PageResult, ResultCode
 from app.enums import (
     ApprovalChannel,
     ApprovalExecutionMode,
+    ApprovalStatus,
     AssetStatus,
+    ExecutionStatus,
     OperationType,
     UsageType,
 )
+from app.extensions import db
 from app.models import OperationRequest, OperationRequestAsset
 from app.models.asset_usage_return import AssetUsageRequest
 from app.repositories.asset_usage_return_repository import (
     asset_usage_request_repository,
     find_operation_assets,
 )
+from app.repositories.workflow_repository import operation_request_repository
 from app.services import (
     approval_provider_service,
+    operation_executor,
     operation_service,
+    organization_service,
     permission_service,
 )
 from app.services.asset_usage_return_support import (
+    build_named_snapshot,
+    build_user_snapshot,
     expand_assets,
     operation_assets,
     require_assets_in_scope,
@@ -32,6 +40,8 @@ from app.services.asset_usage_return_support import (
     require_personal_target,
     require_public_target,
     serialize_operation,
+    validate_named_snapshot,
+    validate_user_snapshot,
 )
 
 _USAGE_PERMISSION = "asset:usage:manage"
@@ -47,6 +57,15 @@ _TARGET_FIELDS = frozenset(
 )
 
 
+def _require_clean_entry_unit_of_work() -> None:
+    """Top-level commit owners cannot safely compose with pending ORM writes."""
+    session = db.session()
+    if session.new or session.dirty or session.deleted:
+        raise RuntimeError(
+            "asset usage transaction boundary rejected pending business writes"
+        )
+
+
 def _idempotency_key(payload: dict[str, Any]) -> str | None:
     value = payload.get("idempotency_key")
     if value is None:
@@ -59,12 +78,16 @@ def _idempotency_key(payload: dict[str, Any]) -> str | None:
     return value.strip() or None
 
 
-def _feature_data(detail: AssetUsageRequest) -> dict[str, int | None]:
+def _feature_data(detail: AssetUsageRequest) -> dict[str, Any]:
     return {
         "target_user_id": detail.target_user_id,
         "target_public_object_id": detail.target_public_object_id,
         "usage_department_id": detail.usage_department_id,
         "target_location_id": detail.target_location_id,
+        "target_user_snapshot": detail.target_user_snapshot,
+        "usage_department_snapshot": detail.usage_department_snapshot,
+        "target_public_object_snapshot": detail.target_public_object_snapshot,
+        "target_location_snapshot": detail.target_location_snapshot,
     }
 
 
@@ -164,6 +187,26 @@ def _require_usage_detail(
         )
     if not valid:
         raise BusinessException("领用申请类型与详情不匹配")
+    validate_user_snapshot(
+        detail_row.target_user_snapshot,
+        detail_row.target_user_id,
+        "领用人",
+    )
+    validate_named_snapshot(
+        detail_row.usage_department_snapshot,
+        detail_row.usage_department_id,
+        "使用部门",
+    )
+    validate_named_snapshot(
+        detail_row.target_public_object_snapshot,
+        detail_row.target_public_object_id,
+        "公共领用对象",
+    )
+    validate_named_snapshot(
+        detail_row.target_location_snapshot,
+        detail_row.target_location_id,
+        "统一目标地点",
+    )
     snapshot_rows = operation_assets(operation.id) if snapshots is None else snapshots
     _require_snapshot_consistency(
         operation,
@@ -198,6 +241,33 @@ def _serialize(
     )
 
 
+def _serialize_or_recover_public_usage(
+    operation: OperationRequest,
+    actor_id: int,
+) -> dict[str, Any]:
+    operation_id = operation.id
+    _serialize(operation, actor_id, OperationType.PUBLIC_USE.value)
+    db.session.rollback()
+    db.session.remove()
+    reloaded = operation_request_repository.find_for_update(operation_id)
+    if reloaded is None:
+        raise BusinessException("领用申请不存在", result_code=ResultCode.NOT_FOUND)
+    operation = reloaded
+    serialized = _serialize(operation, actor_id, OperationType.PUBLIC_USE.value)
+    if (
+        operation.approval_channel == ApprovalChannel.DIRECT.value
+        and operation.approval_execution_mode
+        == ApprovalExecutionMode.AUTO_ON_APPROVAL.value
+        and operation.approval_status == ApprovalStatus.APPROVED.value
+        and operation.execution_status == ExecutionStatus.NOT_STARTED.value
+    ):
+        operation = operation_executor.execute_after_approval(operation.id, actor_id)
+        return _serialize(operation, actor_id, OperationType.PUBLIC_USE.value)
+    db.session.rollback()
+    db.session.remove()
+    return serialized
+
+
 def _replay(
     actor_id: int,
     operation_type: str,
@@ -212,6 +282,8 @@ def _replay(
     )
     if operation is None:
         return None
+    if operation_type == OperationType.PUBLIC_USE.value:
+        return _serialize_or_recover_public_usage(operation, actor_id)
     return _serialize(operation, actor_id, operation_type)
 
 
@@ -295,9 +367,14 @@ def submit_personal(payload: dict[str, Any], actor_id: int) -> dict[str, Any]:
     require_idle_assets(assets)
     target_user = require_personal_target(payload["target_user_id"])
     assert target_user.organization_id is not None
+    usage_department = organization_service.require_enabled(target_user.organization_id)
     target_location_id = payload.get("location_id")
+    target_location = None
     if target_location_id is not None:
-        require_location(target_location_id)
+        target_location = require_location(target_location_id)
+    else:
+        for retained_location_id in sorted({asset.location_id for asset in assets}):
+            require_location(retained_location_id)
 
     target_data_by_asset_id = {
         asset.id: {
@@ -333,6 +410,14 @@ def submit_personal(payload: dict[str, Any], actor_id: int) -> dict[str, Any]:
             target_public_object_id=None,
             usage_department_id=target_user.organization_id,
             target_location_id=target_location_id,
+            target_user_snapshot=build_user_snapshot(target_user),
+            usage_department_snapshot=build_named_snapshot(usage_department),
+            target_public_object_snapshot=None,
+            target_location_snapshot=(
+                build_named_snapshot(target_location)
+                if target_location is not None
+                else None
+            ),
         )
     )
     operation = approval_provider_service.submit(created.operation.id, actor_id)
@@ -340,6 +425,7 @@ def submit_personal(payload: dict[str, Any], actor_id: int) -> dict[str, Any]:
 
 
 def submit_public(payload: dict[str, Any], actor_id: int) -> dict[str, Any]:
+    _require_clean_entry_unit_of_work()
     permission_service.require_permission(actor_id, _USAGE_PERMISSION)
     idempotency_key = _idempotency_key(payload)
     replayed = _replay(
@@ -360,7 +446,7 @@ def submit_public(payload: dict[str, Any], actor_id: int) -> dict[str, Any]:
             "公共领用必须选择存放地点",
             result_code=ResultCode.BAD_REQUEST,
         )
-    require_location(location_id)
+    location = require_location(location_id)
 
     target_data_by_asset_id = {
         asset.id: {
@@ -383,10 +469,9 @@ def submit_public(payload: dict[str, Any], actor_id: int) -> dict[str, Any]:
         idempotency_key=idempotency_key,
     )
     if not created.created:
-        return _serialize(
+        return _serialize_or_recover_public_usage(
             created.operation,
             actor_id,
-            OperationType.PUBLIC_USE.value,
         )
 
     asset_usage_request_repository.add(
@@ -396,6 +481,10 @@ def submit_public(payload: dict[str, Any], actor_id: int) -> dict[str, Any]:
             target_public_object_id=public_object.id,
             usage_department_id=None,
             target_location_id=location_id,
+            target_user_snapshot=None,
+            usage_department_snapshot=None,
+            target_public_object_snapshot=build_named_snapshot(public_object),
+            target_location_snapshot=build_named_snapshot(location),
         )
     )
     operation = approval_provider_service.confirm_direct(created.operation.id, actor_id)

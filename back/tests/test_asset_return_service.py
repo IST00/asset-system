@@ -37,6 +37,7 @@ from app.models import (
     OperationRequestAsset,
     Organization,
     PublicUsageObject,
+    User,
 )
 from app.models.asset_usage_return import AssetReturnItem, AssetReturnRequest
 from app.operations.registry import operation_handler_registry
@@ -680,7 +681,9 @@ def test_personal_submission_expands_child_without_organization_scope(app) -> No
         }
     assert result["feature"] == {
         "return_location_id": None,
+        "return_location_snapshot": None,
         "confirmed_by": None,
+        "confirmed_by_snapshot": None,
         "confirmed_at": None,
         "items": [
             {
@@ -697,7 +700,9 @@ def test_personal_submission_expands_child_without_organization_scope(app) -> No
     }
     detail = db.session.query(AssetReturnRequest).one()
     assert detail.return_location_id is None
+    assert detail.return_location_snapshot is None
     assert detail.confirmed_by is None
+    assert detail.confirmed_by_snapshot is None
     assert detail.confirmed_at is None
     assert db.session.query(AssetReturnItem).count() == 2
     assert all(
@@ -985,6 +990,88 @@ def test_personal_confirmation_returns_normal_and_damaged_assets_atomically(
     assert db.session.query(OperationActionIdempotency).one().status == "COMPLETED"
 
 
+def test_personal_return_confirmation_snapshots_survive_master_data_changes(
+    app,
+) -> None:
+    context = seed_usage_return_context()
+    _set_personal_in_use(context)
+    _grant_self_return(context)
+    _grant_return_manage(context)
+    operation_handler_registry.clear()
+    register_usage_return_handlers()
+    service = _return_service()
+    employee_id = context.employee.id
+    manager_id = context.manager.id
+    submitted = service.submit_personal(
+        _personal_payload(context),
+        employee_id,
+    )
+    _approve_personal(submitted, manager_id)
+    payload = _inspection_payload(context, key="historical-confirmation")
+    expected_location = {
+        "id": context.return_location.id,
+        "code": context.return_location.code,
+        "name": context.return_location.name,
+    }
+    expected_confirmer = {
+        "id": context.manager.id,
+        "username": context.manager.username,
+        "name": context.manager.nickname,
+    }
+    first = service.confirm(submitted["id"], payload, manager_id)
+    context.return_location.name = "UR Return Location Renamed"
+    context.return_location.status = RecordStatus.DISABLED.value
+    context.manager.username = "UR-manager-renamed"
+    context.manager.nickname = "UR Manager Renamed"
+    db.session.commit()
+
+    replayed = service.confirm(submitted["id"], payload, manager_id)
+    manager = db.session.get(User, manager_id)
+    assert manager is not None
+    manager.enabled = False
+    db.session.commit()
+    detail = service.get(submitted["id"], employee_id)
+    page_item = service.page(
+        actor_id=employee_id,
+        page_index=0,
+        size=10,
+    ).items[0]
+
+    for item in (first, replayed, detail, page_item):
+        feature = item["feature"]
+        assert feature.get("return_location_snapshot") == expected_location
+        assert feature.get("confirmed_by_snapshot") == expected_confirmer
+
+
+def test_return_query_rejects_malformed_confirmation_snapshot(app) -> None:
+    context = seed_usage_return_context()
+    _set_personal_in_use(context)
+    _grant_self_return(context)
+    _grant_return_manage(context)
+    operation_handler_registry.clear()
+    register_usage_return_handlers()
+    service = _return_service()
+    submitted = service.submit_personal(
+        _personal_payload(context),
+        context.employee.id,
+    )
+    _approve_personal(submitted, context.manager.id)
+    service.confirm(
+        submitted["id"],
+        _inspection_payload(context),
+        context.manager.id,
+    )
+    detail = db.session.query(AssetReturnRequest).one()
+    detail.confirmed_by_snapshot = {
+        "id": context.manager.id,
+        "username": context.manager.username,
+    }
+    db.session.commit()
+
+    with pytest.raises(BusinessException, match="快照"):
+        service.get(submitted["id"], context.manager.id)
+
+
 def test_confirmation_same_key_and_no_key_replays_execute_once(app) -> None:
     context = seed_usage_return_context()
     _set_personal_in_use(context)
@@ -999,13 +1086,15 @@ def test_confirmation_same_key_and_no_key_replays_execute_once(app) -> None:
     )
     _approve_personal(submitted, context.manager.id)
     payload = _inspection_payload(context, key="same-confirm")
+    no_key_payload = _inspection_payload(context)
+    actor_id = context.manager.id
 
-    first = service.confirm(submitted["id"], payload, context.manager.id)
-    keyed_replay = service.confirm(submitted["id"], payload, context.manager.id)
+    first = service.confirm(submitted["id"], payload, actor_id)
+    keyed_replay = service.confirm(submitted["id"], payload, actor_id)
     no_key_replay = service.confirm(
         submitted["id"],
-        _inspection_payload(context),
-        context.manager.id,
+        no_key_payload,
+        actor_id,
     )
 
     assert keyed_replay == first
@@ -1014,6 +1103,82 @@ def test_confirmation_same_key_and_no_key_replays_execute_once(app) -> None:
     assert db.session.query(AssetLifecycleRecord).count() == 2
     assert db.session.query(OperationLog).count() == 1
     assert db.session.query(OperationActionIdempotency).count() == 1
+
+
+@pytest.mark.parametrize("difference", ["location", "items"])
+def test_confirmation_same_key_rejects_different_payload(
+    app,
+    difference: str,
+) -> None:
+    context = seed_usage_return_context()
+    _set_personal_in_use(context)
+    _grant_self_return(context)
+    _grant_return_manage(context)
+    operation_handler_registry.clear()
+    register_usage_return_handlers()
+    service = _return_service()
+    submitted = service.submit_personal(
+        _personal_payload(context),
+        context.employee.id,
+    )
+    _approve_personal(submitted, context.manager.id)
+    payload = _inspection_payload(context, key="strict-confirm-replay")
+    first = service.confirm(submitted["id"], payload, context.manager.id)
+    conflicting_payload = _inspection_payload(context, key="strict-confirm-replay")
+    if difference == "location":
+        conflicting_payload["return_location_id"] = context.location.id
+    else:
+        conflicting_payload["items"] = [
+            {
+                "asset_id": context.main_asset.id,
+                "condition": "DAMAGED",
+                "condition_description": "新的验收结果",
+            },
+            {"asset_id": context.child_asset.id, "condition": "NORMAL"},
+        ]
+
+    with pytest.raises(BusinessException, match="其他验收请求"):
+        service.confirm(
+            submitted["id"],
+            conflicting_payload,
+            context.manager.id,
+        )
+
+    assert first["execution_status"] == ExecutionStatus.SUCCESS.value
+    assert db.session.query(OperationExecutionAttempt).count() == 1
+    assert db.session.query(OperationActionIdempotency).count() == 1
+
+
+def test_completed_confirmation_rejects_new_key_with_same_payload(app) -> None:
+    context = seed_usage_return_context()
+    _set_personal_in_use(context)
+    _grant_self_return(context)
+    _grant_return_manage(context)
+    operation_handler_registry.clear()
+    register_usage_return_handlers()
+    service = _return_service()
+    submitted = service.submit_personal(
+        _personal_payload(context),
+        context.employee.id,
+    )
+    _approve_personal(submitted, context.manager.id)
+    first = service.confirm(
+        submitted["id"],
+        _inspection_payload(context, key="completed-confirm-original"),
+        context.manager.id,
+    )
+
+    with pytest.raises(BusinessException, match="其他验收请求"):
+        service.confirm(
+            submitted["id"],
+            _inspection_payload(context, key="completed-confirm-new"),
+            context.manager.id,
+        )
+
+    assert first["execution_status"] == ExecutionStatus.SUCCESS.value
+    assert db.session.query(OperationExecutionAttempt).count() == 1
+    claim = db.session.query(OperationActionIdempotency).one()
+    assert claim.idempotency_key == "completed-confirm-original"
 
 
 def test_successful_confirmation_replay_rejects_corrupt_target_snapshot(app) -> None:
@@ -1682,7 +1847,7 @@ def test_failed_confirmation_with_new_key_rejects_before_claim(
 
     monkeypatch.setattr(operation_action_idempotency_repository, "add", record_add)
 
-    with pytest.raises(BusinessException, match="执行状态"):
+    with pytest.raises(BusinessException, match="其他验收请求"):
         service.confirm(
             submitted["id"],
             _inspection_payload(context, key="new-key-after-failure"),
@@ -1759,9 +1924,105 @@ def test_confirmation_execution_failure_retains_inspection_and_locks(
     assert db.session.query(OperationExecutionAttempt).count() == 1
 
 
-def test_generic_retry_rejects_extra_and_forged_before_snapshot(
+def test_terminated_confirmation_replays_settle_processing_claim(
     app,
     monkeypatch,
+) -> None:
+    context = seed_usage_return_context()
+    _set_personal_in_use(context)
+    _grant_self_return(context)
+    _grant_return_manage(context)
+    operation_handler_registry.clear()
+    register_usage_return_handlers()
+    service = _return_service()
+    submitted = service.submit_personal(
+        _personal_payload(context),
+        context.employee.id,
+    )
+    actor_id = context.manager.id
+    operation_id = submitted["id"]
+    _approve_personal(submitted, actor_id)
+    keyed_payload = _inspection_payload(context, key="terminated-confirmation")
+    no_key_payload = _inspection_payload(context)
+    new_key_payload = _inspection_payload(context, key="terminated-new-key")
+    context.child_asset.version += 1
+    db.session.commit()
+    original_complete = service._complete_confirmation_action
+
+    def crash_before_action_completion(
+        operation_request_id: int,
+        completed_by: int,
+        idempotency_key: str,
+    ) -> None:
+        raise RuntimeError("crash before confirmation action completion")
+
+    monkeypatch.setattr(
+        service,
+        "_complete_confirmation_action",
+        crash_before_action_completion,
+    )
+    with pytest.raises(RuntimeError, match="action completion"):
+        service.confirm(operation_id, keyed_payload, actor_id)
+    monkeypatch.setattr(
+        service,
+        "_complete_confirmation_action",
+        original_complete,
+    )
+
+    failed = db.session.get(OperationRequest, operation_id)
+    assert failed is not None
+    assert failed.execution_status == ExecutionStatus.FAILED.value
+    claim = db.session.query(OperationActionIdempotency).one()
+    assert claim.status == "PROCESSING"
+    assert db.session.query(OperationExecutionAttempt).count() == 1
+    assert db.session.query(AssetBusinessLock).count() == 2
+
+    from app.services import operation_executor
+
+    terminated = operation_executor.terminate(
+        operation_id,
+        actor_id,
+        "验收失败后终止",
+    )
+    assert terminated.execution_status == ExecutionStatus.TERMINATED.value
+    assert db.session.query(AssetBusinessLock).count() == 0
+
+    results: dict[str, dict[str, Any]] = {}
+    errors: dict[str, str] = {}
+    for replay_kind, payload in (
+        ("no_key", no_key_payload),
+        ("keyed", keyed_payload),
+    ):
+        try:
+            results[replay_kind] = service.confirm(operation_id, payload, actor_id)
+        except BusinessException as error:
+            errors[replay_kind] = error.message
+
+    assert errors == {}
+    assert results["no_key"]["execution_status"] == ExecutionStatus.TERMINATED.value
+    assert results["keyed"]["execution_status"] == ExecutionStatus.TERMINATED.value
+    with pytest.raises(BusinessException, match="其他验收请求"):
+        service.confirm(operation_id, new_key_payload, actor_id)
+    assert db.session.query(OperationExecutionAttempt).count() == 1
+    assert db.session.query(AssetLifecycleRecord).count() == 0
+    assert db.session.query(OperationLog).count() == 0
+    assert db.session.query(AssetBusinessLock).count() == 0
+    claim = db.session.query(OperationActionIdempotency).one()
+    assert claim.status == "COMPLETED"
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    [
+        "asset-before",
+        "return-location-snapshot",
+        "confirmed-by-snapshot",
+    ],
+)
+def test_generic_retry_rejects_tampered_persisted_snapshot(
+    app,
+    monkeypatch,
+    tamper: str,
 ) -> None:
     context = seed_usage_return_context()
     _set_personal_in_use(context)
@@ -1792,13 +2053,26 @@ def test_generic_retry_rejects_extra_and_forged_before_snapshot(
     )
     assert failed["execution_status"] == ExecutionStatus.FAILED.value
     context.return_location.status = RecordStatus.ENABLED.value
-    snapshot = db.session.query(OperationRequestAsset).first()
-    snapshot.before_data = {
-        **snapshot.before_data,
-        "public_object_name": "FORGED",
-        "unexpected": True,
-    }
-    flag_modified(snapshot, "before_data")
+    if tamper == "asset-before":
+        snapshot = db.session.query(OperationRequestAsset).first()
+        snapshot.before_data = {
+            **snapshot.before_data,
+            "public_object_name": "FORGED",
+            "unexpected": True,
+        }
+        flag_modified(snapshot, "before_data")
+    else:
+        detail = db.session.query(AssetReturnRequest).one()
+        if tamper == "return-location-snapshot":
+            detail.return_location_snapshot = {
+                **detail.return_location_snapshot,
+                "id": context.location.id,
+            }
+        else:
+            detail.confirmed_by_snapshot = {
+                **detail.confirmed_by_snapshot,
+                "id": context.employee.id,
+            }
     db.session.commit()
 
     retried = operation_executor.retry(submitted["id"], context.manager.id)
@@ -1869,6 +2143,56 @@ def test_public_return_accepts_different_public_objects_and_executes_directly(
     assert replayed == result
     assert db.session.query(OperationRequest).count() == 1
     assert db.session.query(OperationExecutionAttempt).count() == 1
+
+
+def test_public_return_snapshots_survive_master_data_changes(app) -> None:
+    context = seed_usage_return_context()
+    _set_public_in_use(context)
+    _grant_return_manage(context)
+    grant_permissions(context.employee, "asset:usage:manage")
+    operation_handler_registry.clear()
+    register_usage_return_handlers()
+    service = _return_service()
+    employee_id = context.employee.id
+    manager_id = context.manager.id
+    payload = {
+        "asset_ids": [context.main_asset.id],
+        **_inspection_payload(context),
+        "idempotency_key": "public-return-historical-snapshots",
+    }
+    expected_location = {
+        "id": context.return_location.id,
+        "code": context.return_location.code,
+        "name": context.return_location.name,
+    }
+    expected_confirmer = {
+        "id": context.manager.id,
+        "username": context.manager.username,
+        "name": context.manager.nickname,
+    }
+    first = service.submit_public(payload, manager_id)
+    context.return_location.name = "UR Public Return Location Renamed"
+    context.return_location.status = RecordStatus.DISABLED.value
+    context.manager.username = "UR-public-manager-renamed"
+    context.manager.nickname = "UR Public Manager Renamed"
+    db.session.commit()
+
+    replayed = service.submit_public(payload, manager_id)
+    manager = db.session.get(User, manager_id)
+    assert manager is not None
+    manager.enabled = False
+    db.session.commit()
+    detail = service.get(first["id"], employee_id)
+    page_item = service.page(
+        actor_id=employee_id,
+        page_index=0,
+        size=10,
+    ).items[0]
+
+    for item in (first, replayed, detail, page_item):
+        feature = item["feature"]
+        assert feature.get("return_location_snapshot") == expected_location
+        assert feature.get("confirmed_by_snapshot") == expected_confirmer
 
 
 def test_public_return_replay_resumes_after_direct_approval_crash(

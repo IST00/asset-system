@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 
+from flask.testing import FlaskClient
 from sqlalchemy import select
 
 from app.enums import (
@@ -36,7 +37,17 @@ from app.models import (
 )
 from app.models.asset_usage_return import AssetUsageRequest
 from app.operations.registry import operation_handler_registry
+from app.security.passwords import hash_password
 from app.services import operation_service
+
+
+_HTTP_PASSWORD = "asset-usage-return-test"
+
+
+@dataclass(frozen=True)
+class HttpHeaders:
+    manager: dict[str, str]
+    employee: dict[str, str]
 
 
 @dataclass(frozen=True)
@@ -168,6 +179,36 @@ def seed_usage_return_context() -> UsageReturnContext:
         public_object=public_object,
         main_asset=main_asset,
         child_asset=child_asset,
+    )
+
+
+def seed_http_context(
+    client: FlaskClient,
+) -> tuple[UsageReturnContext, HttpHeaders]:
+    context = seed_usage_return_context()
+    grant_permissions(context.manager, "asset:usage:manage")
+    grant_permissions(context.employee, "asset:return:self")
+    context.manager.password = hash_password(_HTTP_PASSWORD, rounds=4)
+    context.employee.password = hash_password(_HTTP_PASSWORD, rounds=4)
+    db.session.commit()
+
+    tokens: dict[str, str] = {}
+    for actor, username in (
+        ("manager", context.manager.username),
+        ("employee", context.employee.username),
+    ):
+        response = client.post(
+            "/api/v1/auth/login",
+            json={"username": username, "password": _HTTP_PASSWORD},
+        )
+        assert response.status_code == 200
+        body = response.get_json()
+        assert body["code"] == 200
+        tokens[actor] = body["data"]["token"]
+
+    return context, HttpHeaders(
+        manager={"Authorization": f"Bearer {tokens['manager']}"},
+        employee={"Authorization": f"Bearer {tokens['employee']}"},
     )
 
 
@@ -334,9 +375,25 @@ def seed_cross_scope_usage() -> CrossScopeUsageContext:
         AssetUsageRequest(
             operation_request_id=operation.id,
             target_user_id=context.employee.id,
+            target_user_snapshot={
+                "id": context.employee.id,
+                "username": context.employee.username,
+                "name": context.employee.nickname or context.employee.username,
+            },
             target_public_object_id=None,
+            target_public_object_snapshot=None,
             usage_department_id=context.organization.id,
+            usage_department_snapshot={
+                "id": context.organization.id,
+                "code": context.organization.code,
+                "name": context.organization.name,
+            },
             target_location_id=context.location.id,
+            target_location_snapshot={
+                "id": context.location.id,
+                "code": context.location.code,
+                "name": context.location.name,
+            },
         )
     )
     db.session.flush()
@@ -369,10 +426,12 @@ def register_usage_return_handlers() -> None:
 
 __all__ = [
     "CrossScopeUsageContext",
+    "HttpHeaders",
     "UsageReturnContext",
     "grant_permissions",
     "grant_scoped_manager_permission",
     "register_usage_return_handlers",
     "seed_cross_scope_usage",
+    "seed_http_context",
     "seed_usage_return_context",
 ]
