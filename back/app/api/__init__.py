@@ -6,10 +6,13 @@ from flask import Flask
 
 from app.api import (
     approval_flows,
+    asset_returns,
+    asset_usage,
     assets,
     auth,
     hello,
     master_data,
+    local_feishu,
     organizations,
     operations,
     rbac,
@@ -29,3 +32,7 @@ def register_blueprints(app: Flask) -> None:
     app.register_blueprint(master_data.bp)
     app.register_blueprint(stock_in.bp)
     app.register_blueprint(assets.bp)
+    app.register_blueprint(asset_usage.bp)
+    app.register_blueprint(asset_returns.bp)
+    if app.testing or app.debug:
+        app.register_blueprint(local_feishu.bp)

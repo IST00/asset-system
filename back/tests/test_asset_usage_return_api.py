@@ -9,7 +9,6 @@ from threading import Barrier, Lock
 import pytest
 
 from app import create_app
-from app.api import asset_returns, asset_usage, local_feishu
 from app.common import BusinessException, ResultCode
 from app.enums import ApprovalChannel, ApprovalStatus, ExecutionStatus, OperationType
 from app.extensions import db
@@ -42,10 +41,6 @@ from config import TestConfig
 @pytest.fixture()
 def feature_app():
     app = create_app(config=TestConfig)
-    app.register_blueprint(asset_usage.bp)
-    app.register_blueprint(asset_returns.bp)
-    app.register_blueprint(local_feishu.bp)
-    register_usage_return_handlers()
     with app.app_context():
         db.create_all()
         yield app

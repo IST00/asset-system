@@ -6,6 +6,11 @@ from app.models.asset import (
     AssetCodeSequence,
     PublicUsageObject,
 )
+from app.models.asset_usage_return import (
+    AssetReturnItem,
+    AssetReturnRequest,
+    AssetUsageRequest,
+)
 from app.models.approval_flow import (
     ApprovalFlowAssigneeRule,
     ApprovalFlowDefinition,
@@ -58,6 +63,9 @@ __all__ = [
     "AssetCodeReservation",
     "AssetCodeSequence",
     "AssetLifecycleRecord",
+    "AssetReturnItem",
+    "AssetReturnRequest",
+    "AssetUsageRequest",
     "AssetCategory",
     "AssetLocation",
     "AssetSource",
