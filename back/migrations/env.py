@@ -19,9 +19,20 @@ def run_migrations_offline() -> None:
 def run_migrations_online() -> None:
     connectable = current_app.extensions["migrate"].db.engine
     with connectable.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata)
-        with context.begin_transaction():
-            context.run_migrations()
+        is_sqlite = connection.dialect.name == "sqlite"
+        if is_sqlite:
+            connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
+            connection.commit()
+        try:
+            context.configure(connection=connection, target_metadata=target_metadata)
+            with context.begin_transaction():
+                context.run_migrations()
+        finally:
+            if is_sqlite:
+                if connection.in_transaction():
+                    connection.rollback()
+                connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+                connection.commit()
 
 
 if context.is_offline_mode():
