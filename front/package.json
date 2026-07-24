@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.0.1",
   "type": "module",
+  "engines": {
+    "node": ">=22.6.0"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
@@ -10,12 +13,13 @@
     "build:test": "tsc -b && vite build --mode test",
     "build:prod": "tsc -b && vite build --mode production",
     "lint": "eslint . --ext ts,tsx,js,jsx --report-unused-disable-directives --max-warnings 0",
-    "test": "node --experimental-strip-types --test src/config/navigationModel.test.ts src/config/navigation.test.ts src/features/dashboard/dashboardModel.test.ts src/features/dashboard/dashboardData.test.ts src/theme/tokens.test.ts src/i18n/zhCN.test.ts",
+    "test": "node --experimental-strip-types --test \"src/**/*.test.ts\"",
     "format": "prettier --write \"src/**/*.{ts,tsx,js,jsx,css,md}\"",
     "preview": "vite preview",
     "type-check": "tsc --noEmit"
   },
   "dependencies": {
+    "@hookform/resolvers": "^3.9.1",
     "@tanstack/react-query": "^5.51.0",
     "antd": "^5.19.0",
     "axios": "^1.7.2",

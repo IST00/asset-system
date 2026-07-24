@@ -8,7 +8,7 @@ export const navigationEntries: NavigationEntry[] = [
     path: '/assets',
     icon: 'package',
     mobile: true,
-    disabled: true,
+    permission: 'asset:view',
   },
   {
     key: 'workflows',
