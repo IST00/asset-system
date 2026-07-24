@@ -17,6 +17,7 @@ from app.api import (
     operations,
     rbac,
     stock_in,
+    suppliers,
     users,
 )
 
@@ -30,6 +31,7 @@ def register_blueprints(app: Flask) -> None:
     app.register_blueprint(operations.bp)
     app.register_blueprint(organizations.bp)
     app.register_blueprint(master_data.bp)
+    app.register_blueprint(suppliers.bp)
     app.register_blueprint(stock_in.bp)
     app.register_blueprint(assets.bp)
     app.register_blueprint(asset_usage.bp)

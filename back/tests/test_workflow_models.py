@@ -6,6 +6,7 @@ from decimal import Decimal
 from app.enums import (
     ApprovalStatus,
     AssetCodeStatus,
+    AssetDataCompleteness,
     AssetStatus,
     ExecutionStatus,
     OperationType,
@@ -74,9 +75,12 @@ def test_stock_in_persistence_keeps_workflow_and_asset_data_separate(app) -> Non
         unit_id=unit.id,
         original_amount=Decimal("7999.00"),
         purchase_date=date(2026, 7, 17),
+        service_life_months=36,
+        expected_expiry_date=date(2029, 1, 1),
         manager_id=applicant.id,
         source_id=source.id,
         location_id=location.id,
+        custom_attributes={},
     )
     sequence = AssetCodeSequence(
         top_organization_id=organization.id,
@@ -139,9 +143,13 @@ def test_formal_asset_has_independent_lifecycle_and_audit_records(app) -> None:
         original_amount=Decimal("0.00"),
         zero_amount_reason="赠送",
         purchase_date=date(2026, 7, 17),
+        service_life_months=36,
+        expected_expiry_date=date(2029, 1, 1),
         manager_id=manager.id,
         source_id=source.id,
         location_id=location.id,
+        custom_attributes={},
+        data_completeness=AssetDataCompleteness.COMPLETE.value,
         serial_number=" SN-001 ",
         normalized_serial="sn-001",
     )

@@ -2,7 +2,10 @@
 
 from app.services import (
     auth_service,
+    asset_access_service,
     asset_code_service,
+    asset_data_completion_service,
+    asset_data_service,
     asset_relation_service,
     approval_service,
     asset_service,
@@ -18,12 +21,16 @@ from app.services import (
     approval_provider_service,
     rbac_service,
     stock_in_service,
+    supplier_service,
     user_service,
 )
 
 __all__ = [
     "auth_service",
+    "asset_access_service",
     "asset_code_service",
+    "asset_data_completion_service",
+    "asset_data_service",
     "asset_relation_service",
     "approval_service",
     "approval_flow_service",
@@ -39,5 +46,6 @@ __all__ = [
     "permission_service",
     "rbac_service",
     "stock_in_service",
+    "supplier_service",
     "user_service",
 ]

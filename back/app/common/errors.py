@@ -96,5 +96,5 @@ def register_error_handlers(app: Flask) -> None:
 
     @app.errorhandler(Exception)
     def handle_other(e: Exception) -> ResponseReturnValue:
-        log.exception("Unexpected error")
-        return jsonify(Result.fail(ResultCode.INTERNAL_ERROR, str(e)).to_dict()), 500
+        log.error("Unexpected error (%s)", type(e).__name__)
+        return jsonify(Result.fail(ResultCode.INTERNAL_ERROR).to_dict()), 500

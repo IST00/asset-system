@@ -2,9 +2,17 @@ from __future__ import annotations
 
 from datetime import date
 
-from app.enums import DataScope
+from app.enums import DataScope, RecordStatus
 from app.extensions import db
-from app.models import Permission, Role, RolePermission, User, UserRole
+from app.models import (
+    AssetCategory,
+    Permission,
+    Role,
+    RolePermission,
+    Supplier,
+    User,
+    UserRole,
+)
 from app.security.passwords import hash_password
 
 
@@ -42,6 +50,7 @@ def _seed_http_actors() -> tuple[User, User, User]:
         "asset-category:manage",
         "asset-source:manage",
         "asset:amount:view",
+        "asset:service-life:update",
         "asset:view",
         "audit:view",
         "location:manage",
@@ -96,6 +105,7 @@ def test_complete_stock_in_workflow_through_http(client) -> None:
             headers=admin_headers,
             json={
                 "permission_ids": [
+                    permission_ids["asset:service-life:update"],
                     permission_ids["stock-in:create"],
                     permission_ids["stock-in:view"],
                 ]
@@ -176,6 +186,14 @@ def test_complete_stock_in_workflow_through_http(client) -> None:
             },
         )
     )
+    supplier = Supplier(
+        code="E2E-SUPPLIER",
+        name="E2E 原供应商",
+        status=RecordStatus.ENABLED.value,
+    )
+    db.session.add(supplier)
+    db.session.commit()
+    supplier_id = supplier.id
 
     applicant_headers = _login(client, applicant.username)
     submitted = _data(
@@ -192,17 +210,55 @@ def test_complete_stock_in_workflow_through_http(client) -> None:
                         "unit_id": unit["id"],
                         "original_amount": "7999.00",
                         "purchase_date": date(2026, 7, 17).isoformat(),
+                        "supplier_id": supplier_id,
+                        "service_life_months": 48,
                         "manager_id": applicant.id,
                         "source_id": source["id"],
                         "location_id": location["id"],
                         "serial_number": "E2E-SN-001",
+                        "custom_attributes": {
+                            "warranty": {"years": 3, "onsite": True},
+                            "tags": ["laptop", None, 2026],
+                        },
                     }
                 ],
             },
         )
     )
+    submitted_item = submitted["items"][0]
+    assert submitted_item["supplier_id"] == supplier_id
+    assert submitted_item["supplier_snapshot"] == {
+        "id": supplier_id,
+        "code": "E2E-SUPPLIER",
+        "name": "E2E 原供应商",
+    }
+    assert submitted_item["service_life_months"] == 48
+    assert submitted_item["expected_expiry_date"] == "2030-07-17"
+    assert submitted_item["custom_attributes"] == {
+        "warranty": {"years": 3, "onsite": True},
+        "tags": ["laptop", None, 2026],
+    }
     listed = _data(client.get("/api/v1/stock-in-requests", headers=applicant_headers))
     assert listed["items"][0]["id"] == submitted["id"]
+
+    category_model = db.session.get(AssetCategory, category["id"])
+    assert category_model is not None
+    category_model.service_life_months = 120
+    supplier.name = "E2E 已修改供应商"
+    supplier.status = RecordStatus.DISABLED.value
+    db.session.commit()
+
+    detail = _data(
+        client.get(
+            f"/api/v1/stock-in-requests/{submitted['id']}",
+            headers=applicant_headers,
+        )
+    )
+    assert detail["items"][0]["supplier_snapshot"] == {
+        "id": supplier_id,
+        "code": "E2E-SUPPLIER",
+        "name": "E2E 原供应商",
+    }
 
     approver_headers = _login(client, approver.username)
     approved = _data(
@@ -225,6 +281,14 @@ def test_complete_stock_in_workflow_through_http(client) -> None:
     assert assets["total"] == 1
     asset = assets["items"][0]
     assert asset["original_amount"] == "7999.00"
+    assert asset["supplier_id"] == supplier_id
+    assert asset["service_life_months"] == 48
+    assert asset["expected_expiry_date"] == "2030-07-17"
+    assert asset["custom_attributes"] == {
+        "warranty": {"years": 3, "onsite": True},
+        "tags": ["laptop", None, 2026],
+    }
+    assert asset["data_completeness"] == "COMPLETE"
     lifecycle = _data(
         client.get(f"/api/v1/assets/{asset['id']}/lifecycle", headers=admin_headers)
     )

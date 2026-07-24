@@ -22,11 +22,13 @@ from app.models import (
     Permission,
     Role,
     RolePermission,
+    StockInItem,
     StockInRequest,
     Unit,
     User,
     UserRole,
 )
+from app.repositories import asset_repository
 from app.security.passwords import hash_password
 from config import TestConfig
 
@@ -157,6 +159,36 @@ def test_approval_executes_formal_stock_in_and_is_idempotent(client) -> None:
     assert repeated["execution_status"] == "SUCCESS"
     assert db.session.query(Asset).count() == 1
     assert db.session.query(ApprovalRecord).count() == 1
+
+
+def test_approval_deep_copies_frozen_custom_attributes(
+    client,
+    monkeypatch,
+) -> None:
+    context = _workflow_setup(client)
+    request_id = context["request"]["id"]
+    stock_item = db.session.query(StockInItem).one()
+    stock_item.custom_attributes = {"nested": {"value": 1}}
+    db.session.commit()
+    original_add = asset_repository.add
+
+    def assert_isolated(asset: Asset) -> Asset:
+        assert (
+            asset.custom_attributes["nested"]
+            is not stock_item.custom_attributes["nested"]
+        )
+        return original_add(asset)
+
+    monkeypatch.setattr(asset_repository, "add", assert_isolated)
+
+    approved = client.post(
+        f"/api/v1/stock-in-requests/{request_id}/approve",
+        headers=context["approver_headers"],
+        json={"opinion": "同意"},
+    ).get_json()["data"]
+
+    assert approved["execution_status"] == "SUCCESS"
+    assert stock_item.custom_attributes == {"nested": {"value": 1}}
 
 
 def test_stock_in_self_approval_is_allowed_for_snapshotted_approver(client) -> None:

@@ -99,6 +99,11 @@ class AssetStatus(StringEnum):
     SCRAPPED = "SCRAPPED"
 
 
+class AssetDataCompleteness(StringEnum):
+    COMPLETE = "COMPLETE"
+    INCOMPLETE = "INCOMPLETE"
+
+
 class UsageType(StringEnum):
     PERSONAL = "PERSONAL"
     PUBLIC = "PUBLIC"
@@ -127,6 +132,7 @@ __all__ = [
     "ApprovalStatus",
     "AssigneeType",
     "AssetCodeStatus",
+    "AssetDataCompleteness",
     "AssetStatus",
     "DataScope",
     "ExecutionAttemptStatus",

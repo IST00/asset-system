@@ -72,6 +72,29 @@ def record_operation(
     )
 
 
+def record_resource_change(
+    *,
+    action: str,
+    resource_type: str,
+    resource_id: str | int,
+    actor_id: int,
+    before_data: Mapping[str, Any] | None,
+    after_data: Mapping[str, Any] | None,
+    reason: str | None = None,
+) -> None:
+    operation_log_repository.add(
+        OperationLog(
+            action=action,
+            resource_type=resource_type,
+            resource_id=str(resource_id),
+            operator_id=actor_id,
+            before_data=dict(before_data) if before_data is not None else None,
+            after_data=dict(after_data) if after_data is not None else None,
+            reason=reason,
+        )
+    )
+
+
 def record_asset_stock_in(
     *, asset_id: int, request_no: str, actor_id: int, after_data: dict[str, Any]
 ) -> None:
@@ -95,4 +118,9 @@ def record_asset_stock_in(
     )
 
 
-__all__ = ["record_asset_lifecycle", "record_asset_stock_in", "record_operation"]
+__all__ = [
+    "record_asset_lifecycle",
+    "record_asset_stock_in",
+    "record_operation",
+    "record_resource_change",
+]

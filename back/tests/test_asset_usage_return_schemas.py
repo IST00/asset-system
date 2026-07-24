@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sys
 from collections.abc import Callable
-from datetime import timedelta
+from datetime import date, timedelta
 from types import ModuleType
 from typing import Any
 
@@ -18,6 +18,7 @@ from app.enums import (
     ApprovalChannel,
     ApprovalExecutionMode,
     ApprovalStatus,
+    AssetDataCompleteness,
     AssetStatus,
     DataScope,
     ExecutionStatus,
@@ -597,9 +598,13 @@ def _independent_asset(context: Any, suffix: str) -> Asset:
         unit_id=context.main_asset.unit_id,
         original_amount=context.main_asset.original_amount,
         purchase_date=context.main_asset.purchase_date,
+        service_life_months=36,
+        expected_expiry_date=date(2029, 1, 1),
         manager_id=context.manager.id,
         source_id=context.main_asset.source_id,
         location_id=context.location.id,
+        custom_attributes={},
+        data_completeness=AssetDataCompleteness.COMPLETE.value,
     )
 
 

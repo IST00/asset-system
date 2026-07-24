@@ -58,6 +58,20 @@ class AssetBusinessLockRepository(BaseRepository[AssetBusinessLock]):
         )
         return list(db.session.scalars(statement).all())
 
+    def find_by_assets_for_update(
+        self, asset_ids: list[int]
+    ) -> list[AssetBusinessLock]:
+        ids = sorted(set(asset_ids))
+        if not ids:
+            return []
+        statement = (
+            select(AssetBusinessLock)
+            .where(AssetBusinessLock.asset_id.in_(ids))
+            .order_by(AssetBusinessLock.asset_id.asc())
+            .with_for_update()
+        )
+        return list(db.session.scalars(statement).all())
+
 
 class ExecutionAttemptRepository(BaseRepository[OperationExecutionAttempt]):
     def __init__(self) -> None:

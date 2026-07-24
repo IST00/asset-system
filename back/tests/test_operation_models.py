@@ -11,7 +11,13 @@ from sqlalchemy import JSON, UniqueConstraint
 import app.enums as domain_enums
 import app.models as domain_models
 import app.repositories as domain_repositories
-from app.enums import ApprovalStatus, AssetStatus, ExecutionStatus, FlowStatus
+from app.enums import (
+    ApprovalStatus,
+    AssetDataCompleteness,
+    AssetStatus,
+    ExecutionStatus,
+    FlowStatus,
+)
 from app.extensions import db
 from app.models import (
     ApprovalFlowAssigneeRule,
@@ -95,9 +101,13 @@ def _seed_asset_pair() -> tuple[User, OperationRequest, Asset, Asset]:
             unit_id=unit.id,
             original_amount=Decimal("1.00"),
             purchase_date=date(2026, 7, 17),
+            service_life_months=36,
+            expected_expiry_date=date(2029, 1, 1),
             manager_id=applicant.id,
             source_id=source.id,
             location_id=location.id,
+            custom_attributes={},
+            data_completeness=AssetDataCompleteness.COMPLETE.value,
         )
         for index in (1, 2)
     ]

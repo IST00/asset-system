@@ -42,6 +42,12 @@ from app.repositories.operation_repository import (
     operation_action_idempotency_repository,
 )
 from app.repositories.rbac_repository import RbacRepository, rbac_repository
+from app.repositories.supplier_repository import (
+    SupplierCodeSequenceRepository,
+    SupplierRepository,
+    supplier_code_sequence_repository,
+    supplier_repository,
+)
 from app.repositories.user_repository import UserRepository, user_repository
 from app.repositories.workflow_repository import (
     ApprovalRecordRepository,
@@ -82,6 +88,8 @@ __all__ = [
     "OperationRequestRepository",
     "StockInItemRepository",
     "StockInRequestRepository",
+    "SupplierCodeSequenceRepository",
+    "SupplierRepository",
     "rbac_repository",
     "organization_repository",
     "asset_code_reservation_repository",
@@ -102,4 +110,6 @@ __all__ = [
     "operation_request_repository",
     "stock_in_item_repository",
     "stock_in_request_repository",
+    "supplier_code_sequence_repository",
+    "supplier_repository",
 ]

@@ -15,8 +15,10 @@ from app.enums import (
     ApprovalChannel,
     ApprovalExecutionMode,
     ApprovalStatus,
+    AssetDataCompleteness,
     AssetStatus,
     ExecutionStatus,
+    OperationType,
 )
 from app.extensions import db
 from app.models import (
@@ -75,9 +77,13 @@ def _seed_assets(prefix: str = "LOCK") -> tuple[Organization, list[User], list[A
             unit_id=unit.id,
             original_amount=Decimal("1.00"),
             purchase_date=date(2026, 7, 17),
+            service_life_months=36,
+            expected_expiry_date=date(2029, 1, 1),
             manager_id=users[0].id,
             source_id=source.id,
             location_id=location.id,
+            custom_attributes={},
+            data_completeness=AssetDataCompleteness.COMPLETE.value,
         )
         for index in range(2)
     ]
@@ -161,6 +167,41 @@ def test_create_request_accepts_mixed_organizations_after_feature_validation(
     } == {asset.organization_id for asset in assets}
 
 
+@pytest.mark.parametrize(
+    ("field_name", "invalid_value"),
+    [
+        ("data_completeness", AssetDataCompleteness.INCOMPLETE.value),
+        ("unit_id", None),
+        ("source_id", None),
+        ("location_id", None),
+    ],
+)
+def test_return_create_request_rejects_incomplete_assets_before_snapshot_and_lock(
+    app,
+    field_name: str,
+    invalid_value: str | None,
+) -> None:
+    _organization, users, assets = _seed_assets(f"INCOMPLETE-{field_name.upper()}")
+    asset = assets[0]
+    setattr(asset, field_name, invalid_value)
+    db.session.flush()
+
+    with pytest.raises(BusinessException, match="^资产数据不完整，请先补齐$"):
+        _operation_service().create_request(
+            operation_type=OperationType.PERSONAL_RETURN.value,
+            applicant_id=users[0].id,
+            approval_channel=ApprovalChannel.INTERNAL.value,
+            approval_execution_mode=ApprovalExecutionMode.AUTO_ON_APPROVAL.value,
+            assets=[asset],
+            target_data_by_asset_id={asset.id: {"location_id": assets[1].location_id}},
+            idempotency_key=None,
+        )
+
+    assert db.session.query(OperationRequest).count() == 0
+    assert db.session.query(OperationRequestAsset).count() == 0
+    assert db.session.query(AssetBusinessLock).count() == 0
+
+
 @pytest.mark.parametrize("case", ["missing", "extra", "not-json"])
 def test_create_request_rejects_invalid_target_snapshots(app, case: str) -> None:
     _organization, users, assets = _seed_assets(f"TARGET-{case.upper()}")
@@ -199,9 +240,13 @@ def test_create_request_rejects_transient_asset_with_existing_database_id(
         unit_id=real.unit_id,
         original_amount=real.original_amount,
         purchase_date=real.purchase_date,
+        service_life_months=36,
+        expected_expiry_date=date(2029, 1, 1),
         manager_id=real.manager_id,
         source_id=real.source_id,
         location_id=real.location_id,
+        custom_attributes={},
+        data_completeness=AssetDataCompleteness.COMPLETE.value,
         version=77,
     )
 

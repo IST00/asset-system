@@ -1,5 +1,16 @@
 """Marshmallow schemas (DTO boundary)."""
 
+from app.schemas.asset import (
+    AssetVersionTargetSchema,
+    BatchCompleteAssetDataRequestSchema,
+    CompleteAssetDataRequestSchema,
+)
+from app.schemas.supplier import (
+    CreateSupplierRequestSchema,
+    DeleteSupplierRequestSchema,
+    SupplierVersionRequestSchema,
+    UpdateSupplierRequestSchema,
+)
 from app.schemas.user import (
     LoginRequestSchema,
     LoginResponseSchema,
@@ -9,9 +20,16 @@ from app.schemas.user import (
 )
 
 __all__ = [
+    "AssetVersionTargetSchema",
+    "BatchCompleteAssetDataRequestSchema",
+    "CompleteAssetDataRequestSchema",
+    "CreateSupplierRequestSchema",
+    "DeleteSupplierRequestSchema",
     "LoginRequestSchema",
     "LoginResponseSchema",
     "PageQuerySchema",
     "RegisterRequestSchema",
+    "SupplierVersionRequestSchema",
+    "UpdateSupplierRequestSchema",
     "UserResponseSchema",
 ]

@@ -200,6 +200,14 @@ class StockInItemRepository(BaseRepository[StockInItem]):
         )
         return list(db.session.scalars(stmt).all())
 
+    def has_supplier_reference(self, supplier_id: int) -> bool:
+        statement = (
+            select(StockInItem.id)
+            .where(StockInItem.supplier_id == supplier_id)
+            .limit(1)
+        )
+        return db.session.scalar(statement) is not None
+
     def normalized_serial_in_open_request(self, normalized_serial: str) -> bool:
         stmt = (
             select(StockInItem.id)

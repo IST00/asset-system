@@ -6,13 +6,19 @@ from flask import Blueprint, request
 from flask_jwt_extended import jwt_required
 
 from app.common import Result
+from app.schemas import (
+    BatchCompleteAssetDataRequestSchema,
+    CompleteAssetDataRequestSchema,
+)
 from app.schemas.asset import AssetPageQuerySchema
 from app.security import current_user_id
-from app.services import asset_service
+from app.services import asset_data_completion_service, asset_service
 
 bp = Blueprint("assets", __name__, url_prefix="/api/v1")
 
 _page_schema = AssetPageQuerySchema()
+_complete_data_schema = CompleteAssetDataRequestSchema()
+_batch_complete_data_schema = BatchCompleteAssetDataRequestSchema()
 
 
 @bp.get("/assets")
@@ -26,6 +32,7 @@ def page() -> dict:
         asset_code=query.get("asset_code"),
         asset_name=query.get("asset_name"),
         serial_number=query.get("serial_number"),
+        data_completeness=query.get("data_completeness"),
     )
     return Result.success(result.to_dict()).to_dict()
 
@@ -34,6 +41,31 @@ def page() -> dict:
 @jwt_required()
 def detail(asset_id: int) -> dict:
     return Result.success(asset_service.get(asset_id, current_user_id())).to_dict()
+
+
+@bp.post("/assets/<int:asset_id>/complete-data")
+@jwt_required()
+def complete_data(asset_id: int) -> dict:
+    payload = _complete_data_schema.load(request.get_json(silent=True) or {})
+    return Result.success(
+        asset_data_completion_service.complete_data(
+            asset_id,
+            payload,
+            current_user_id(),
+        )
+    ).to_dict()
+
+
+@bp.post("/assets/complete-data")
+@jwt_required()
+def complete_data_batch() -> dict:
+    payload = _batch_complete_data_schema.load(request.get_json(silent=True) or {})
+    return Result.success(
+        asset_data_completion_service.complete_data_batch(
+            payload,
+            current_user_id(),
+        )
+    ).to_dict()
 
 
 @bp.get("/assets/<int:asset_id>/lifecycle")

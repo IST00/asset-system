@@ -9,7 +9,12 @@ import pytest
 
 import app.services as services
 from app.common import BusinessException
-from app.enums import ApprovalStatus, AssetStatus, ExecutionStatus
+from app.enums import (
+    ApprovalStatus,
+    AssetDataCompleteness,
+    AssetStatus,
+    ExecutionStatus,
+)
 from app.extensions import db
 from app.models import (
     Asset,
@@ -54,9 +59,13 @@ def _seed_transition_assets() -> list[Asset]:
             unit_id=unit.id,
             original_amount=Decimal("1.00"),
             purchase_date=date(2026, 7, 21),
+            service_life_months=36,
+            expected_expiry_date=date(2029, 1, 1),
             manager_id=manager.id,
             source_id=source.id,
             location_id=location.id,
+            custom_attributes={},
+            data_completeness=AssetDataCompleteness.COMPLETE.value,
         )
         for index in (1, 2, 3, 4)
     ]

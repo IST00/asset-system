@@ -39,6 +39,7 @@ from app.models.rbac import (
     RolePermission,
     UserRole,
 )
+from app.models.supplier import Supplier, SupplierCodeSequence
 from app.models.user import User
 from app.models.workflow import (
     ApprovalRecord,
@@ -85,4 +86,6 @@ __all__ = [
     "Unit",
     "StockInItem",
     "StockInRequest",
+    "Supplier",
+    "SupplierCodeSequence",
 ]

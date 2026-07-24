@@ -16,6 +16,7 @@ from app.enums import (
     ApprovalChannel,
     ApprovalExecutionMode,
     ApprovalStatus,
+    AssetDataCompleteness,
     AssetStatus,
     DataScope,
     ExecutionStatus,
@@ -744,6 +745,32 @@ def test_personal_usage_common_location_is_snapshotted_for_every_asset(app) -> N
     assert db.session.query(AssetUsageRequest).one().target_location_id == (
         context.return_location.id
     )
+
+
+def test_personal_usage_target_location_cannot_bypass_incomplete_asset_gate(
+    app,
+) -> None:
+    context = seed_usage_return_context()
+    context.main_asset.location_id = None
+    context.main_asset.data_completeness = AssetDataCompleteness.INCOMPLETE.value
+    db.session.flush()
+    expected_version = context.main_asset.version
+    _grant_usage(context)
+
+    with pytest.raises(BusinessException, match="^资产数据不完整，请先补齐$"):
+        _usage_service().submit_personal(
+            _personal_payload(context, location_id=context.return_location.id),
+            context.manager.id,
+        )
+
+    _assert_no_usage_request_data()
+    assert context.main_asset.location_id is None
+    assert (
+        context.main_asset.data_completeness == AssetDataCompleteness.INCOMPLETE.value
+    )
+    assert context.main_asset.version == expected_version
+    assert db.session.query(AssetLifecycleRecord).count() == 0
+    assert db.session.query(OperationLog).count() == 0
 
 
 def test_personal_usage_target_snapshots_survive_master_data_changes(app) -> None:

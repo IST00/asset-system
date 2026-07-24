@@ -17,6 +17,7 @@ from app.enums import (
     ApprovalChannel,
     ApprovalExecutionMode,
     ApprovalStatus,
+    AssetDataCompleteness,
     ExecutionStatus,
 )
 from app.extensions import db
@@ -126,6 +127,11 @@ def _validate_assets_and_targets(
         state: InstanceState[Asset] = inspect(asset)
         if not state.persistent or state.session is not current_session:
             raise BusinessException("申请资产必须是当前事务中的持久化资产")
+        if asset.data_completeness != AssetDataCompleteness.COMPLETE.value or any(
+            value is None
+            for value in (asset.unit_id, asset.source_id, asset.location_id)
+        ):
+            raise BusinessException("资产数据不完整，请先补齐")
     ordered = sorted(assets, key=lambda asset: asset.id)
     asset_ids = [asset.id for asset in ordered]
     if any(asset_id is None for asset_id in asset_ids) or len(set(asset_ids)) != len(
