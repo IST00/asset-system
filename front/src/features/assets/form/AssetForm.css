@@ -1,0 +1,239 @@
+.asset-form {
+  width: 100%;
+}
+
+.asset-form > form > .asset-section-panel + .asset-section-panel {
+  margin-top: 16px;
+}
+
+.asset-form__workflow-note,
+.asset-form__generated-code {
+  display: flex;
+  align-items: flex-start;
+  color: var(--asset-color-brand-hover);
+  font-size: 13px;
+  line-height: 1.55;
+  background: var(--asset-color-brand-soft);
+  border: 1px solid rgba(37, 99, 235, 0.18);
+  border-radius: var(--asset-radius-sm);
+}
+
+.asset-form__workflow-note {
+  margin-bottom: 16px;
+  padding: 11px 14px;
+}
+
+.asset-form__generated-code {
+  margin-bottom: 18px;
+  padding: 12px 14px;
+}
+
+.asset-form__workflow-note > svg,
+.asset-form__generated-code > svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.asset-form__workflow-note > * + *,
+.asset-form__generated-code > * + * {
+  margin-left: 8px;
+}
+
+.asset-form__field-grid,
+.asset-form__readonly-grid {
+  display: flex;
+  flex-wrap: wrap;
+  margin: -8px;
+}
+
+.asset-form__field {
+  width: 50%;
+  margin-bottom: 0;
+  padding: 8px;
+}
+
+.asset-form__field--wide {
+  width: 100%;
+}
+
+.asset-form__field .ant-select,
+.asset-form__field .ant-picker,
+.asset-form__field .ant-input-number {
+  width: 100%;
+}
+
+.asset-form input.ant-input,
+.asset-form .ant-select-single,
+.asset-form .ant-select-single .ant-select-selector,
+.asset-form .ant-picker,
+.asset-form .ant-input-number,
+.asset-form .ant-btn {
+  min-height: 44px;
+}
+
+.asset-form .ant-input-number-input {
+  min-height: 42px;
+}
+
+.asset-form-unsaved-modal .ant-btn {
+  min-height: 44px;
+}
+
+.asset-form-select-popup .ant-select-item-option {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+}
+
+.asset-form-date-popup .ant-picker-header button {
+  min-width: 44px;
+  min-height: 44px;
+}
+
+.asset-form-date-popup .ant-picker-cell,
+.asset-form-date-popup .ant-picker-cell-inner {
+  min-width: 44px;
+  height: 44px;
+}
+
+.asset-form-date-popup .ant-picker-cell-inner {
+  line-height: 44px;
+}
+
+.asset-form-date-popup .ant-picker-today-btn {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+}
+
+.asset-form__readonly-grid {
+  margin-bottom: 10px;
+}
+
+.asset-form__readonly-grid--secondary {
+  margin-top: 10px;
+  margin-bottom: 0;
+}
+
+.asset-form__readonly-field {
+  width: calc(50% - 16px);
+  min-height: 70px;
+  margin: 8px;
+  padding: 13px 15px;
+  background: var(--asset-color-surface-muted);
+  border: 1px solid var(--asset-color-border);
+  border-radius: var(--asset-radius-sm);
+}
+
+.asset-form__readonly-field span,
+.asset-form__readonly-field strong {
+  display: block;
+}
+
+.asset-form__readonly-field span {
+  color: var(--asset-color-text-muted);
+  font-size: 12px;
+}
+
+.asset-form__readonly-field strong {
+  margin-top: 6px;
+  color: var(--asset-color-text);
+  font-size: 14px;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.asset-form__submit-error {
+  margin-top: 16px;
+  padding: 11px 14px;
+  color: var(--asset-color-danger);
+  font-size: 13px;
+  background: var(--asset-color-danger-soft);
+  border: 1px solid rgba(220, 53, 69, 0.2);
+  border-radius: var(--asset-radius-sm);
+}
+
+.asset-form__actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 20px;
+}
+
+.asset-form__actions > * + * {
+  margin-left: 10px;
+}
+
+.asset-form__loading-sections > .asset-section-panel + .asset-section-panel {
+  margin-top: 16px;
+}
+
+.asset-form__loading-grid {
+  display: flex;
+  flex-wrap: wrap;
+  margin: -8px;
+}
+
+.asset-form__loading-field {
+  width: 50%;
+  padding: 8px;
+}
+
+.asset-form__loading-field--wide {
+  width: 100%;
+}
+
+.asset-form__loading-label {
+  display: block;
+  width: 34% !important;
+  max-width: 132px;
+  height: 16px !important;
+  min-width: 72px;
+}
+
+.asset-form__loading-control {
+  width: 100% !important;
+  min-height: 44px;
+  margin-top: 8px;
+}
+
+@media (max-width: 767px) {
+  .asset-form__field-grid,
+  .asset-form__readonly-grid,
+  .asset-form__loading-grid {
+    display: block;
+    margin: 0;
+  }
+
+  .asset-form__field,
+  .asset-form__field--wide,
+  .asset-form__readonly-field,
+  .asset-form__loading-field,
+  .asset-form__loading-field--wide {
+    width: 100%;
+  }
+
+  .asset-form__field {
+    padding: 7px 0;
+  }
+
+  .asset-form__readonly-field {
+    margin: 8px 0;
+  }
+
+  .asset-form__loading-field {
+    padding: 7px 0;
+  }
+
+  .asset-form__actions {
+    display: block;
+  }
+
+  .asset-form__actions .ant-btn {
+    width: 100%;
+  }
+
+  .asset-form__actions > * + * {
+    margin-top: 10px;
+    margin-left: 0;
+  }
+}

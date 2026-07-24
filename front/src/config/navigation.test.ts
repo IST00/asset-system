@@ -25,3 +25,22 @@ test('marks exactly four destinations for mobile navigation', () => {
     ['home', 'assets', 'inventory', 'profile'],
   )
 })
+
+test('enables the assets destination while unfinished modules remain disabled', () => {
+  const assets = navigationEntries.find((entry) => entry.key === 'assets')
+  const unfinished = navigationEntries.filter((entry) =>
+    [
+      'workflows',
+      'inventory',
+      'approvals',
+      'imports',
+      'masterData',
+      'permissions',
+      'logs',
+    ].includes(entry.key),
+  )
+
+  assert.equal(assets?.disabled, undefined)
+  assert.equal(assets?.permission, 'asset:view')
+  assert.ok(unfinished.every((entry) => entry.disabled))
+})
