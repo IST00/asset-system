@@ -22,13 +22,14 @@ import type { LucideIcon } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useQuery } from '@tanstack/react-query'
+import { dashboardApi } from '@/api/dashboard'
 import PageHeader from '@/components/ui/PageHeader'
 import MetricCard from '@/components/ui/MetricCard'
 import type { MetricTone } from '@/components/ui/MetricCard'
 import SectionPanel from '@/components/ui/SectionPanel'
 import StatePanel from '@/components/ui/StatePanel'
 import { useAuthStore } from '@/store/auth'
-import { getDemoDashboardOverview } from './dashboardData'
+import { mapDashboardOverview } from './dashboardData'
 import { calculateProgress, countActionableIssues, selectPrimaryMetrics } from './dashboardModel'
 import type { DashboardIssues, DashboardOverview, DistributionTone, PrimaryMetric } from './types'
 import './Dashboard.css'
@@ -138,6 +139,14 @@ function DistributionList({
 }: {
   items: Array<{ name: string; value: number; tone: DistributionTone }>
 }) {
+  if (items.length === 0) {
+    return (
+      <div className="asset-dashboard__distribution-empty" role="status">
+        暂无资产分类数据
+      </div>
+    )
+  }
+
   const maxValue = Math.max(1, ...items.map((item) => item.value))
 
   return (
@@ -189,10 +198,14 @@ function DashboardContent({ overview }: { overview: DashboardOverview }) {
         meta={
           <span className="asset-dashboard__updated-at">
             <Clock3 aria-hidden="true" size={14} />
-            <span>{t('dashboard.updatedAt', { time: '2026-07-17 14:30' })}</span>
+            <span>实时后端数据</span>
           </span>
         }
       />
+
+      <div className="asset-dashboard__feedback" role="status">
+        首页指标已连接后端统计接口，并按照当前账号的数据权限实时汇总。
+      </div>
 
       {feedback ? (
         <div className="asset-dashboard__feedback" role="status" aria-live="polite">
@@ -286,7 +299,7 @@ function DashboardContent({ overview }: { overview: DashboardOverview }) {
               </div>
               <b>{progress}%</b>
             </div>
-            <Progress percent={progress} showInfo={false} strokeWidth={9} />
+            <Progress percent={progress} showInfo={false} size={['100%', 9]} />
             <div className="asset-dashboard__inventory-stats">
               <div>
                 <strong>{overview.inventory.checked}</strong>
@@ -304,6 +317,7 @@ function DashboardContent({ overview }: { overview: DashboardOverview }) {
             <Button
               type="primary"
               block
+              disabled={overview.inventory.total === 0}
               onClick={() => showFeedback(t('dashboard.inventory.enterTask'))}
             >
               {t('dashboard.inventory.enterTask')}
@@ -335,12 +349,22 @@ function DashboardContent({ overview }: { overview: DashboardOverview }) {
                     <span
                       className="is-brand"
                       title={`${t('dashboard.trend.intake')} ${item.intake}`}
-                      style={{ height: `${Math.max(8, (item.intake / maxMonthlyValue) * 100)}%` }}
+                      style={{
+                        height:
+                          item.intake === 0
+                            ? '0%'
+                            : `${Math.max(8, (item.intake / maxMonthlyValue) * 100)}%`,
+                      }}
                     />
                     <span
                       className="is-danger"
                       title={`${t('dashboard.trend.scrapped')} ${item.scrapped}`}
-                      style={{ height: `${Math.max(8, (item.scrapped / maxMonthlyValue) * 100)}%` }}
+                      style={{
+                        height:
+                          item.scrapped === 0
+                            ? '0%'
+                            : `${Math.max(8, (item.scrapped / maxMonthlyValue) * 100)}%`,
+                      }}
                     />
                   </div>
                   <small>{item.month}</small>
@@ -364,7 +388,11 @@ function DashboardContent({ overview }: { overview: DashboardOverview }) {
                 <span
                   key={item.key}
                   className={`is-${item.tone}`}
-                  style={{ width: `${(item.value / overview.metrics.total) * 100}%` }}
+                  style={{
+                    width: `${
+                      overview.metrics.total === 0 ? 0 : (item.value / overview.metrics.total) * 100
+                    }%`,
+                  }}
                 />
               ))}
             </div>
@@ -388,7 +416,7 @@ export default function Dashboard() {
   const { t } = useTranslation()
   const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['dashboard', 'overview'],
-    queryFn: getDemoDashboardOverview,
+    queryFn: async () => mapDashboardOverview(await dashboardApi.overview()),
   })
 
   if (isLoading) return <DashboardSkeleton />
@@ -402,7 +430,7 @@ export default function Dashboard() {
       />
     )
   }
-  if (!data || data.metrics.total === 0) {
+  if (!data) {
     return <StatePanel mode="empty" message={t('dashboard.empty')} />
   }
 

@@ -16,11 +16,16 @@ export interface User {
   username: string
   nickname?: string
   role?: string
+  roles?: string[]
+  organization_id?: number | null
   permissions?: string[]
+  enabled?: boolean
+  created_at?: string
+  updated_at?: string
 }
 
 export interface LoginResponse {
   token: string
-  tokenType: string
+  tokenType?: string
   user: User
 }

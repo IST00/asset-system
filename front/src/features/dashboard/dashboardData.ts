@@ -1,50 +1,63 @@
-import type { DashboardOverview } from './types.ts'
+import type { DashboardOverviewResponse } from '@/api/dashboard'
+import type { DashboardOverview, DistributionTone, StatusDistribution } from './types.ts'
 
-export const demoDashboardOverview: DashboardOverview = {
-  metrics: {
-    total: 156,
-    idle: 42,
-    inUse: 98,
-    repairing: 8,
-    scrapped: 3,
-  },
-  issues: {
-    pendingApprovals: 4,
-    inventoryExceptions: 3,
-    incompleteAssets: 12,
-    departedOwnerAssets: 2,
-  },
-  inventory: {
-    taskName: '2026 年第三季度资产盘点',
-    checked: 90,
-    total: 120,
-    exceptions: 3,
-  },
-  categories: [
-    { name: '电脑设备', value: 52, tone: 'brand' },
-    { name: '移动设备', value: 38, tone: 'success' },
-    { name: '显示设备', value: 24, tone: 'warning' },
-    { name: '办公设备', value: 20, tone: 'purple' },
-    { name: '会议设备', value: 12, tone: 'danger' },
-    { name: '其他', value: 10, tone: 'slate' },
-  ],
-  statuses: [
-    { key: 'idle', value: 42, tone: 'success' },
-    { key: 'inUse', value: 98, tone: 'brand' },
-    { key: 'repairing', value: 8, tone: 'danger' },
-    { key: 'pendingScrap', value: 5, tone: 'warning' },
-    { key: 'scrapped', value: 3, tone: 'slate' },
-  ],
-  monthlyChanges: [
-    { month: '2月', intake: 8, scrapped: 1 },
-    { month: '3月', intake: 12, scrapped: 2 },
-    { month: '4月', intake: 15, scrapped: 3 },
-    { month: '5月', intake: 10, scrapped: 2 },
-    { month: '6月', intake: 14, scrapped: 4 },
-    { month: '7月', intake: 12, scrapped: 3 },
-  ],
+const categoryTones: DistributionTone[] = [
+  'brand',
+  'success',
+  'warning',
+  'purple',
+  'danger',
+  'slate',
+]
+
+const statusPresentation: Record<
+  DashboardOverviewResponse['statuses'][number]['status'],
+  Pick<StatusDistribution, 'key' | 'tone'>
+> = {
+  IDLE: { key: 'idle', tone: 'success' },
+  IN_USE: { key: 'inUse', tone: 'brand' },
+  REPAIRING: { key: 'repairing', tone: 'danger' },
+  SCRAPPED: { key: 'scrapped', tone: 'slate' },
 }
 
-export function getDemoDashboardOverview(): Promise<DashboardOverview> {
-  return Promise.resolve(demoDashboardOverview)
+function formatMonth(month: string): string {
+  const match = /^(\d{4})-(\d{2})$/.exec(month)
+  return match ? `${Number(match[2])}月` : month
+}
+
+export function mapDashboardOverview(response: DashboardOverviewResponse): DashboardOverview {
+  return {
+    metrics: {
+      total: response.metrics.total,
+      idle: response.metrics.idle,
+      inUse: response.metrics.in_use,
+      repairing: response.metrics.repairing,
+      scrapped: response.metrics.scrapped,
+    },
+    issues: {
+      pendingApprovals: response.issues.pending_approvals,
+      inventoryExceptions: response.issues.inventory_exceptions,
+      incompleteAssets: response.issues.incomplete_assets,
+      departedOwnerAssets: response.issues.departed_owner_assets,
+    },
+    inventory: {
+      taskName: response.inventory.task_name,
+      checked: response.inventory.checked,
+      total: response.inventory.total,
+      exceptions: response.inventory.exceptions,
+    },
+    categories: response.categories.map((item, index) => ({
+      ...item,
+      tone: categoryTones[index % categoryTones.length],
+    })),
+    statuses: response.statuses.map((item) => ({
+      ...statusPresentation[item.status],
+      value: item.value,
+    })),
+    monthlyChanges: response.monthly_changes.map((item) => ({
+      month: formatMonth(item.month),
+      intake: item.intake,
+      scrapped: item.scrapped,
+    })),
+  }
 }

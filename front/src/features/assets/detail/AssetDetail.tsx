@@ -1,4 +1,4 @@
-import { Skeleton, Tabs } from 'antd'
+import { Skeleton, Spin, Tabs } from 'antd'
 import {
   ArrowLeft,
   BadgeInfo,
@@ -9,7 +9,7 @@ import {
   Inbox,
   MapPin,
   Network,
-  Pencil,
+  Workflow,
   ReceiptText,
   ScanLine,
   Trash2,
@@ -20,7 +20,7 @@ import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useQuery } from '@tanstack/react-query'
 import { Link, useParams } from 'react-router-dom'
-import { getAsset } from '@/api/assets'
+import { getAsset, getAssetLifecycle, type AssetLifecycleRecord } from '@/api/assets'
 import PageHeader from '@/components/ui/PageHeader'
 import SectionPanel from '@/components/ui/SectionPanel'
 import StatePanel from '@/components/ui/StatePanel'
@@ -109,6 +109,66 @@ function DetailPageState({ message, onRetry }: { message: string; onRetry?: () =
         onRetry={onRetry}
       />
     </div>
+  )
+}
+
+const lifecycleTypeLabels: Record<string, string> = {
+  STOCK_IN: '资产入库',
+  PERSONAL_USE: '个人领用',
+  PUBLIC_USE: '公共领用',
+  PERSONAL_RETURN: '个人退库',
+  PUBLIC_RETURN: '公共退库',
+  TRANSFER: '资产调拨',
+  REPAIR_START: '发起维修',
+  REPAIR_COMPLETE: '维修完成',
+  DATA_COMPLETION: '资料补录',
+}
+
+function LifecycleTab({ assetId }: { assetId: number }) {
+  const query = useQuery({
+    queryKey: ['assets', 'lifecycle', assetId],
+    queryFn: () => getAssetLifecycle(assetId),
+  })
+
+  if (query.isLoading) {
+    return (
+      <div className="asset-detail__timeline-loading">
+        <Spin />
+      </div>
+    )
+  }
+  if (query.isError) {
+    return (
+      <StatePanel
+        mode="error"
+        message="资产生命周期加载失败"
+        retryLabel="重新加载"
+        onRetry={() => void query.refetch()}
+      />
+    )
+  }
+  if (!query.data?.length) {
+    return <StatePanel mode="empty" message="当前资产暂无生命周期记录" />
+  }
+
+  return (
+    <SectionPanel title="生命周期轨迹" icon={<FileClock aria-hidden="true" size={18} />}>
+      <div className="asset-detail__timeline">
+        {query.data.map((record: AssetLifecycleRecord) => (
+          <article key={record.id} className="asset-detail__timeline-item">
+            <span className="asset-detail__timeline-dot" aria-hidden="true" />
+            <div>
+              <strong>{lifecycleTypeLabels[record.operation_type] ?? record.operation_type}</strong>
+              <p>{record.remark || '后端未记录备注'}</p>
+              <small>
+                {record.operation_no} · 操作人 #{record.operator_id} ·{' '}
+                {formatAssetDateTime(record.created_at, 'zh-CN')}
+              </small>
+            </div>
+          </article>
+        ))}
+      </div>
+    </SectionPanel>
   )
 }
 
@@ -202,6 +262,8 @@ function AssetDetailContent({ asset }: { asset: AssetDetailRecord }) {
     children:
       tab.key === 'basic' ? (
         <BasicInformation asset={asset} showAmount={showAmount} />
+      ) : tab.key === 'history' ? (
+        <LifecycleTab assetId={asset.id} />
       ) : (
         <EmptyTab tab={tab} />
       ),
@@ -229,10 +291,10 @@ function AssetDetailContent({ asset }: { asset: AssetDetailRecord }) {
             </Link>
             <Link
               className="asset-detail__action-link asset-detail__action-link--primary"
-              to={`/assets/${asset.id}/edit`}
+              to="/workflows"
             >
-              <Pencil aria-hidden="true" size={16} />
-              <span>{t('assets.detail.actions.edit')}</span>
+              <Workflow aria-hidden="true" size={16} />
+              <span>通过流程变更</span>
             </Link>
           </div>
         }

@@ -8,12 +8,12 @@ import pkg from './package.json'
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
   const apiPrefix = (env.VITE_API_PREFIX ?? '').replace(/\/+$/, '')
-  const apiBase = (env.VITE_API_BASE_URL ?? '/api').replace(/\/+$/, '') || '/api'
+  const apiBase = (env.VITE_API_BASE_URL ?? '/api/v1').replace(/\/+$/, '') || '/api/v1'
   // Vite 代理需要拦截 `${prefix}${base}` 这段完整前缀，再把它剥掉后打到后端，
   // 保持跟生产 nginx 的行为一致（location /prefix/ + proxy_pass http://back/）。
-  const proxyPath = `${apiPrefix}${apiBase}` || '/api'
+  const proxyPath = `${apiPrefix}${apiBase}` || '/api/v1'
 
-  // 前端静态资源部署前缀。开发默认 '/'，生产通过 VITE_APP_BASE 注入 '/scaffold-ui/'。
+  // 前端静态资源部署前缀。开发默认 '/'，生产通过 VITE_APP_BASE 注入实际部署子路径。
   // Vite 把它写入 import.meta.env.BASE_URL，同时自动改写 index.html 与 import 引用。
   // 必须以 '/' 开头和结尾；这里做一次强制规范，避免尾部丢斜杠导致 nginx try_files 踩坑。
   const rawBase = env.VITE_APP_BASE || '/'

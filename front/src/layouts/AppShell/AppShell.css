@@ -1,42 +1,83 @@
 .asset-shell {
   min-height: 100vh;
-  background: var(--asset-color-canvas);
+  background: transparent;
 }
 
 .asset-shell__rail {
   position: fixed;
-  z-index: 20;
-  top: 0;
-  bottom: 0;
-  left: 0;
+  z-index: 30;
+  top: 14px;
+  bottom: 14px;
+  left: 14px;
   display: flex;
   width: var(--asset-rail-width);
   flex-direction: column;
   align-items: center;
-  padding: 16px 10px;
+  padding: 12px 10px;
   color: #ffffff;
-  background: var(--asset-color-rail);
-  border-right: 1px solid rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+  background:
+    linear-gradient(150deg, rgba(255, 255, 255, 0.13), transparent 28%),
+    linear-gradient(180deg, rgba(15, 35, 68, 0.9), rgba(8, 20, 42, 0.8));
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 28px;
+  box-shadow:
+    0 24px 54px rgba(10, 29, 60, 0.27),
+    inset 0 1px 0 rgba(255, 255, 255, 0.28),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.18);
+  backdrop-filter: blur(28px) saturate(150%);
+  -webkit-backdrop-filter: blur(28px) saturate(150%);
+}
+
+.asset-shell__rail::after {
+  position: absolute;
+  inset: 1px 8px auto;
+  height: 34%;
+  content: '';
+  pointer-events: none;
+  background: linear-gradient(180deg, rgba(91, 200, 255, 0.1), transparent);
+  border-radius: 24px;
+}
+
+.asset-shell__brand,
+.asset-shell__rail-nav,
+.asset-shell__rail-footer {
+  position: relative;
+  z-index: 1;
 }
 
 .asset-shell__brand {
   display: flex;
-  width: 46px;
-  height: 46px;
+  width: 48px;
+  height: 48px;
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
   color: #ffffff;
   cursor: pointer;
-  background: var(--asset-color-brand);
-  border: 0;
+  background: linear-gradient(180deg, #4f8af3 0%, #2f69d8 100%);
+  border: 1px solid rgba(255, 255, 255, 0.34);
   border-radius: 14px;
-  box-shadow: 0 10px 24px rgba(37, 99, 235, 0.32);
+  box-shadow:
+    0 4px 12px rgba(19, 75, 171, 0.32),
+    inset 0 1px 0 rgba(255, 255, 255, 0.32);
+  transition: background 140ms ease, box-shadow 140ms ease, transform 90ms ease;
+}
+
+.asset-shell__brand:hover {
+  background: linear-gradient(180deg, #5b94f6 0%, #3974df 100%);
+  box-shadow:
+    0 6px 16px rgba(19, 75, 171, 0.36),
+    inset 0 1px 0 rgba(255, 255, 255, 0.38);
+}
+
+.asset-shell__brand:active {
+  transform: scale(0.96);
 }
 
 .asset-shell__rail-nav {
   width: 100%;
-  margin-top: 28px;
+  margin-top: 25px;
 }
 
 .asset-shell__rail-nav > * + *,
@@ -46,42 +87,63 @@
 
 .asset-shell__rail-button,
 .asset-shell__account-button {
+  position: relative;
   display: flex;
   width: 48px;
-  height: 44px;
+  height: 46px;
   align-items: center;
   justify-content: center;
   margin-right: auto;
   margin-left: auto;
-  color: #9ba7bb;
+  color: rgba(220, 231, 248, 0.68);
   cursor: pointer;
   background: transparent;
-  border: 0;
-  border-radius: var(--asset-radius-md);
+  border: 1px solid transparent;
+  border-radius: 13px;
   transition:
-    color 160ms ease,
-    background-color 160ms ease,
-    transform 160ms ease;
+    color 180ms ease,
+    background 180ms ease,
+    border-color 180ms ease,
+    transform 90ms ease,
+    box-shadow 140ms ease;
 }
 
-.asset-shell__rail-button:hover,
+.asset-shell__rail-button:hover {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
 .asset-shell__rail-button--active {
   color: #ffffff;
-  background: rgba(37, 99, 235, 0.92);
+  background: rgba(75, 132, 226, 0.42);
+  border-color: rgba(151, 197, 255, 0.34);
+  box-shadow:
+    0 3px 9px rgba(8, 41, 99, 0.26),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22);
 }
 
-.asset-shell__rail-button--active {
-  box-shadow: 0 8px 20px rgba(37, 99, 235, 0.28);
+.asset-shell__rail-button--active::after {
+  position: absolute;
+  right: -8px;
+  width: 3px;
+  height: 18px;
+  content: '';
+  background: #8ddcff;
+  border-radius: 999px;
+  box-shadow: 0 0 14px rgba(91, 200, 255, 0.9);
 }
 
 .asset-shell__rail-button--disabled {
   cursor: default;
-  opacity: 0.58;
+  opacity: 0.46;
 }
 
 .asset-shell__rail-button--disabled:hover {
-  color: #9ba7bb;
+  color: rgba(220, 231, 248, 0.68);
   background: transparent;
+  border-color: transparent;
+  transform: none;
 }
 
 .asset-shell__rail-footer {
@@ -90,27 +152,42 @@
 }
 
 .asset-shell__account-button {
-  height: 40px;
+  height: 42px;
   color: inherit;
 }
 
+.asset-shell__account-button .ant-avatar,
+.asset-shell__user-button .ant-avatar,
+.asset-shell__drawer-user .ant-avatar {
+  color: #ffffff;
+  background: linear-gradient(145deg, #72d0fb, #356de4 58%, #615bd2);
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.5);
+}
+
 .asset-shell__account-button:hover {
-  transform: translateY(-1px);
+  border-color: rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .asset-shell__workspace {
   min-height: 100vh;
-  margin-left: var(--asset-rail-width);
+  margin-left: calc(var(--asset-rail-width) + 28px);
 }
 
 .asset-shell__topbar {
+  position: sticky;
+  z-index: 20;
+  top: 0;
   display: flex;
-  min-height: 68px;
+  min-height: 72px;
   align-items: center;
   justify-content: flex-end;
-  padding: 0 32px;
-  background: rgba(245, 247, 251, 0.94);
-  border-bottom: 1px solid var(--asset-color-border);
+  padding: 10px 32px;
+  background: linear-gradient(180deg, rgba(238, 244, 251, 0.88), rgba(238, 244, 251, 0.52));
+  border-bottom: 1px solid rgba(255, 255, 255, 0.62);
+  backdrop-filter: blur(24px) saturate(155%);
+  -webkit-backdrop-filter: blur(24px) saturate(155%);
 }
 
 .asset-shell__mobile-brand {
@@ -118,7 +195,8 @@
   align-items: center;
   color: var(--asset-color-brand);
   font-size: 17px;
-  font-weight: 700;
+  font-weight: 720;
+  letter-spacing: -0.02em;
 }
 
 .asset-shell__mobile-brand > * + * {
@@ -128,16 +206,37 @@
 .asset-shell__topbar-actions {
   display: flex;
   align-items: center;
+  padding: 3px;
+  background: rgba(255, 255, 255, 0.48);
+  border: 1px solid rgba(94, 121, 160, 0.14);
+  border-radius: 15px;
+  box-shadow:
+    0 2px 8px rgba(34, 68, 117, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 0.74);
+  backdrop-filter: blur(16px) saturate(125%);
+  -webkit-backdrop-filter: blur(16px) saturate(125%);
 }
 
 .asset-shell__topbar-actions > * + * {
-  margin-left: 8px;
+  margin-left: 4px;
+}
+
+.asset-shell__topbar-actions .ant-btn {
+  box-shadow: none;
+}
+
+.asset-shell__topbar-actions > .ant-btn:first-child,
+.asset-shell__more-button {
+  background: transparent;
+  border: 1px solid transparent;
 }
 
 .asset-shell__user-button {
   height: 42px;
-  padding: 4px 8px;
+  padding: 4px 10px 4px 5px;
   color: var(--asset-color-text);
+  border-color: transparent;
+  background: transparent;
 }
 
 .asset-shell__user-button > * + * {
@@ -149,7 +248,7 @@
 }
 
 .asset-shell__content {
-  padding: 28px 32px 48px;
+  padding: 28px 32px 52px;
 }
 
 .asset-shell__content-inner {
@@ -167,7 +266,7 @@
   display: flex;
   align-items: center;
   padding: 4px 0 20px;
-  border-bottom: 1px solid var(--asset-color-border);
+  border-bottom: 1px solid var(--asset-color-border-strong);
 }
 
 .asset-shell__drawer-user > * + * {
@@ -197,25 +296,32 @@
 .asset-shell__drawer-logout {
   display: flex;
   width: 100%;
-  min-height: 44px;
+  min-height: 46px;
   align-items: center;
   padding: 10px 12px;
   color: var(--asset-color-text);
   text-align: left;
   cursor: pointer;
-  background: transparent;
-  border: 0;
-  border-radius: var(--asset-radius-sm);
+  background: rgba(255, 255, 255, 0.44);
+  border: 1px solid transparent;
+  border-radius: 11px;
+  transition: background 140ms ease, border-color 140ms ease, transform 90ms ease;
 }
 
 .asset-shell__drawer-nav button:hover,
 .asset-shell__drawer-logout:hover {
-  background: var(--asset-color-surface-muted);
+  background: rgba(255, 255, 255, 0.72);
+  border-color: rgba(83, 108, 146, 0.2);
+}
+
+.asset-shell__drawer-nav button:active,
+.asset-shell__drawer-logout:active {
+  transform: scale(0.985);
 }
 
 .asset-shell__drawer-nav button[aria-disabled='true'] {
   cursor: default;
-  opacity: 0.62;
+  opacity: 0.55;
 }
 
 .asset-shell__drawer-nav button > * + *,
@@ -231,8 +337,7 @@
 .asset-shell__drawer-logout {
   margin-top: 20px;
   color: var(--asset-color-danger);
-  border-top: 1px solid var(--asset-color-border);
-  border-radius: 0;
+  background: var(--asset-color-danger-soft);
 }
 
 @media (max-width: 767px) {
@@ -242,14 +347,14 @@
 
   .asset-shell__workspace {
     margin-left: 0;
-    padding-bottom: 68px;
+    padding-bottom: calc(86px + env(safe-area-inset-bottom));
   }
 
   .asset-shell__topbar {
-    min-height: 60px;
+    min-height: 64px;
     justify-content: space-between;
-    padding: 0 16px;
-    background: var(--asset-color-surface);
+    padding: 8px 16px;
+    background: rgba(239, 246, 253, 0.72);
   }
 
   .asset-shell__mobile-brand,
@@ -261,57 +366,129 @@
     display: none;
   }
 
+  .asset-shell__topbar-actions {
+    padding: 3px;
+    border-radius: 16px;
+  }
+
   .asset-shell__content {
-    padding: 20px 16px 32px;
+    padding: 20px 16px 34px;
   }
 
   .asset-shell__mobile-nav {
     position: fixed;
-    z-index: 25;
-    right: 0;
-    bottom: 0;
-    left: 0;
+    z-index: 35;
+    right: 10px;
+    bottom: calc(10px + env(safe-area-inset-bottom));
+    left: 10px;
     display: flex;
-    min-height: 66px;
-    padding: 6px 4px calc(6px + env(safe-area-inset-bottom));
-    background: var(--asset-color-surface);
-    border-top: 1px solid var(--asset-color-border);
-    box-shadow: 0 -8px 22px rgba(23, 32, 51, 0.07);
+    min-height: 68px;
+    padding: 6px;
+    overflow: hidden;
+    background:
+      linear-gradient(145deg, rgba(255, 255, 255, 0.7), rgba(228, 240, 255, 0.5)),
+      rgba(247, 250, 255, 0.66);
+    border: 1px solid rgba(255, 255, 255, 0.88);
+    border-radius: 24px;
+    box-shadow:
+      0 18px 42px rgba(28, 60, 107, 0.2),
+      inset 0 1px 0 #ffffff;
+    backdrop-filter: blur(28px) saturate(165%);
+    -webkit-backdrop-filter: blur(28px) saturate(165%);
   }
 
   .asset-shell__mobile-nav-item {
+    position: relative;
     display: flex;
-    width: 25%;
-    min-height: 52px;
+    min-width: 0;
+    min-height: 54px;
+    flex: 1;
     flex-direction: column;
     align-items: center;
     justify-content: center;
     color: var(--asset-color-text-muted);
     cursor: pointer;
     background: transparent;
-    border: 0;
-    border-radius: var(--asset-radius-sm);
+    border: 1px solid transparent;
+    border-radius: 15px;
+    transition: color 140ms ease, background 140ms ease, transform 90ms ease;
   }
 
   .asset-shell__mobile-nav-item span {
+    max-width: 100%;
     margin-top: 4px;
-    font-size: 11px;
-    line-height: 1.2;
+    font-size: 10px;
+    line-height: 1.15;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .asset-shell__mobile-nav-item.is-active {
-    color: var(--asset-color-brand);
-    background: var(--asset-color-brand-soft);
+    color: #1d5ad7;
+    background: rgba(215, 232, 255, 0.72);
+    border-color: rgba(82, 131, 207, 0.18);
+    box-shadow:
+      0 2px 6px rgba(37, 99, 235, 0.1),
+      inset 0 1px 0 rgba(255, 255, 255, 0.68);
+  }
+
+  .asset-shell__mobile-nav-item.is-active::after {
+    position: absolute;
+    bottom: 4px;
+    width: 16px;
+    height: 2px;
+    content: '';
+    background: #3478f6;
+    border-radius: 999px;
+    box-shadow: 0 0 8px rgba(52, 120, 246, 0.58);
   }
 
   .asset-shell__mobile-nav-item[aria-disabled='true'] {
-    opacity: 0.55;
+    opacity: 0.48;
+  }
+}
+
+@supports not ((backdrop-filter: blur(2px)) or (-webkit-backdrop-filter: blur(2px))) {
+  .asset-shell__rail {
+    background: #102445;
+  }
+
+  .asset-shell__topbar,
+  .asset-shell__mobile-nav,
+  .asset-shell__topbar-actions {
+    background: #f7faff;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .asset-shell__brand,
   .asset-shell__rail-button,
-  .asset-shell__account-button {
+  .asset-shell__account-button,
+  .asset-shell__drawer-nav button,
+  .asset-shell__drawer-logout,
+  .asset-shell__mobile-nav-item {
     transition: none;
   }
+}
+
+
+/* Rail hints are informational only: they must never intercept clicks on nearby icons. */
+.asset-shell__rail-tooltip {
+  pointer-events: none;
+}
+
+.asset-shell__rail-tooltip .ant-tooltip-inner {
+  max-width: 220px;
+  padding: 7px 10px;
+  color: rgba(255, 255, 255, 0.96);
+  font-size: 12px;
+  line-height: 1.35;
+  white-space: nowrap;
+  background: rgba(12, 28, 54, 0.86);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(4, 17, 38, 0.2);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
 }
