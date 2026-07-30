@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import datetime, timezone
 from typing import Any
+
+from sqlalchemy import func, select
+from sqlalchemy.orm import aliased
 
 from app.common import BusinessException, PageResult, ResultCode
 from app.enums import (
@@ -13,7 +17,19 @@ from app.enums import (
     AssetStatus,
     ExecutionStatus,
 )
-from app.models import Asset
+from app.extensions import db
+from app.models import (
+    ApprovalTask,
+    Asset,
+    AssetCategory,
+    AssetLifecycleRecord,
+    AssetLocation,
+    AssetSource,
+    Organization,
+    Supplier,
+    Unit,
+    User,
+)
 from app.repositories import (
     QuerySpec,
     asset_code_reservation_repository,
@@ -107,28 +123,55 @@ def stock_in_request(operation_request_id: int, actor_id: int) -> None:
     stock_in_item_repository.release_serial_reservations(stock_in.id)
 
 
+def _entity_name(model: type[Any], entity_id: int | None) -> str | None:
+    if entity_id is None:
+        return None
+    entity = db.session.get(model, entity_id)
+    if entity is None:
+        return None
+    if isinstance(entity, User):
+        return entity.nickname or entity.username
+    return str(entity.name)
+
+
 def _serialize(asset: Asset, include_amount: bool) -> dict[str, Any]:
     result: dict[str, Any] = {
         "id": asset.id,
         "asset_code": asset.asset_code,
         "asset_name": asset.asset_name,
         "status": asset.status,
+        "version": asset.version,
         "organization_id": asset.organization_id,
+        "company_name": _entity_name(Organization, asset.organization_id),
         "category_id": asset.category_id,
+        "category_name": _entity_name(AssetCategory, asset.category_id),
         "unit_id": asset.unit_id,
+        "unit_name": _entity_name(Unit, asset.unit_id),
         "supplier_id": asset.supplier_id,
+        "supplier_name": _entity_name(Supplier, asset.supplier_id),
         "purchase_date": asset.purchase_date.isoformat(),
         "service_life_months": asset.service_life_months,
         "expected_expiry_date": asset.expected_expiry_date.isoformat(),
         "manager_id": asset.manager_id,
+        "manager_name": _entity_name(User, asset.manager_id),
+        "holder_user_id": asset.holder_user_id,
+        "user_name": _entity_name(User, asset.holder_user_id),
+        "usage_department_id": asset.usage_department_id,
+        "department_name": _entity_name(Organization, asset.usage_department_id),
         "source_id": asset.source_id,
+        "source_name": _entity_name(AssetSource, asset.source_id),
         "location_id": asset.location_id,
+        "location_name": _entity_name(AssetLocation, asset.location_id),
         "specification_model": asset.specification_model,
+        "model": asset.specification_model,
         "serial_number": asset.serial_number,
         "receipt_no": asset.receipt_no,
+        "receipt_number": asset.receipt_no,
         "remark": asset.remark,
         "custom_attributes": dict(asset.custom_attributes),
         "data_completeness": asset.data_completeness,
+        "information_complete": asset.data_completeness
+        == AssetDataCompleteness.COMPLETE.value,
         "missing_fields": asset_data_service.missing_fields(
             asset.unit_id, asset.source_id, asset.location_id
         ),
@@ -137,8 +180,134 @@ def _serialize(asset: Asset, include_amount: bool) -> dict[str, Any]:
     }
     if include_amount:
         result["original_amount"] = f"{asset.original_amount:.2f}"
+        result["purchase_amount"] = float(asset.original_amount)
         result["zero_amount_reason"] = asset.zero_amount_reason
     return result
+
+
+def _month_start(value: datetime, offset: int = 0) -> datetime:
+    month_index = value.year * 12 + value.month - 1 + offset
+    year, month_zero = divmod(month_index, 12)
+    return datetime(year, month_zero + 1, 1, tzinfo=timezone.utc)
+
+
+def dashboard(actor_id: int) -> dict[str, Any]:
+    """Return real-time dashboard aggregates within the actor's data scope."""
+    permission_service.require_permission(actor_id, "asset:view")
+    access = asset_access_service.access_filter(actor_id)
+
+    status_counts = {
+        str(status): int(count)
+        for status, count in db.session.execute(
+            select(Asset.status, func.count(Asset.id))
+            .where(access)
+            .group_by(Asset.status)
+        ).all()
+    }
+    total = sum(status_counts.values())
+
+    category_rows = db.session.execute(
+        select(AssetCategory.name, func.count(Asset.id))
+        .join(Asset, Asset.category_id == AssetCategory.id)
+        .where(access)
+        .group_by(AssetCategory.id, AssetCategory.name)
+        .order_by(func.count(Asset.id).desc(), AssetCategory.id.asc())
+    ).all()
+
+    incomplete_assets = int(
+        db.session.scalar(
+            select(func.count(Asset.id)).where(
+                access,
+                Asset.data_completeness == AssetDataCompleteness.INCOMPLETE.value,
+            )
+        )
+        or 0
+    )
+    holder = aliased(User)
+    departed_owner_assets = int(
+        db.session.scalar(
+            select(func.count(Asset.id))
+            .outerjoin(holder, holder.id == Asset.holder_user_id)
+            .where(access, Asset.holder_user_id.is_not(None), holder.enabled.is_(False))
+        )
+        or 0
+    )
+    pending_approvals = 0
+    if permission_service.has_permission(actor_id, "approval:task:view"):
+        pending_approvals = int(
+            db.session.scalar(
+                select(func.count(ApprovalTask.id)).where(
+                    ApprovalTask.approver_id == actor_id,
+                    ApprovalTask.status == "PENDING",
+                )
+            )
+            or 0
+        )
+
+    current_month = _month_start(datetime.now(tz=timezone.utc))
+    month_starts = [_month_start(current_month, offset) for offset in range(-5, 1)]
+    month_keys = [item.strftime("%Y-%m") for item in month_starts]
+    intake_counts = dict.fromkeys(month_keys, 0)
+    scrapped_counts = dict.fromkeys(month_keys, 0)
+
+    intake_dates = db.session.scalars(
+        select(Asset.created_at).where(access, Asset.created_at >= month_starts[0])
+    ).all()
+    for created_at in intake_dates:
+        key = created_at.strftime("%Y-%m")
+        if key in intake_counts:
+            intake_counts[key] += 1
+
+    lifecycle_rows = db.session.execute(
+        select(AssetLifecycleRecord.created_at, AssetLifecycleRecord.after_data)
+        .join(Asset, Asset.id == AssetLifecycleRecord.asset_id)
+        .where(access, AssetLifecycleRecord.created_at >= month_starts[0])
+    ).all()
+    for created_at, after_data in lifecycle_rows:
+        if not isinstance(after_data, dict):
+            continue
+        if after_data.get("status") != AssetStatus.SCRAPPED.value:
+            continue
+        key = created_at.strftime("%Y-%m")
+        if key in scrapped_counts:
+            scrapped_counts[key] += 1
+
+    return {
+        "metrics": {
+            "total": total,
+            "idle": status_counts.get(AssetStatus.IDLE.value, 0),
+            "in_use": status_counts.get(AssetStatus.IN_USE.value, 0),
+            "repairing": status_counts.get(AssetStatus.REPAIRING.value, 0),
+            "scrapped": status_counts.get(AssetStatus.SCRAPPED.value, 0),
+        },
+        "issues": {
+            "pending_approvals": pending_approvals,
+            "inventory_exceptions": 0,
+            "incomplete_assets": incomplete_assets,
+            "departed_owner_assets": departed_owner_assets,
+        },
+        "inventory": {
+            "task_name": "暂无进行中的盘点任务",
+            "checked": 0,
+            "total": 0,
+            "exceptions": 0,
+        },
+        "categories": [
+            {"name": str(name), "value": int(count)} for name, count in category_rows
+        ],
+        "statuses": [
+            {"status": status.value, "value": status_counts.get(status.value, 0)}
+            for status in AssetStatus
+        ],
+        "monthly_changes": [
+            {
+                "month": key,
+                "intake": intake_counts[key],
+                "scrapped": scrapped_counts[key],
+            }
+            for key in month_keys
+        ],
+    }
 
 
 def page(

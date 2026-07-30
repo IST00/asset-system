@@ -197,6 +197,52 @@ def test_asset_list_applies_scope_and_amount_field_permission(client) -> None:
     assert self_result["items"][0]["asset_code"] == asset.asset_code
 
 
+def test_asset_dashboard_returns_real_scoped_aggregates(client) -> None:
+    organization, _other, manager, asset = _asset_fixture()
+    departed_holder = User(
+        username="departed-holder",
+        password="x",
+        enabled=False,
+        organization_id=organization.id,
+    )
+    db.session.add(departed_holder)
+    db.session.flush()
+    second = _copy_asset(
+        asset,
+        asset_code="ASSET-DASHBOARD-SECOND",
+        organization_id=organization.id,
+        manager_id=manager.id,
+        holder_user_id=departed_holder.id,
+    )
+    second.status = AssetStatus.IN_USE.value
+    second.data_completeness = AssetDataCompleteness.INCOMPLETE.value
+    db.session.commit()
+    _user, headers = _reader(
+        client,
+        "dashboard-reader",
+        DataScope.ALL.value,
+        ["asset:view"],
+    )
+
+    response = client.get("/api/v1/assets/dashboard", headers=headers)
+    result = response.get_json()["data"]
+
+    assert response.status_code == 200
+    assert result["metrics"] == {
+        "total": 2,
+        "idle": 1,
+        "in_use": 1,
+        "repairing": 0,
+        "scrapped": 0,
+    }
+    assert result["issues"]["incomplete_assets"] == 1
+    assert result["issues"]["departed_owner_assets"] == 1
+    assert result["issues"]["pending_approvals"] == 0
+    assert result["categories"] == [{"name": "电脑", "value": 2}]
+    assert sum(item["intake"] for item in result["monthly_changes"]) == 2
+    assert sum(item["value"] for item in result["statuses"]) == 2
+
+
 def test_asset_detail_lifecycle_and_audit_require_permissions(client) -> None:
     _organization, _other, _manager, asset = _asset_fixture()
     _user, headers = _reader(

@@ -37,6 +37,12 @@ def page() -> dict:
     return Result.success(result.to_dict()).to_dict()
 
 
+@bp.get("/assets/dashboard")
+@jwt_required()
+def dashboard() -> dict:
+    return Result.success(asset_service.dashboard(current_user_id())).to_dict()
+
+
 @bp.get("/assets/<int:asset_id>")
 @jwt_required()
 def detail(asset_id: int) -> dict:
