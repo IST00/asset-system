@@ -18,6 +18,14 @@ from app.common.result import Result, ResultCode
 
 
 def register_jwt_callbacks(app: Flask, jwt_manager: JWTManager) -> None:
+    @jwt_manager.token_in_blocklist_loader
+    def _is_revoked(_jwt_header: dict, jwt_payload: dict) -> bool:
+        from app.services import security_service
+
+        return security_service.validate_session_for_jwt(
+            jwt_payload.get("sid"), jwt_payload.get("sub")
+        )
+
     @jwt_manager.unauthorized_loader
     def _missing(reason: str) -> tuple[Any, int]:
         return (

@@ -6,11 +6,13 @@ from app.models.asset import (
     AssetCodeSequence,
     PublicUsageObject,
 )
+from app.models.attachment import AssetAttachment
 from app.models.asset_usage_return import (
     AssetReturnItem,
     AssetReturnRequest,
     AssetUsageRequest,
 )
+from app.models.approval_governance import ApprovalTaskEvent
 from app.models.approval_flow import (
     ApprovalFlowAssigneeRule,
     ApprovalFlowDefinition,
@@ -18,10 +20,22 @@ from app.models.approval_flow import (
     ApprovalFlowVersion,
 )
 from app.models.audit import AssetLifecycleRecord, OperationLog
+from app.models.export import ExportJob
+from app.models.import_job import ImportJob
+from app.models.inventory import (
+    InventoryItem,
+    InventoryPhoto,
+    InventoryReminder,
+    InventoryResultVersion,
+    InventoryScanEvent,
+    InventoryTask,
+    InventoryTaskAdmin,
+)
 from app.models.master_data import (
     AssetCategory,
     AssetLocation,
     AssetSource,
+    LocationCodeSequence,
     Organization,
     Unit,
 )
@@ -32,6 +46,12 @@ from app.models.operation import (
     OperationExecutionAttempt,
     OperationRequestAsset,
 )
+from app.models.security import (
+    PasswordHistory,
+    RateLimitBucket,
+    SecurityEventLog,
+    UserSession,
+)
 from app.models.rbac import (
     Permission,
     Role,
@@ -41,6 +61,7 @@ from app.models.rbac import (
 )
 from app.models.supplier import Supplier, SupplierCodeSequence
 from app.models.user import User
+from app.models.user_preference import UserPreference
 from app.models.workflow import (
     ApprovalRecord,
     ApprovalStep,
@@ -59,7 +80,9 @@ __all__ = [
     "ApprovalRecord",
     "ApprovalStep",
     "ApprovalTask",
+    "ApprovalTaskEvent",
     "Asset",
+    "AssetAttachment",
     "AssetBusinessLock",
     "AssetCodeReservation",
     "AssetCodeSequence",
@@ -69,10 +92,24 @@ __all__ = [
     "AssetUsageRequest",
     "AssetCategory",
     "AssetLocation",
+    "LocationCodeSequence",
     "AssetSource",
+    "ExportJob",
     "ExternalApprovalEvent",
+    "InventoryTaskAdmin",
+    "InventoryTask",
+    "InventoryScanEvent",
+    "InventoryPhoto",
+    "InventoryReminder",
+    "InventoryResultVersion",
+    "ImportJob",
+    "InventoryItem",
     "Permission",
     "PublicUsageObject",
+    "UserSession",
+    "SecurityEventLog",
+    "RateLimitBucket",
+    "PasswordHistory",
     "OperationLog",
     "OperationExecutionAttempt",
     "OperationActionIdempotency",
@@ -82,6 +119,7 @@ __all__ = [
     "RoleDataScopeOrganization",
     "RolePermission",
     "User",
+    "UserPreference",
     "UserRole",
     "Unit",
     "StockInItem",

@@ -41,6 +41,7 @@ from app.repositories.workflow_repository import (
 )
 from app.services import (
     approval_engine,
+    audit_service,
     asset_code_service,
     asset_data_service,
     master_data_service,
@@ -78,7 +79,11 @@ def _serialize_item(item: StockInItem, include_amount: bool) -> dict[str, Any]:
         "manager_id": item.manager_id,
         "source_id": item.source_id,
         "location_id": item.location_id,
+        "specification_model": item.specification_model,
         "serial_number": item.serial_number,
+        "receipt_no": item.receipt_no,
+        "rfid_tag": item.rfid_tag,
+        "remark": item.remark,
         "custom_attributes": deepcopy(item.custom_attributes),
     }
     if include_amount:
@@ -95,11 +100,16 @@ def _serialize(operation: OperationRequest, actor_id: int) -> dict[str, Any]:
     return {
         "id": operation.id,
         "request_no": operation.request_no,
+        "parent_request_id": operation.parent_request_id,
         "organization_id": stock_in.organization_id,
+        "remark": stock_in.remark,
         "applicant_id": operation.applicant_id,
         "approval_status": operation.approval_status,
         "execution_status": operation.execution_status,
         "execution_error": operation.execution_error,
+        "withdrawn_at": operation.withdrawn_at,
+        "withdrawn_by": operation.withdrawn_by,
+        "withdrawal_reason": operation.withdrawal_reason,
         "created_at": operation.created_at,
         "items": [
             _serialize_item(item, include_amount)
@@ -114,6 +124,7 @@ def _serialize_summary(
     return {
         "id": operation.id,
         "request_no": operation.request_no,
+        "parent_request_id": operation.parent_request_id,
         "organization_id": stock_in.organization_id,
         "applicant_id": operation.applicant_id,
         "approval_status": operation.approval_status,
@@ -122,7 +133,12 @@ def _serialize_summary(
     }
 
 
-def _validate_item(item: dict[str, Any], seen_serials: set[str]) -> dict[str, Any]:
+def _validate_item(
+    item: dict[str, Any],
+    seen_serials: set[str],
+    seen_rfid_tags: set[str] | None = None,
+) -> dict[str, Any]:
+    seen_rfid_tags = seen_rfid_tags if seen_rfid_tags is not None else set()
     category = master_data_service.require_enabled_category(item["category_id"])
     master_data_service.require_enabled_unit(item["unit_id"])
     master_data_service.require_enabled_source(item["source_id"])
@@ -156,11 +172,21 @@ def _validate_item(item: dict[str, Any], seen_serials: set[str]) -> dict[str, An
         if asset_repository.find_by_normalized_serial(normalized_serial) is not None:
             raise BusinessException("设备序列号已存在于正式资产")
         seen_serials.add(normalized_serial)
+    rfid_tag = str(item.get("rfid_tag") or "").strip() or None
+    if rfid_tag is not None:
+        if rfid_tag in seen_rfid_tags:
+            raise BusinessException("同一申请中的 RFID 标签不能重复")
+        if stock_in_item_repository.rfid_in_open_request(rfid_tag):
+            raise BusinessException("RFID 标签已存在于待审批入库申请")
+        if asset_repository.find_by_rfid_tag(rfid_tag) is not None:
+            raise BusinessException("RFID 标签已存在于正式资产")
+        seen_rfid_tags.add(rfid_tag)
     normalized = dict(item)
     normalized["category"] = category
     normalized["original_amount"] = amount
     normalized["serial_number"] = serial
     normalized["normalized_serial"] = normalized_serial
+    normalized["rfid_tag"] = rfid_tag
     normalized["supplier_id"] = supplier.id if supplier is not None else None
     normalized["supplier_snapshot"] = (
         {"id": supplier.id, "code": supplier.code, "name": supplier.name}
@@ -226,7 +252,13 @@ def _stock_in_flow(candidates: list[int]) -> ApprovalFlowVersion:
     return approval_flow_repository.load_version_graph(version.id) or version
 
 
-def submit(payload: dict[str, Any], actor_id: int) -> dict[str, Any]:
+def submit(
+    payload: dict[str, Any],
+    actor_id: int,
+    *,
+    parent_request_id: int | None = None,
+    resubmit_reason: str | None = None,
+) -> dict[str, Any]:
     permission_service.require_permission(actor_id, "stock-in:create")
     if any("service_life_months" in item for item in payload["items"]):
         permission_service.require_permission(actor_id, "asset:service-life:update")
@@ -250,9 +282,11 @@ def submit(payload: dict[str, Any], actor_id: int) -> dict[str, Any]:
         raise BusinessException("未找到符合条件的入库审批人")
 
     seen_serials: set[str] = set()
+    seen_rfid_tags: set[str] = set()
     try:
         validated_items = [
-            _validate_item(item, seen_serials) for item in payload["items"]
+            _validate_item(item, seen_serials, seen_rfid_tags)
+            for item in payload["items"]
         ]
     except BusinessException:
         if idempotency_key is None:
@@ -270,6 +304,7 @@ def submit(payload: dict[str, Any], actor_id: int) -> dict[str, Any]:
             request_no=_request_no(),
             operation_type=OperationType.STOCK_IN.value,
             applicant_id=actor_id,
+            parent_request_id=parent_request_id,
             approval_channel=ApprovalChannel.INTERNAL.value,
             approval_flow_version_id=flow_version.id,
             idempotency_key=idempotency_key,
@@ -329,6 +364,8 @@ def submit(payload: dict[str, Any], actor_id: int) -> dict[str, Any]:
                 normalized_serial=item["normalized_serial"],
                 serial_reservation_key=item["normalized_serial"],
                 receipt_no=item.get("receipt_no"),
+                rfid_tag=item.get("rfid_tag"),
+                rfid_reservation_key=item.get("rfid_tag"),
                 remark=item.get("remark"),
                 custom_attributes=item["custom_attributes"],
             )
@@ -337,17 +374,64 @@ def submit(payload: dict[str, Any], actor_id: int) -> dict[str, Any]:
                 operation.id, stock_item.id, allocated
             )
         approval_engine.initialize(operation, flow_version.id, organization_id)
+        if parent_request_id is not None:
+            parent = operation_request_repository.get(parent_request_id)
+            if parent is None:
+                raise BusinessException(
+                    "原入库申请不存在", result_code=ResultCode.NOT_FOUND
+                )
+            audit_service.record_resource_change(
+                action="APPROVAL_REQUEST_RESUBMIT",
+                resource_type="operation_request",
+                resource_id=operation.id,
+                actor_id=actor_id,
+                before_data={
+                    "parent_request_id": parent.id,
+                    "parent_request_no": parent.request_no,
+                    "approval_status": parent.approval_status,
+                },
+                after_data={
+                    "operation_request_id": operation.id,
+                    "request_no": operation.request_no,
+                    "approval_status": operation.approval_status,
+                },
+                reason=resubmit_reason,
+            )
         db.session.commit()
     except IntegrityError as exc:
         db.session.rollback()
-        if "serial_reservation_key" in str(exc.orig).lower():
+        conflict = str(exc.orig).lower()
+        if "serial_reservation_key" in conflict:
             raise BusinessException("设备序列号已被其他申请占用") from None
+        if "rfid_reservation_key" in conflict:
+            raise BusinessException("RFID 标签已被其他申请占用") from None
         raise
     except Exception:
         db.session.rollback()
         raise
 
     return _serialize(operation, actor_id)
+
+
+def resubmit(
+    operation_request_id: int, payload: dict[str, Any], actor_id: int
+) -> dict[str, Any]:
+    permission_service.require_permission(actor_id, "stock-in:create")
+    parent = operation_request_repository.get(operation_request_id)
+    if parent is None or parent.operation_type != OperationType.STOCK_IN.value:
+        raise BusinessException("原入库申请不存在", result_code=ResultCode.NOT_FOUND)
+    if parent.applicant_id != actor_id:
+        raise BusinessException(
+            "只有原申请人可以编辑后重新提交", result_code=ResultCode.FORBIDDEN
+        )
+    if parent.approval_status != ApprovalStatus.REJECTED.value:
+        raise BusinessException("只有已拒绝的入库申请可以编辑后重新提交")
+    return submit(
+        payload,
+        actor_id,
+        parent_request_id=parent.id,
+        resubmit_reason=payload["resubmit_reason"],
+    )
 
 
 def get(operation_request_id: int, actor_id: int) -> dict[str, Any]:
@@ -438,20 +522,29 @@ def reject(operation_request_id: int, opinion: str, actor_id: int) -> dict[str, 
     asset_code_service.void_for_request(operation.id)
     stock_in = stock_in_request_repository.find_by_operation(operation.id)
     if stock_in is not None:
-        stock_in_item_repository.release_serial_reservations(stock_in.id)
+        stock_in_item_repository.release_identifier_reservations(stock_in.id)
     db.session.commit()
     return _serialize(operation, actor_id)
 
 
-def withdraw(operation_request_id: int, actor_id: int) -> dict[str, Any]:
+def withdraw(operation_request_id: int, actor_id: int, reason: str) -> dict[str, Any]:
     operation = _operation_with_scope(operation_request_id, actor_id)
     if operation.applicant_id != actor_id:
         raise BusinessException("只有申请人可以撤回", result_code=ResultCode.FORBIDDEN)
-    approval_engine.withdraw(operation.id, actor_id, None)
+    approval_engine.withdraw(operation.id, actor_id, reason)
+    audit_service.record_resource_change(
+        action="APPROVAL_REQUEST_WITHDRAW",
+        resource_type="operation_request",
+        resource_id=operation.id,
+        actor_id=actor_id,
+        before_data={"approval_status": ApprovalStatus.PENDING.value},
+        after_data={"approval_status": ApprovalStatus.WITHDRAWN.value},
+        reason=reason,
+    )
     asset_code_service.void_for_request(operation.id)
     stock_in = stock_in_request_repository.find_by_operation(operation.id)
     if stock_in is not None:
-        stock_in_item_repository.release_serial_reservations(stock_in.id)
+        stock_in_item_repository.release_identifier_reservations(stock_in.id)
     db.session.commit()
     return _serialize(operation, actor_id)
 
@@ -469,4 +562,13 @@ def retry(operation_request_id: int, actor_id: int) -> dict[str, Any]:
     return _serialize(operation, actor_id)
 
 
-__all__ = ["approve", "get", "page", "reject", "retry", "submit", "withdraw"]
+__all__ = [
+    "approve",
+    "get",
+    "page",
+    "reject",
+    "resubmit",
+    "retry",
+    "submit",
+    "withdraw",
+]

@@ -1,9 +1,10 @@
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Button,
   Checkbox,
   DatePicker,
   Drawer,
+  Form,
   Input,
   Modal,
   Pagination,
@@ -11,24 +12,35 @@ import {
   Select,
   Skeleton,
   Table,
+  message,
 } from 'antd'
 import type { ColumnType, ColumnsType, TableRowSelection } from 'antd/es/table/interface'
 import dayjs from 'dayjs'
 import type { Dayjs } from 'dayjs'
 import {
+  Clock3,
   Columns3,
+  Download,
+  FileSpreadsheet,
   Filter,
+  History,
   ListFilter,
+  PencilLine,
   Plus,
+  Printer,
   RotateCcw,
   Search,
   SlidersHorizontal,
 } from 'lucide-react'
 import type { Key } from 'react'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link } from 'react-router-dom'
-import { listAssets } from '@/api/assets'
+import { authApi } from '@/api'
+import { assetManagementApi } from '@/api/assetManagement'
+import { assetQueryToExportFilters, exportsApi, type ExportJob } from '@/api/exports'
+import type { TreeItem } from '@/api/administration'
+import { listAssets, loadAssetReferences } from '@/api/assets'
 import PageHeader from '@/components/ui/PageHeader'
 import StatePanel from '@/components/ui/StatePanel'
 import { getAssetStatusMeta } from '@/features/assets/assetModel'
@@ -77,8 +89,38 @@ const moreTextFilters: Array<{
 const emptyFilters: AssetListFilterValues = {}
 const initialPageSize = 50 as const
 
+interface BatchEditFormValues {
+  category_id?: number
+  unit_id?: number
+  source_id?: number
+  location_id?: number
+  manager_id?: number
+  supplier_id?: number
+  remark?: string
+  reason: string
+}
+
+const flattenTree = (items: TreeItem[]): TreeItem[] =>
+  items.flatMap((item) => [item, ...flattenTree(item.children ?? [])])
+
 function valueOrDash(value: string | undefined): string {
   return value || '—'
+}
+
+function formatBytes(value: number): string {
+  if (value < 1024) return `${value} B`
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`
+}
+
+const exportStatusMeta: Record<
+  ExportJob['status'],
+  { label: string; tone: 'brand' | 'success' | 'danger' | 'muted' }
+> = {
+  PROCESSING: { label: '生成中', tone: 'brand' },
+  SUCCESS: { label: '可下载', tone: 'success' },
+  FAILED: { label: '生成失败', tone: 'danger' },
+  EXPIRED: { label: '已过期', tone: 'muted' },
 }
 
 export default function AssetList() {
@@ -86,6 +128,8 @@ export default function AssetList() {
   const isMobile = useMobileViewport()
   const permissions = useAuthStore((state) => state.user?.permissions)
   const canCreate = canCreateAsset(permissions)
+  const canExport = permissions?.includes('asset:export') ?? false
+  const canPrintLabels = permissions?.includes('asset:label:print') ?? false
   const locale = i18n.resolvedLanguage || i18n.language || 'zh-CN'
   const [draft, setDraft] = useState<AssetListFilterValues>(emptyFilters)
   const [query, setQuery] = useState<AssetListQuery>(() =>
@@ -99,13 +143,129 @@ export default function AssetList() {
     getDefaultColumns('desktop'),
   )
   const [selectedRowKeys, setSelectedRowKeys] = useState<Key[]>([])
-  const [selectAllOpen, setSelectAllOpen] = useState(false)
+  const [batchEditOpen, setBatchEditOpen] = useState(false)
+  const [exportJobsOpen, setExportJobsOpen] = useState(false)
+  const [batchForm] = Form.useForm<BatchEditFormValues>()
   const [queryRevision, setQueryRevision] = useState(0)
+  const preferenceAppliedRef = useRef(false)
+  const queryClient = useQueryClient()
+
+  const preferenceQuery = useQuery({
+    queryKey: ['auth', 'preferences'],
+    queryFn: authApi.preferences,
+  })
+
+  const preferenceMutation = useMutation({
+    mutationFn: authApi.updatePreferences,
+    onSuccess: (preferences) => {
+      queryClient.setQueryData(['auth', 'preferences'], preferences)
+    },
+    onError: (error: Error) => void message.error(error.message || '列表偏好保存失败'),
+  })
+
+  useEffect(() => {
+    if (!preferenceQuery.data || preferenceAppliedRef.current) return
+    preferenceAppliedRef.current = true
+    const preferredColumns = preferenceQuery.data.asset_list_columns.filter(
+      (column): column is AssetColumnKey => availableColumns.includes(column as AssetColumnKey),
+    )
+    setSelectedColumns(
+      preferredColumns.length > 0 ? preferredColumns : getDefaultColumns('desktop'),
+    )
+    setQuery((current) =>
+      current.size === initialPageSize
+        ? { ...current, page: 1, size: preferenceQuery.data.asset_list_page_size }
+        : current,
+    )
+  }, [availableColumns, preferenceQuery.data])
 
   const assetsQuery = useQuery({
     queryKey: ['assets', 'list', query, queryRevision],
     queryFn: () => listAssets(query),
   })
+
+  const referenceQuery = useQuery({
+    queryKey: ['asset-form', 'references'],
+    queryFn: loadAssetReferences,
+    enabled: batchEditOpen,
+  })
+
+  const exportJobsQuery = useQuery({
+    queryKey: ['asset-exports'],
+    queryFn: exportsApi.page,
+    enabled: exportJobsOpen,
+  })
+
+  const createExportMutation = useMutation({
+    mutationFn: exportsApi.create,
+    onSuccess: async (job) => {
+      await message.success(
+        `已生成 ${job.item_count} 件资产的${job.job_type === 'ASSET_CSV' ? '台账' : '条码标签'}`,
+      )
+      setExportJobsOpen(true)
+      void queryClient.invalidateQueries({ queryKey: ['asset-exports'] })
+    },
+    onError: (error: Error) => void message.error(error.message),
+  })
+
+  const downloadExportMutation = useMutation({
+    mutationFn: exportsApi.download,
+    onSuccess: () => void message.success('文件已开始下载'),
+    onError: (error: Error) => void message.error(error.message),
+  })
+  const batchMutation = useMutation({
+    mutationFn: async (values: BatchEditFormValues) => {
+      const selected = (assetsQuery.data?.records ?? []).filter((asset) =>
+        selectedRowKeys.includes(asset.id),
+      )
+      if (!selected.length) throw new Error('请先选择要修改的资产')
+      const changes: Record<string, string | number | null> = {}
+      const fieldNames = [
+        'category_id',
+        'unit_id',
+        'source_id',
+        'location_id',
+        'manager_id',
+        'supplier_id',
+      ] as const
+      fieldNames.forEach((field) => {
+        if (values[field] !== undefined) changes[field] = values[field] ?? null
+      })
+      if (values.remark !== undefined) changes.remark = values.remark.trim() || null
+      if (!Object.keys(changes).length) throw new Error('请至少选择一个要修改的字段')
+      return assetManagementApi.batchUpdate({
+        items: selected.map((asset) => ({ asset_id: asset.id, version: asset.version })),
+        changes,
+        reason: values.reason,
+      })
+    },
+    onSuccess: async (result) => {
+      await message.success(`已更新 ${result.updated_count} 件资产`)
+      setBatchEditOpen(false)
+      setSelectedRowKeys([])
+      batchForm.resetFields()
+      void queryClient.invalidateQueries({ queryKey: ['assets'] })
+      void queryClient.invalidateQueries({ queryKey: ['dashboard'] })
+    },
+    onError: (error: Error) => void message.error(error.message),
+  })
+
+  const selectedAssetIds = selectedRowKeys.map((key) => Number(key))
+
+  const exportCurrentResult = () => {
+    createExportMutation.mutate({
+      job_type: 'ASSET_CSV',
+      filters: assetQueryToExportFilters(query),
+    })
+  }
+
+  const exportSelected = (jobType: 'ASSET_CSV' | 'LABEL_PDF') => {
+    if (!selectedAssetIds.length) {
+      void message.warning('请先选择资产')
+      return
+    }
+    createExportMutation.mutate({ job_type: jobType, asset_ids: selectedAssetIds })
+  }
 
   const handleSearch = () => {
     setSelectedRowKeys([])
@@ -117,7 +277,7 @@ export default function AssetList() {
     setDraft(emptyFilters)
     setAssetCodesText('')
     setSelectedRowKeys([])
-    setQuery(buildAssetListQuery(emptyFilters, initialPageSize))
+    setQuery(buildAssetListQuery(emptyFilters, query.size))
   }
 
   const openAssetCodes = () => {
@@ -147,6 +307,9 @@ export default function AssetList() {
 
   const handlePageChange = (page: number, size: number) => {
     const nextSize = size === 20 || size === 100 ? size : 50
+    if (nextSize !== query.size) {
+      preferenceMutation.mutate({ asset_list_page_size: nextSize })
+    }
     setSelectedRowKeys([])
     setQuery((current) => ({
       ...current,
@@ -156,7 +319,20 @@ export default function AssetList() {
   }
 
   const handleColumnChange = (values: AssetColumnKey[]) => {
+    if (!values.length) {
+      void message.warning('至少保留一个资产列表字段')
+      return
+    }
     setSelectedColumns(values)
+    preferenceMutation.mutate({ asset_list_columns: values })
+  }
+
+  const restoreDefaultColumns = () => {
+    const defaults = getDefaultColumns('desktop').filter((column) =>
+      availableColumns.includes(column),
+    )
+    setSelectedColumns(defaults)
+    preferenceMutation.mutate({ asset_list_columns: defaults })
   }
 
   const columnDefinitions = useMemo<Record<AssetColumnKey, ColumnType<AssetSummary>>>(() => {
@@ -302,6 +478,17 @@ export default function AssetList() {
 
   const columnSettings = (
     <div className="asset-list__column-settings">
+      <div className="asset-list__column-settings-heading">
+        <span>显示列会按当前账号保存</span>
+        <Button
+          type="link"
+          size="small"
+          loading={preferenceMutation.isPending}
+          onClick={restoreDefaultColumns}
+        >
+          恢复默认
+        </Button>
+      </div>
       <Checkbox.Group<AssetColumnKey>
         value={selectedColumns}
         options={availableColumns.map((column) => ({
@@ -463,11 +650,32 @@ export default function AssetList() {
         title={t('assets.list.title')}
         description={t('assets.list.description')}
         actions={
-          canCreate ? (
-            <Link className="asset-list__create-link" to="/assets/new">
-              <Plus aria-hidden="true" size={17} />
-              <span>{t('assets.list.actions.create')}</span>
-            </Link>
+          canCreate || canExport || canPrintLabels ? (
+            <div className="asset-list__header-actions">
+              {canExport || canPrintLabels ? (
+                <Button
+                  icon={<History aria-hidden="true" size={16} />}
+                  onClick={() => setExportJobsOpen(true)}
+                >
+                  导出任务
+                </Button>
+              ) : null}
+              {canExport ? (
+                <Button
+                  icon={<Download aria-hidden="true" size={16} />}
+                  loading={createExportMutation.isPending}
+                  onClick={exportCurrentResult}
+                >
+                  导出当前结果
+                </Button>
+              ) : null}
+              {canCreate ? (
+                <Link className="asset-list__create-link" to="/assets/new">
+                  <Plus aria-hidden="true" size={17} />
+                  <span>{t('assets.list.actions.create')}</span>
+                </Link>
+              ) : null}
+            </div>
           ) : undefined
         }
       />
@@ -571,9 +779,36 @@ export default function AssetList() {
             <Button type="link" onClick={() => setSelectedRowKeys([])}>
               {t('assets.list.selection.clear')}
             </Button>
-            <Button onClick={() => setSelectAllOpen(true)}>
-              {t('assets.list.selection.selectAllFiltered')}
-            </Button>
+            {canExport ? (
+              <Button
+                icon={<FileSpreadsheet aria-hidden="true" size={16} />}
+                loading={createExportMutation.isPending}
+                onClick={() => exportSelected('ASSET_CSV')}
+              >
+                导出所选
+              </Button>
+            ) : null}
+            {canPrintLabels ? (
+              <Button
+                icon={<Printer aria-hidden="true" size={16} />}
+                loading={createExportMutation.isPending}
+                onClick={() => exportSelected('LABEL_PDF')}
+              >
+                条码标签 PDF
+              </Button>
+            ) : null}
+            {(permissions?.includes('asset:edit') ?? false) ? (
+              <Button
+                type="primary"
+                icon={<PencilLine aria-hidden="true" size={16} />}
+                onClick={() => {
+                  batchForm.resetFields()
+                  setBatchEditOpen(true)
+                }}
+              >
+                批量编辑
+              </Button>
+            ) : null}
           </div>
         </div>
       ) : null}
@@ -667,19 +902,203 @@ export default function AssetList() {
       </Drawer>
 
       <Modal
-        className="asset-list__modal"
-        open={selectAllOpen}
-        title={t('assets.list.selection.confirmTitle')}
-        okText={t('assets.list.selection.confirm')}
-        cancelText={t('assets.list.selection.cancel')}
-        onOk={() => setSelectAllOpen(false)}
-        onCancel={() => setSelectAllOpen(false)}
+        className="asset-list__modal asset-list__export-modal"
+        open={exportJobsOpen}
+        title="导出与标签任务"
+        footer={null}
+        width={760}
+        onCancel={() => setExportJobsOpen(false)}
       >
-        <p>
-          {t('assets.list.selection.confirmDescription', {
-            total: assetsQuery.data?.total ?? 0,
-          })}
+        <div className="asset-list__export-intro">
+          <div>
+            <strong>服务端生成 · 24 小时有效</strong>
+            <span>台账按当前账号的数据范围和金额权限生成；条码标签固定为 80 × 30 mm。</span>
+          </div>
+          <Button
+            icon={<RotateCcw aria-hidden="true" size={16} />}
+            loading={exportJobsQuery.isFetching}
+            onClick={() => void exportJobsQuery.refetch()}
+          >
+            刷新
+          </Button>
+        </div>
+        <div className="asset-list__export-scroll">
+          {exportJobsQuery.isLoading ? (
+            <Skeleton active paragraph={{ rows: 5 }} />
+          ) : exportJobsQuery.isError ? (
+            <StatePanel
+              mode="error"
+              message="导出任务加载失败"
+              retryLabel="重新加载"
+              onRetry={() => void exportJobsQuery.refetch()}
+            />
+          ) : exportJobsQuery.data?.items.length ? (
+            <div className="asset-list__export-jobs">
+              {exportJobsQuery.data.items.map((job) => {
+                const status = exportStatusMeta[job.status]
+                return (
+                  <article key={job.id} className="asset-list__export-job">
+                    <div className="asset-list__export-job-icon" aria-hidden="true">
+                      {job.job_type === 'ASSET_CSV' ? (
+                        <FileSpreadsheet size={20} />
+                      ) : (
+                        <Printer size={20} />
+                      )}
+                    </div>
+                    <div className="asset-list__export-job-copy">
+                      <div>
+                        <strong>{job.original_name}</strong>
+                        <span className={`asset-list__export-status is-${status.tone}`}>
+                          {status.label}
+                        </span>
+                      </div>
+                      <p>
+                        {job.item_count} 件 · {formatBytes(job.size_bytes)} · 创建于{' '}
+                        {dayjs(job.created_at).format('YYYY-MM-DD HH:mm')}
+                      </p>
+                      <span>
+                        <Clock3 aria-hidden="true" size={13} />
+                        有效至 {dayjs(job.expires_at).format('YYYY-MM-DD HH:mm')}
+                      </span>
+                      {job.error_message ? <em>{job.error_message}</em> : null}
+                    </div>
+                    <Button
+                      type="primary"
+                      icon={<Download aria-hidden="true" size={16} />}
+                      disabled={job.status !== 'SUCCESS'}
+                      loading={
+                        downloadExportMutation.isPending &&
+                        downloadExportMutation.variables?.id === job.id
+                      }
+                      onClick={() => downloadExportMutation.mutate(job)}
+                    >
+                      下载
+                    </Button>
+                  </article>
+                )
+              })}
+            </div>
+          ) : (
+            <StatePanel mode="empty" message="还没有导出任务，可从资产列表生成台账或条码标签。" />
+          )}
+        </div>
+      </Modal>
+
+      <Modal
+        className="asset-list__modal asset-list__batch-modal"
+        open={batchEditOpen}
+        title={`批量编辑 ${selectedRowKeys.length} 件资产`}
+        okText="确认批量修改"
+        cancelText="取消"
+        width={680}
+        confirmLoading={batchMutation.isPending}
+        onOk={() => batchForm.submit()}
+        onCancel={() => setBatchEditOpen(false)}
+      >
+        <p className="asset-list__batch-note">
+          只填写需要统一修改的字段；未填写的字段会保持原值。序列号与 RFID 不支持批量设置。
         </p>
+        <Form
+          form={batchForm}
+          layout="vertical"
+          className="asset-list__batch-form"
+          onFinish={(values) => batchMutation.mutate(values)}
+        >
+          <div className="asset-list__batch-grid">
+            <Form.Item name="category_id" label="资产分类">
+              <Select
+                allowClear
+                showSearch
+                optionFilterProp="label"
+                loading={referenceQuery.isLoading}
+                options={flattenTree(referenceQuery.data?.categories ?? []).map((item) => ({
+                  value: item.id,
+                  label: `${item.name} · ${item.code}`,
+                }))}
+                placeholder="保持原分类"
+              />
+            </Form.Item>
+            <Form.Item name="unit_id" label="计量单位">
+              <Select
+                allowClear
+                showSearch
+                optionFilterProp="label"
+                loading={referenceQuery.isLoading}
+                options={(referenceQuery.data?.units ?? []).map((item) => ({
+                  value: item.id,
+                  label: `${item.name} · ${item.code}`,
+                }))}
+                placeholder="保持原单位"
+              />
+            </Form.Item>
+            <Form.Item name="source_id" label="资产来源">
+              <Select
+                allowClear
+                showSearch
+                optionFilterProp="label"
+                loading={referenceQuery.isLoading}
+                options={(referenceQuery.data?.sources ?? []).map((item) => ({
+                  value: item.id,
+                  label: `${item.name} · ${item.code}`,
+                }))}
+                placeholder="保持原来源"
+              />
+            </Form.Item>
+            <Form.Item name="location_id" label="存放地点">
+              <Select
+                allowClear
+                showSearch
+                optionFilterProp="label"
+                loading={referenceQuery.isLoading}
+                options={flattenTree(referenceQuery.data?.locations ?? []).map((item) => ({
+                  value: item.id,
+                  label: `${item.name} · ${item.code}`,
+                }))}
+                placeholder="保持原地点"
+              />
+            </Form.Item>
+            <Form.Item name="manager_id" label="责任管理员">
+              <Select
+                allowClear
+                showSearch
+                optionFilterProp="label"
+                loading={referenceQuery.isLoading}
+                options={(referenceQuery.data?.managers ?? [])
+                  .filter((item) => item.enabled)
+                  .map((item) => ({ value: item.id, label: item.name }))}
+                placeholder="保持原管理员"
+              />
+            </Form.Item>
+            <Form.Item name="supplier_id" label="供应商">
+              <Select
+                allowClear
+                showSearch
+                optionFilterProp="label"
+                loading={referenceQuery.isLoading}
+                options={(referenceQuery.data?.suppliers ?? []).map((item) => ({
+                  value: item.id,
+                  label: `${item.name} · ${item.code}`,
+                }))}
+                placeholder="保持原供应商"
+              />
+            </Form.Item>
+          </div>
+          <Form.Item name="remark" label="统一备注">
+            <Input.TextArea rows={3} maxLength={2000} showCount placeholder="不填写则保持原备注" />
+          </Form.Item>
+          <Form.Item
+            name="reason"
+            label="修改原因"
+            rules={[{ required: true, whitespace: true, message: '请填写批量修改原因' }]}
+          >
+            <Input.TextArea
+              rows={4}
+              maxLength={500}
+              showCount
+              placeholder="该原因会写入每件资产的履历与审计日志"
+            />
+          </Form.Item>
+        </Form>
       </Modal>
     </div>
   )

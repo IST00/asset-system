@@ -1,10 +1,27 @@
-import { Button, Input, Spin } from 'antd'
-import { useQuery } from '@tanstack/react-query'
-import { Check, Search, ShieldCheck, UsersRound } from 'lucide-react'
+import { App, Button, Checkbox, Form, Input, Modal, Select, Spin, Switch } from 'antd'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  AlertTriangle,
+  Check,
+  Pencil,
+  Plus,
+  Search,
+  ShieldCheck,
+  Trash2,
+  UserCog,
+  UsersRound,
+} from 'lucide-react'
 import { useMemo, useState } from 'react'
-import { administrationApi } from '@/api/administration'
+import {
+  administrationApi,
+  masterDataApi,
+  type DeleteImpact,
+  type RoleItem,
+  type TreeItem,
+} from '@/api/administration'
 import StatePanel from '@/components/ui/StatePanel'
 import { useAuthStore } from '@/store/auth'
+import type { User } from '@/types'
 import type { Tone } from './data'
 import {
   GlassPanel,
@@ -16,26 +33,65 @@ import {
 
 const scopeLabels: Record<string, string> = {
   ALL: '全部组织',
-  CURRENT_ORG: '当前组织',
-  CURRENT_AND_CHILDREN: '当前及下级组织',
+  DEPARTMENT: '当前组织',
+  DEPARTMENT_TREE: '当前及下级组织',
   CUSTOM: '自定义组织范围',
   SELF: '仅本人数据',
 }
 
+const scopeOptions = Object.entries(scopeLabels).map(([value, label]) => ({ value, label }))
 const roleTones: Tone[] = ['violet', 'blue', 'cyan', 'amber', 'green', 'slate']
 
+type RoleDialogMode = 'create' | 'basic' | 'permissions'
+
+interface RoleFormValues {
+  code?: string
+  name: string
+  data_scope: string
+  enabled: boolean
+  organization_ids?: number[]
+  permission_ids?: number[]
+  reason: string
+}
+
+interface UserRoleFormValues {
+  role_ids: number[]
+  reason: string
+}
+
+function flattenOrganizations(items: TreeItem[], depth = 0): { value: number; label: string }[] {
+  return items.flatMap((item) => [
+    { value: item.id, label: `${'　'.repeat(depth)}${item.name}（${item.code}）` },
+    ...flattenOrganizations(item.children ?? [], depth + 1),
+  ])
+}
+
 export default function Permissions() {
+  const { message, modal } = App.useApp()
   const [keyword, setKeyword] = useState('')
+  const [roleDialog, setRoleDialog] = useState<RoleDialogMode | null>(null)
+  const [editingRole, setEditingRole] = useState<RoleItem | null>(null)
+  const [editingUser, setEditingUser] = useState<User | null>(null)
+  const [deleteRole, setDeleteRole] = useState<RoleItem | null>(null)
+  const [deleteImpact, setDeleteImpact] = useState<DeleteImpact | null>(null)
+  const [deleteReason, setDeleteReason] = useState('')
+  const [deleteImpactLoading, setDeleteImpactLoading] = useState(false)
+  const [roleForm] = Form.useForm<RoleFormValues>()
+  const [userRoleForm] = Form.useForm<UserRoleFormValues>()
+  const queryClient = useQueryClient()
   const permissions = useAuthStore((state) => state.user?.permissions ?? [])
   const canViewUsers = permissions.includes('system:user:view')
+  const canManage = permissions.includes('system:role:manage')
+
   const accessQuery = useQuery({
     queryKey: ['administration', 'roles-permissions'],
     queryFn: async () => {
-      const [roles, permissionItems] = await Promise.all([
+      const [roles, permissionItems, organizations] = await Promise.all([
         administrationApi.roles(),
         administrationApi.permissions(),
+        masterDataApi.organizations(),
       ])
-      return { roles, permissionItems }
+      return { roles, permissionItems, organizations }
     },
   })
   const usersQuery = useQuery({
@@ -52,10 +108,15 @@ export default function Permissions() {
     () => Array.from(new Set(permissionItems.map((item) => item.module))).sort(),
     [permissionItems],
   )
+  const organizationOptions = useMemo(
+    () => flattenOrganizations(accessQuery.data?.organizations ?? []),
+    [accessQuery.data?.organizations],
+  )
   const roleNameByCode = useMemo(
     () => new Map(roles.map((role) => [role.code, role.name])),
     [roles],
   )
+  const roleIdByCode = useMemo(() => new Map(roles.map((role) => [role.code, role.id])), [roles])
   const normalizedKeyword = keyword.trim().toLowerCase()
   const users = (usersQuery.data?.items ?? []).filter(
     (user) =>
@@ -67,18 +128,176 @@ export default function Permissions() {
   const builtInCount = roles.filter((role) => role.built_in).length
   const enabledPermissionCount = permissionItems.filter((item) => item.enabled).length
 
+  const refreshAccess = async () => {
+    await queryClient.invalidateQueries({ queryKey: ['administration', 'roles-permissions'] })
+    await queryClient.invalidateQueries({ queryKey: ['administration', 'users'] })
+    await queryClient.invalidateQueries({ queryKey: ['audit-logs'] })
+  }
+
+  const roleMutation = useMutation({
+    mutationFn: async (values: RoleFormValues) => {
+      if (roleDialog === 'create') {
+        return administrationApi.createRole({
+          code: values.code?.trim() ?? '',
+          name: values.name.trim(),
+          data_scope: values.data_scope,
+          reason: values.reason.trim(),
+        })
+      }
+      if (!editingRole) throw new Error('请选择要编辑的角色')
+      if (roleDialog === 'permissions') {
+        return administrationApi.updateRolePermissions(
+          editingRole.id,
+          values.permission_ids ?? [],
+          values.reason.trim(),
+        )
+      }
+      return administrationApi.updateRole(editingRole.id, {
+        name: values.name.trim(),
+        data_scope: values.data_scope,
+        enabled: values.enabled,
+        organization_ids: values.data_scope === 'CUSTOM' ? (values.organization_ids ?? []) : [],
+        version: editingRole.version,
+        reason: values.reason.trim(),
+      })
+    },
+    onSuccess: async () => {
+      setRoleDialog(null)
+      setEditingRole(null)
+      roleForm.resetFields()
+      await refreshAccess()
+      void message.success('角色配置已保存并记录操作日志')
+    },
+    onError: (error) =>
+      void message.error(error instanceof Error ? error.message : '角色配置保存失败'),
+  })
+
+  const userRoleMutation = useMutation({
+    mutationFn: (values: UserRoleFormValues) => {
+      if (!editingUser) throw new Error('请选择要授权的用户')
+      return administrationApi.updateUserRoles(
+        editingUser.id,
+        values.role_ids,
+        values.reason.trim(),
+      )
+    },
+    onSuccess: async () => {
+      setEditingUser(null)
+      userRoleForm.resetFields()
+      await refreshAccess()
+      void message.success('用户角色已更新并记录操作日志')
+    },
+    onError: (error) => void message.error(error instanceof Error ? error.message : '用户授权失败'),
+  })
+
+  const deleteRoleMutation = useMutation({
+    mutationFn: async () => {
+      if (!deleteRole || !deleteImpact) throw new Error('请先检查角色删除影响')
+      return administrationApi.deleteRole(deleteRole.id, {
+        version: deleteImpact.version,
+        reason: deleteReason.trim(),
+        confirmed: true,
+      })
+    },
+    onSuccess: async () => {
+      setDeleteRole(null)
+      setDeleteImpact(null)
+      setDeleteReason('')
+      await refreshAccess()
+      void message.success('角色已删除并记录永久审计日志')
+    },
+    onError: (error) => void message.error(error instanceof Error ? error.message : '角色删除失败'),
+  })
+
+  const openDeleteRole = async (role: RoleItem) => {
+    setDeleteRole(role)
+    setDeleteImpact(null)
+    setDeleteReason('')
+    setDeleteImpactLoading(true)
+    try {
+      setDeleteImpact(await administrationApi.roleDeleteImpact(role.id))
+    } catch (error) {
+      setDeleteRole(null)
+      void message.error(error instanceof Error ? error.message : '角色删除影响检查失败')
+    } finally {
+      setDeleteImpactLoading(false)
+    }
+  }
+
+  const openCreateRole = () => {
+    setEditingRole(null)
+    setRoleDialog('create')
+    roleForm.setFieldsValue({
+      code: '',
+      name: '',
+      data_scope: 'SELF',
+      enabled: true,
+      organization_ids: [],
+      reason: '',
+    })
+  }
+
+  const openRoleEditor = (role: RoleItem, mode: Exclude<RoleDialogMode, 'create'>) => {
+    setEditingRole(role)
+    setRoleDialog(mode)
+    roleForm.setFieldsValue({
+      name: role.name,
+      data_scope: role.data_scope,
+      enabled: role.enabled,
+      organization_ids: role.organization_ids,
+      permission_ids: permissionItems
+        .filter((item) => role.permissions.includes(item.code))
+        .map((item) => item.id),
+      reason: '',
+    })
+  }
+
+  const openUserRoles = (user: User) => {
+    setEditingUser(user)
+    userRoleForm.setFieldsValue({
+      role_ids: (user.roles ?? [])
+        .map((code) => roleIdByCode.get(code))
+        .filter((id): id is number => id !== undefined),
+      reason: '',
+    })
+  }
+
+  const confirmRoleSave = async () => {
+    const values = await roleForm.validateFields()
+    modal.confirm({
+      title: roleDialog === 'create' ? '确认创建角色？' : '确认保存权限变更？',
+      content: '保存后会立即影响后续鉴权；已登录用户需重新登录才能刷新前端权限菜单。',
+      okText: '确认保存',
+      cancelText: '返回检查',
+      onOk: () => roleMutation.mutateAsync(values),
+    })
+  }
+
+  const confirmUserRoleSave = async () => {
+    const values = await userRoleForm.validateFields()
+    modal.confirm({
+      title: '确认更新用户角色？',
+      content: '新的角色集合会替换该用户当前全部角色，请确认后保存。',
+      okText: '确认授权',
+      cancelText: '返回检查',
+      onOk: () => userRoleMutation.mutateAsync(values),
+    })
+  }
+
   return (
     <div className="operations-page">
       <OperationsHero
         eyebrow="ACCESS CONTROL"
-        title="权限只给需要的人，变化都留下记录"
-        description="角色、权限点与用户授权信息已连接后端；当前页面先提供真实配置查询。"
+        title="权限只给需要的人，每次变化都有理由"
+        description="角色、权限点、组织数据范围与用户授权均连接后端；敏感修改需要填写原因并二次确认。"
         icon={ShieldCheck}
         tone="violet"
         actions={
-          <Button type="primary" size="large" disabled>
-            权限编辑待接入
-          </Button>
+          canManage ? (
+            <Button type="primary" size="large" icon={<Plus size={18} />} onClick={openCreateRole}>
+              新建角色
+            </Button>
+          ) : null
         }
         aside={
           <div className="operations-hero__aside-card">
@@ -112,7 +331,7 @@ export default function Permissions() {
           {
             label: '停用角色',
             value: roles.filter((role) => !role.enabled).length,
-            hint: '不可继续授权',
+            hint: '停用后不再授予权限',
             tone: 'amber',
           },
         ]}
@@ -121,9 +340,14 @@ export default function Permissions() {
       <GlassPanel>
         <SectionHeading
           eyebrow="ROLES"
-          title="角色模板"
-          description="角色能力与数据范围来自后端 RBAC 配置。"
-          action={<StatusPill label="只读模式" tone="slate" />}
+          title="角色与数据范围"
+          description="角色编码创建后不可修改；内置角色不会在本页提供删除入口。"
+          action={
+            <StatusPill
+              label={canManage ? '可管理' : '只读'}
+              tone={canManage ? 'violet' : 'slate'}
+            />
+          }
         />
         {accessQuery.isLoading ? (
           <div className="operations-loading">
@@ -149,7 +373,10 @@ export default function Permissions() {
                     <span className="operations-card__icon">
                       <ShieldCheck size={21} />
                     </span>
-                    <StatusPill label={role.built_in ? '系统内置' : '自定义'} tone={tone} />
+                    <div className="operations-role-card__badges">
+                      <StatusPill label={role.built_in ? '系统内置' : '自定义'} tone={tone} />
+                      {!role.enabled ? <StatusPill label="已停用" tone="slate" /> : null}
+                    </div>
                   </div>
                   <h3>{role.name}</h3>
                   <p>
@@ -165,10 +392,35 @@ export default function Permissions() {
                       <span>权限点</span>
                     </div>
                     <div>
-                      <strong>{role.enabled ? '启用' : '停用'}</strong>
-                      <span>角色状态</span>
+                      <strong>v{role.version}</strong>
+                      <span>配置版本</span>
                     </div>
                   </div>
+                  {canManage ? (
+                    <div className="operations-role-card__actions">
+                      <Button
+                        icon={<Pencil size={15} />}
+                        onClick={() => openRoleEditor(role, 'basic')}
+                      >
+                        编辑角色
+                      </Button>
+                      <Button
+                        icon={<ShieldCheck size={15} />}
+                        onClick={() => openRoleEditor(role, 'permissions')}
+                      >
+                        配置权限点
+                      </Button>
+                      {!role.built_in ? (
+                        <Button
+                          danger
+                          icon={<Trash2 size={15} />}
+                          onClick={() => void openDeleteRole(role)}
+                        >
+                          删除角色
+                        </Button>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </article>
               )
             })}
@@ -232,7 +484,7 @@ export default function Permissions() {
             title="授权用户"
             description={
               canViewUsers
-                ? '显示后端返回的前 100 名用户。'
+                ? '显示后端返回的前 100 名用户，可整组替换用户角色。'
                 : '当前账号没有 system:user:view 权限。'
             }
           />
@@ -282,21 +534,265 @@ export default function Permissions() {
                         }
                         tone={user.enabled === false ? 'slate' : 'blue'}
                       />
+                      {canManage ? (
+                        <Button icon={<UserCog size={15} />} onClick={() => openUserRoles(user)}>
+                          分配角色
+                        </Button>
+                      ) : null}
                     </div>
                   ))}
                 </div>
               ) : (
                 <StatePanel mode="empty" message="没有匹配的用户" />
               )}
-              <Button block style={{ marginTop: 14 }} icon={<UsersRound size={16} />} disabled>
-                当前展示前 100 名用户
-              </Button>
+              <div className="operations-form-note">
+                <UsersRound size={15} /> 当前展示前 100 名用户；更多用户需接入服务端搜索和分页。
+              </div>
             </>
           ) : (
             <StatePanel mode="empty" message="当前账号无权查看用户列表" />
           )}
         </GlassPanel>
       </div>
+
+      <Modal
+        className="operations-glass-modal"
+        title={
+          roleDialog === 'create'
+            ? '新建角色'
+            : roleDialog === 'permissions'
+              ? `配置 ${editingRole?.name ?? ''} 的权限点`
+              : `编辑 ${editingRole?.name ?? ''}`
+        }
+        open={roleDialog !== null}
+        width={roleDialog === 'permissions' ? 760 : 620}
+        okText="保存变化"
+        cancelText="取消"
+        confirmLoading={roleMutation.isPending}
+        onOk={() => void confirmRoleSave()}
+        onCancel={() => {
+          setRoleDialog(null)
+          setEditingRole(null)
+          roleForm.resetFields()
+        }}
+      >
+        <Form<RoleFormValues>
+          form={roleForm}
+          layout="vertical"
+          requiredMark={false}
+          className="operations-form-grid"
+        >
+          {roleDialog === 'create' ? (
+            <Form.Item
+              name="code"
+              label="角色编码"
+              rules={[
+                { required: true, message: '请输入角色编码' },
+                {
+                  pattern: /^[A-Za-z][A-Za-z0-9_:-]*$/,
+                  message: '请使用字母、数字、下划线、冒号或短横线',
+                },
+              ]}
+            >
+              <Input placeholder="例如 ASSET_OPERATOR" maxLength={64} />
+            </Form.Item>
+          ) : null}
+          {roleDialog !== 'permissions' ? (
+            <>
+              <Form.Item
+                name="name"
+                label="角色名称"
+                rules={[{ required: true, message: '请输入角色名称' }]}
+              >
+                <Input maxLength={128} />
+              </Form.Item>
+              <Form.Item
+                name="data_scope"
+                label="数据范围"
+                rules={[{ required: true, message: '请选择数据范围' }]}
+              >
+                <Select options={scopeOptions} />
+              </Form.Item>
+              <Form.Item
+                noStyle
+                shouldUpdate={(previous, current) => previous.data_scope !== current.data_scope}
+              >
+                {({ getFieldValue }) =>
+                  getFieldValue('data_scope') === 'CUSTOM' ? (
+                    <Form.Item
+                      name="organization_ids"
+                      label="自定义组织"
+                      rules={[{ required: true, message: '至少选择一个组织' }]}
+                      className="operations-form-grid__wide"
+                    >
+                      <Select
+                        mode="multiple"
+                        showSearch
+                        optionFilterProp="label"
+                        options={organizationOptions}
+                        placeholder="选择可访问组织"
+                        maxTagCount="responsive"
+                      />
+                    </Form.Item>
+                  ) : null
+                }
+              </Form.Item>
+              {roleDialog === 'basic' ? (
+                <Form.Item name="enabled" label="角色状态" valuePropName="checked">
+                  <Switch checkedChildren="启用" unCheckedChildren="停用" />
+                </Form.Item>
+              ) : null}
+            </>
+          ) : (
+            <Form.Item name="permission_ids" label="权限点" className="operations-form-grid__wide">
+              <Checkbox.Group className="operations-permission-picker">
+                {modules.map((module) => (
+                  <section key={module}>
+                    <strong>{module}</strong>
+                    <div>
+                      {permissionItems
+                        .filter((item) => item.module === module && item.enabled)
+                        .map((item) => (
+                          <Checkbox key={item.id} value={item.id}>
+                            {item.name}
+                            <small>{item.code}</small>
+                          </Checkbox>
+                        ))}
+                    </div>
+                  </section>
+                ))}
+              </Checkbox.Group>
+            </Form.Item>
+          )}
+          <Form.Item
+            name="reason"
+            label="变更原因"
+            rules={[
+              { required: true, message: '请填写变更原因' },
+              { min: 2, message: '变更原因至少 2 个字符' },
+            ]}
+            className="operations-form-grid__wide"
+          >
+            <Input.TextArea
+              rows={3}
+              maxLength={500}
+              showCount
+              placeholder="说明授权依据、工单或调整原因"
+            />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        className="operations-glass-modal"
+        title={`为 ${editingUser?.nickname || editingUser?.username || ''} 分配角色`}
+        open={editingUser !== null}
+        width={620}
+        okText="确认授权"
+        cancelText="取消"
+        confirmLoading={userRoleMutation.isPending}
+        onOk={() => void confirmUserRoleSave()}
+        onCancel={() => {
+          setEditingUser(null)
+          userRoleForm.resetFields()
+        }}
+      >
+        <Form<UserRoleFormValues> form={userRoleForm} layout="vertical" requiredMark={false}>
+          <Form.Item name="role_ids" label="角色集合">
+            <Checkbox.Group className="operations-role-picker">
+              {roles
+                .filter((role) => role.enabled)
+                .map((role) => (
+                  <Checkbox key={role.id} value={role.id}>
+                    <strong>{role.name}</strong>
+                    <small>
+                      {role.code} · {scopeLabels[role.data_scope] ?? role.data_scope}
+                    </small>
+                  </Checkbox>
+                ))}
+            </Checkbox.Group>
+          </Form.Item>
+          <Form.Item
+            name="reason"
+            label="变更原因"
+            rules={[
+              { required: true, message: '请填写变更原因' },
+              { min: 2, message: '变更原因至少 2 个字符' },
+            ]}
+          >
+            <Input.TextArea
+              rows={3}
+              maxLength={500}
+              showCount
+              placeholder="说明授权依据、工单或人员职责变化"
+            />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        open={Boolean(deleteRole)}
+        title={`删除角色“${deleteRole?.name ?? ''}”`}
+        okText="确认永久删除"
+        cancelText="取消"
+        okButtonProps={{
+          danger: true,
+          disabled: !deleteImpact?.can_delete || deleteReason.trim().length < 2,
+        }}
+        confirmLoading={deleteRoleMutation.isPending}
+        className="operations-glass-modal operations-impact-modal"
+        onOk={() => deleteRoleMutation.mutate()}
+        onCancel={() => {
+          setDeleteRole(null)
+          setDeleteImpact(null)
+          setDeleteReason('')
+        }}
+      >
+        {deleteImpactLoading ? (
+          <div className="operations-loading">
+            <Spin />
+          </div>
+        ) : deleteImpact ? (
+          <div className="operations-delete-review">
+            <p className="operations-form-note">
+              系统已检查用户授权和审批流程引用；删除会同时移除权限点与自定义组织范围。
+            </p>
+            <div className="operations-impact-grid">
+              {deleteImpact.references.map((item) => (
+                <div key={item.key} className="operations-impact-item">
+                  <span>{item.label}</span>
+                  <strong>{item.count}</strong>
+                </div>
+              ))}
+            </div>
+            {deleteImpact.blockers.length ? (
+              <div className="operations-delete-blockers">
+                <AlertTriangle size={18} />
+                <div>
+                  <strong>当前不能删除</strong>
+                  {deleteImpact.blockers.map((item) => (
+                    <span key={item}>{item}</span>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <p className="operations-form-note">当前角色没有用户或审批规则引用，可以删除。</p>
+            )}
+            <label className="operations-delete-reason">
+              <span>删除原因</span>
+              <Input.TextArea
+                rows={3}
+                maxLength={500}
+                showCount
+                disabled={!deleteImpact.can_delete}
+                value={deleteReason}
+                placeholder="请填写角色删除原因"
+                onChange={(event) => setDeleteReason(event.target.value)}
+              />
+            </label>
+          </div>
+        ) : null}
+      </Modal>
     </div>
   )
 }

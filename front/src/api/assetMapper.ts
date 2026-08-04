@@ -4,6 +4,19 @@ export interface BackendAsset {
   asset_name: string
   status: 'IDLE' | 'IN_USE' | 'REPAIRING' | 'SCRAPPED'
   version: number
+  organization_id: number
+  category_id: number
+  unit_id?: number | null
+  supplier_id?: number | null
+  manager_id: number
+  holder_user_id?: number | null
+  usage_department_id?: number | null
+  source_id?: number | null
+  location_id?: number | null
+  parent_asset_id?: number | null
+  public_object_id?: number | null
+  usage_type?: string | null
+  rfid_tag?: string | null
   company_name?: string | null
   category_name?: string | null
   unit_name?: string | null
@@ -34,6 +47,20 @@ const fallbackName = (value: string | null | undefined, label: string) => value 
 export function mapBackendAsset(asset: BackendAsset) {
   return {
     id: asset.id,
+    version: asset.version,
+    organization_id: asset.organization_id,
+    category_id: asset.category_id,
+    unit_id: asset.unit_id ?? undefined,
+    supplier_id: asset.supplier_id ?? undefined,
+    manager_id: asset.manager_id,
+    holder_user_id: asset.holder_user_id ?? undefined,
+    usage_department_id: asset.usage_department_id ?? undefined,
+    source_id: asset.source_id ?? undefined,
+    location_id: asset.location_id ?? undefined,
+    parent_asset_id: asset.parent_asset_id ?? undefined,
+    public_object_id: asset.public_object_id ?? undefined,
+    usage_type: asset.usage_type ?? undefined,
+    rfid_tag: asset.rfid_tag ?? undefined,
     asset_code: asset.asset_code,
     asset_name: asset.asset_name,
     status: asset.status,

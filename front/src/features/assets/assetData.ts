@@ -3,6 +3,7 @@ import type { AssetDetail } from './types.ts'
 const demoAssetRecords: AssetDetail[] = [
   {
     id: 1,
+    version: 1,
     asset_code: 'PC-2026-001',
     asset_name: 'MacBook Pro 14 英寸',
     category_name: '电脑设备',
@@ -27,6 +28,7 @@ const demoAssetRecords: AssetDetail[] = [
   },
   {
     id: 2,
+    version: 1,
     asset_code: 'MO-2026-001',
     asset_name: 'MacBook Air M3 13 英寸',
     category_name: '电脑设备',
@@ -49,6 +51,7 @@ const demoAssetRecords: AssetDetail[] = [
   },
   {
     id: 3,
+    version: 1,
     asset_code: 'DS-2026-001',
     asset_name: 'Dell UltraSharp 27 显示器',
     category_name: '办公外设',
@@ -72,6 +75,7 @@ const demoAssetRecords: AssetDetail[] = [
   },
   {
     id: 4,
+    version: 1,
     asset_code: 'PH-2025-018',
     asset_name: 'iPhone 15 测试机',
     category_name: '移动设备',
@@ -96,6 +100,7 @@ const demoAssetRecords: AssetDetail[] = [
   },
   {
     id: 5,
+    version: 1,
     asset_code: 'PR-2021-006',
     asset_name: 'HP LaserJet Pro 打印机',
     category_name: '办公外设',
@@ -117,6 +122,7 @@ const demoAssetRecords: AssetDetail[] = [
   },
   {
     id: 6,
+    version: 1,
     asset_code: 'NB-2020-032',
     asset_name: 'ThinkPad T14 Gen 1',
     category_name: '电脑设备',
@@ -139,6 +145,7 @@ const demoAssetRecords: AssetDetail[] = [
   },
   {
     id: 7,
+    version: 1,
     asset_code: 'TB-2026-004',
     asset_name: 'iPad Air 展示机',
     category_name: '移动设备',
@@ -160,6 +167,7 @@ const demoAssetRecords: AssetDetail[] = [
   },
   {
     id: 8,
+    version: 1,
     asset_code: 'SV-2024-003',
     asset_name: 'Dell PowerEdge R760 服务器',
     category_name: '服务器设备',
@@ -183,6 +191,7 @@ const demoAssetRecords: AssetDetail[] = [
   },
   {
     id: 9,
+    version: 1,
     asset_code: 'CA-2023-007',
     asset_name: 'Canon EOS R6 Mark II 相机',
     category_name: '影像设备',
@@ -205,6 +214,7 @@ const demoAssetRecords: AssetDetail[] = [
   },
   {
     id: 10,
+    version: 1,
     asset_code: 'FU-2025-026',
     asset_name: '人体工学办公椅',
     category_name: '办公家具',
@@ -228,6 +238,7 @@ const demoAssetRecords: AssetDetail[] = [
   },
   {
     id: 11,
+    version: 1,
     asset_code: 'PJ-2019-002',
     asset_name: 'Epson 商务投影仪',
     category_name: '会议设备',
@@ -249,6 +260,7 @@ const demoAssetRecords: AssetDetail[] = [
   },
   {
     id: 12,
+    version: 1,
     asset_code: 'PC-2022-015',
     asset_name: 'MacBook Pro 16 英寸',
     category_name: '电脑设备',

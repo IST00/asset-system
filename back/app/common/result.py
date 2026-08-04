@@ -50,6 +50,11 @@ class Result:
         d = asdict(self)
         if d.get("data") is None:
             d.pop("data", None)
+        from app.observability import current_request_id
+
+        request_id = current_request_id()
+        if request_id is not None:
+            d["request_id"] = request_id
         return d
 
 

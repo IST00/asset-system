@@ -9,6 +9,8 @@ from app.common import Result
 from app.schemas.operation import (
     ActionKeySchema,
     ApprovalOpinionSchema,
+    ApprovalReminderSchema,
+    ApprovalTransferSchema,
     ConfirmReasonSchema,
     OperationPageQuerySchema,
     ReasonSchema,
@@ -24,6 +26,8 @@ _rejection_schema = RejectionSchema()
 _reason_schema = ReasonSchema()
 _confirm_reason_schema = ConfirmReasonSchema()
 _action_key_schema = ActionKeySchema()
+_transfer_schema = ApprovalTransferSchema()
+_reminder_schema = ApprovalReminderSchema()
 
 
 @bp.get("/operation-requests")
@@ -49,6 +53,48 @@ def get_request(operation_request_id: int) -> dict:
 @jwt_required()
 def my_tasks() -> dict:
     return Result.success(operation_service.my_tasks(current_user_id())).to_dict()
+
+
+@bp.get("/approval-tasks/<int:task_id>/transfer-candidates")
+@jwt_required()
+def transfer_candidates(task_id: int) -> dict:
+    return Result.success(
+        operation_service.transfer_candidates(task_id, current_user_id())
+    ).to_dict()
+
+
+@bp.post("/approval-tasks/<int:task_id>/transfer")
+@jwt_required()
+def transfer(task_id: int) -> dict:
+    payload = _transfer_schema.load(request.get_json(silent=True) or {})
+    return Result.success(
+        operation_service.transfer_task(
+            task_id,
+            current_user_id(),
+            to_approver_id=payload["to_approver_id"],
+            task_version=payload["task_version"],
+            reason=payload["reason"],
+        )
+    ).to_dict()
+
+
+@bp.post("/operation-requests/<int:operation_request_id>/remind")
+@jwt_required()
+def remind(operation_request_id: int) -> dict:
+    payload = _reminder_schema.load(request.get_json(silent=True) or {})
+    return Result.success(
+        operation_service.remind_request(
+            operation_request_id, current_user_id(), payload["reason"]
+        )
+    ).to_dict()
+
+
+@bp.get("/operation-requests/<int:operation_request_id>/approval-events")
+@jwt_required()
+def approval_events(operation_request_id: int) -> dict:
+    return Result.success(
+        operation_service.approval_events(operation_request_id, current_user_id())
+    ).to_dict()
 
 
 @bp.post("/approval-tasks/<int:task_id>/approve")

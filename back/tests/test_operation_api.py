@@ -20,6 +20,7 @@ from app.extensions import db
 from app.models import (
     ApprovalStep,
     ApprovalTask,
+    ApprovalTaskEvent,
     Asset,
     AssetCategory,
     AssetLocation,
@@ -27,6 +28,7 @@ from app.models import (
     OperationActionIdempotency,
     OperationExecutionAttempt,
     OperationRequest,
+    OperationLog,
     OperationRequestAsset,
     Organization,
     Permission,
@@ -80,6 +82,12 @@ def _seed_api_context(
         password=hash_password("admin123"),
         enabled=True,
     )
+    delegate = User(
+        username="api-delegate",
+        nickname="代理审批人",
+        password=hash_password("admin123"),
+        enabled=True,
+    )
     applicant_role = Role(
         code="API-APPLICANT", name="API申请人", data_scope=DataScope.SELF.value
     )
@@ -90,6 +98,8 @@ def _seed_api_context(
         "operation:request:view",
         "approval:task:view",
         "approval:task:approve",
+        "approval:task:transfer",
+        "approval:task:remind",
         "approval:execution:retry",
         "approval:execution:terminate",
     )
@@ -105,6 +115,7 @@ def _seed_api_context(
             location,
             applicant,
             approver,
+            delegate,
             applicant_role,
             approver_role,
             *permissions,
@@ -113,6 +124,7 @@ def _seed_api_context(
     db.session.flush()
     applicant.organization_id = organization.id
     approver.organization_id = organization.id
+    delegate.organization_id = organization.id
     category = AssetCategory(
         code="API-CATEGORY",
         name="API分类",
@@ -125,6 +137,7 @@ def _seed_api_context(
         [
             UserRole(user_id=applicant.id, role_id=applicant_role.id),
             UserRole(user_id=approver.id, role_id=approver_role.id),
+            UserRole(user_id=delegate.id, role_id=approver_role.id),
             *[
                 RolePermission(role_id=approver_role.id, permission_id=permission.id)
                 for permission in permissions
@@ -203,6 +216,8 @@ def _seed_api_context(
         "task": task,
         "applicant_headers": login(applicant.username),
         "approver_headers": login(approver.username),
+        "delegate_headers": login(delegate.username),
+        "delegate": delegate,
     }
 
 
@@ -278,6 +293,20 @@ def test_common_approve_withdraw_retry_and_terminate_actions(client) -> None:
         json={"reason": "不再需要"},
     ).get_json()["data"]
     assert withdrawn["approval_status"] == ApprovalStatus.WITHDRAWN.value
+    assert withdrawn["withdrawn_by"] == context["operation"].applicant_id
+    assert withdrawn["withdrawn_at"] is not None
+    assert withdrawn["withdrawal_reason"] == "不再需要"
+    db.session.refresh(pending)
+    assert pending.withdrawn_by == context["operation"].applicant_id
+    assert pending.withdrawn_at is not None
+    assert pending.withdrawal_reason == "不再需要"
+    audit = (
+        db.session.query(OperationLog)
+        .filter(OperationLog.action == "APPROVAL_REQUEST_WITHDRAW")
+        .one()
+    )
+    assert audit.operator_id == context["operation"].applicant_id
+    assert audit.reason == "不再需要"
 
 
 def test_internal_manual_confirmation_waits_for_feature_acceptance(client) -> None:
@@ -605,6 +634,89 @@ def test_retry_and_terminate_require_all_asset_organizations_in_scope(client) ->
     assert operation.execution_status == ExecutionStatus.FAILED.value
 
 
+def test_approval_task_transfer_uses_real_candidates_and_writes_audit(client) -> None:
+    context = _seed_api_context(client)
+    task = context["task"]
+    delegate = context["delegate"]
+
+    candidates = client.get(
+        f"/api/v1/approval-tasks/{task.id}/transfer-candidates",
+        headers=context["approver_headers"],
+    ).get_json()["data"]
+    assert candidates == [
+        {
+            "id": delegate.id,
+            "username": delegate.username,
+            "nickname": delegate.nickname,
+            "organization_id": delegate.organization_id,
+        }
+    ]
+
+    transferred = client.post(
+        f"/api/v1/approval-tasks/{task.id}/transfer",
+        headers=context["approver_headers"],
+        json={
+            "to_approver_id": delegate.id,
+            "task_version": task.version,
+            "reason": "由代理审批人处理",
+        },
+    ).get_json()
+    assert transferred["code"] == 200
+    assert transferred["data"]["approver_id"] == delegate.id
+    assert transferred["data"]["version"] == 2
+
+    db.session.refresh(task)
+    assert task.approver_id == delegate.id
+    event = db.session.query(ApprovalTaskEvent).one()
+    assert event.event_type == "TRANSFER"
+    assert event.from_approver_id != event.to_approver_id
+    assert event.to_approver_id == delegate.id
+    log = (
+        db.session.query(OperationLog).filter_by(action="APPROVAL_TASK_TRANSFER").one()
+    )
+    assert log.reason == "由代理审批人处理"
+
+    delegate_tasks = client.get(
+        "/api/v1/approval-tasks/my", headers=context["delegate_headers"]
+    ).get_json()["data"]
+    assert delegate_tasks[0]["id"] == task.id
+    assert delegate_tasks[0]["version"] == 2
+
+
+def test_approval_reminder_is_rate_limited_and_visible_in_events(client) -> None:
+    context = _seed_api_context(client)
+    operation = context["operation"]
+    url = f"/api/v1/operation-requests/{operation.id}/remind"
+
+    first = client.post(
+        url,
+        headers=context["applicant_headers"],
+        json={"reason": "资料齐全，请及时处理"},
+    ).get_json()
+    assert first["code"] == 200
+    assert first["data"]["channel"] == "SYSTEM"
+
+    second = client.post(
+        url,
+        headers=context["applicant_headers"],
+        json={"reason": "再次催办"},
+    ).get_json()
+    assert second["code"] == 1000
+    assert "一小时" in second["message"]
+
+    events = client.get(
+        f"/api/v1/operation-requests/{operation.id}/approval-events",
+        headers=context["applicant_headers"],
+    ).get_json()["data"]
+    assert len(events) == 1
+    assert events[0]["event_type"] == "REMIND"
+    assert events[0]["reason"] == "资料齐全，请及时处理"
+    log = (
+        db.session.query(OperationLog).filter_by(action="APPROVAL_REQUEST_REMIND").one()
+    )
+    assert log.after_data["channel"] == "SYSTEM"
+
+
 def test_operation_routes_are_get_and_post_only(app) -> None:
     expected_prefixes = ("/api/v1/operation-requests", "/api/v1/approval-tasks")
     routes: dict[str, set[str]] = {}
@@ -616,7 +728,13 @@ def test_operation_routes_are_get_and_post_only(app) -> None:
     assert routes == {
         "/api/v1/operation-requests": {"GET"},
         "/api/v1/operation-requests/<int:operation_request_id>": {"GET"},
+        "/api/v1/operation-requests/<int:operation_request_id>/approval-events": {
+            "GET"
+        },
+        "/api/v1/operation-requests/<int:operation_request_id>/remind": {"POST"},
         "/api/v1/approval-tasks/my": {"GET"},
+        "/api/v1/approval-tasks/<int:task_id>/transfer-candidates": {"GET"},
+        "/api/v1/approval-tasks/<int:task_id>/transfer": {"POST"},
         "/api/v1/approval-tasks/<int:task_id>/approve": {"POST"},
         "/api/v1/approval-tasks/<int:task_id>/reject": {"POST"},
         "/api/v1/operation-requests/<int:operation_request_id>/withdraw": {"POST"},

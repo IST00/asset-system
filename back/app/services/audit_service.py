@@ -20,6 +20,7 @@ def _add_asset_lifecycle(
     actor_id: int,
     before_data: Mapping[str, Any] | None,
     after_data: Mapping[str, Any],
+    remark: str | None = None,
 ) -> None:
     asset_lifecycle_repository.add(
         AssetLifecycleRecord(
@@ -29,6 +30,7 @@ def _add_asset_lifecycle(
             operator_id=actor_id,
             before_data=dict(before_data) if before_data is not None else None,
             after_data=dict(after_data),
+            remark=remark,
         )
     )
 
@@ -41,6 +43,7 @@ def record_asset_lifecycle(
     actor_id: int,
     before_data: Mapping[str, Any],
     after_data: Mapping[str, Any],
+    remark: str | None = None,
 ) -> None:
     _add_asset_lifecycle(
         asset_id=asset_id,
@@ -49,6 +52,7 @@ def record_asset_lifecycle(
         actor_id=actor_id,
         before_data=before_data,
         after_data=after_data,
+        remark=remark,
     )
 
 

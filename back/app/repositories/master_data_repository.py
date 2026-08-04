@@ -5,7 +5,14 @@ from __future__ import annotations
 from sqlalchemy import select
 
 from app.extensions import db
-from app.models import AssetCategory, AssetLocation, AssetSource, Organization, Unit
+from app.models import (
+    AssetCategory,
+    AssetLocation,
+    AssetSource,
+    LocationCodeSequence,
+    Organization,
+    Unit,
+)
 from app.repositories.base import BaseRepository
 
 
@@ -58,6 +65,41 @@ class AssetSourceRepository(BaseRepository[AssetSource]):
         )
 
 
+class LocationCodeSequenceRepository(BaseRepository[LocationCodeSequence]):
+    def __init__(self) -> None:
+        super().__init__(LocationCodeSequence)
+
+    def ensure_exists(self) -> None:
+        values = {"prefix": "LOC", "current_value": 0}
+        dialect = db.session.get_bind().dialect.name
+        if dialect == "sqlite":
+            from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+            sqlite_statement = sqlite_insert(LocationCodeSequence).values(**values)
+            db.session.execute(
+                sqlite_statement.on_conflict_do_nothing(index_elements=["prefix"])
+            )
+        elif dialect == "mysql":
+            from sqlalchemy.dialects.mysql import insert as mysql_insert
+
+            mysql_statement = mysql_insert(LocationCodeSequence).values(**values)
+            db.session.execute(
+                mysql_statement.on_duplicate_key_update(
+                    current_value=LocationCodeSequence.current_value
+                )
+            )
+        else:
+            raise RuntimeError(f"unsupported database dialect: {dialect}")
+
+    def find_for_update(self) -> LocationCodeSequence | None:
+        statement = (
+            select(LocationCodeSequence)
+            .where(LocationCodeSequence.prefix == "LOC")
+            .with_for_update()
+        )
+        return db.session.scalar(statement)
+
+
 class AssetLocationRepository(BaseRepository[AssetLocation]):
     def __init__(self) -> None:
         super().__init__(AssetLocation)
@@ -96,17 +138,20 @@ class AssetCategoryRepository(BaseRepository[AssetCategory]):
 
 unit_repository = UnitRepository()
 asset_source_repository = AssetSourceRepository()
+location_code_sequence_repository = LocationCodeSequenceRepository()
 asset_location_repository = AssetLocationRepository()
 asset_category_repository = AssetCategoryRepository()
 
 __all__ = [
     "AssetCategoryRepository",
     "AssetLocationRepository",
+    "LocationCodeSequenceRepository",
     "AssetSourceRepository",
     "OrganizationRepository",
     "UnitRepository",
     "asset_category_repository",
     "asset_location_repository",
+    "location_code_sequence_repository",
     "asset_source_repository",
     "organization_repository",
     "unit_repository",

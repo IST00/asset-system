@@ -89,6 +89,8 @@ export function normalizeAssetPayload(values: AssetPayload): AssetPayload {
     model: trimOptional(values.model),
     serial_number: trimOptional(values.serial_number),
     manager_name: values.manager_name.trim(),
+    rfid_tag: trimOptional(values.rfid_tag),
+    change_reason: trimOptional(values.change_reason),
     remark: trimOptional(values.remark),
   }
 }

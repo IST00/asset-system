@@ -89,8 +89,10 @@ export default function AppShell() {
   }
 
   const handleLogout = () => {
-    logout()
-    navigate('/login')
+    void authApi.logout().finally(() => {
+      logout()
+      navigate('/login')
+    })
   }
 
   const accountMenu: MenuProps = {

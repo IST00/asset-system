@@ -225,12 +225,19 @@ def init_observability(app: Flask) -> None:
         _thread_local.trace_id = _UNSET
 
 
+def current_request_id() -> str | None:
+    """Return the active request id for response envelopes."""
+    value = _current_trace_id()
+    return None if value == _UNSET else value
+
+
 def set_trace_id(trace_id: str) -> None:
     """Set traceId outside a request context (Celery tasks, CLI jobs)."""
     _thread_local.trace_id = trace_id or _UNSET
 
 
 __all__: list[str] = [
+    "current_request_id",
     "init_observability",
     "set_trace_id",
     "REQUEST_ID_HEADER",

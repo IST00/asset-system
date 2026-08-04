@@ -127,6 +127,7 @@ def _workflow_setup(client, self_approve: bool = False):
         "approver": approver,
         "applicant_headers": applicant_headers,
         "approver_headers": login(approver.username),
+        "payload": payload,
         "request": request_data,
     }
 
@@ -216,13 +217,105 @@ def test_reject_voids_codes_without_creating_assets(client) -> None:
     assert db.session.query(Asset).count() == 0
 
 
+def test_rejected_stock_in_can_be_edited_and_resubmitted(client) -> None:
+    context = _workflow_setup(client)
+    original_request_id = context["request"]["id"]
+    original_code = context["request"]["items"][0]["asset_code"]
+    client.post(
+        f"/api/v1/stock-in-requests/{original_request_id}/reject",
+        headers=context["approver_headers"],
+        json={"opinion": "请补充规格型号"},
+    )
+
+    payload = dict(context["payload"])
+    payload["resubmit_reason"] = "已补充规格型号后重新提交"
+    payload["idempotency_key"] = "resubmit-stock-in-1"
+    payload["items"] = [
+        {
+            **context["payload"]["items"][0],
+            "asset_name": "MacBook Air M4",
+            "specification_model": "M4 16GB",
+        }
+    ]
+    response = client.post(
+        f"/api/v1/stock-in-requests/{original_request_id}/resubmit",
+        headers=context["applicant_headers"],
+        json=payload,
+    )
+
+    assert response.status_code == 200
+    submitted = response.get_json()["data"]
+    assert submitted["parent_request_id"] == original_request_id
+    assert submitted["approval_status"] == "PENDING"
+    assert submitted["items"][0]["asset_name"] == "MacBook Air M4"
+    assert submitted["items"][0]["specification_model"] == "M4 16GB"
+    assert submitted["items"][0]["asset_code"] != original_code
+
+    original = db.session.get(OperationRequest, original_request_id)
+    current = db.session.get(OperationRequest, submitted["id"])
+    assert original is not None and original.approval_status == "REJECTED"
+    assert current is not None and current.parent_request_id == original_request_id
+    reservations = (
+        db.session.query(AssetCodeReservation).order_by(AssetCodeReservation.id).all()
+    )
+    assert [item.status for item in reservations] == [
+        AssetCodeStatus.VOID.value,
+        AssetCodeStatus.PENDING_STOCK_IN.value,
+    ]
+    audit = (
+        db.session.query(OperationLog)
+        .filter(OperationLog.action == "APPROVAL_REQUEST_RESUBMIT")
+        .one()
+    )
+    assert audit.operator_id == context["applicant"].id
+    assert audit.reason == "已补充规格型号后重新提交"
+    assert audit.before_data["parent_request_id"] == original_request_id
+    assert audit.after_data["operation_request_id"] == submitted["id"]
+
+
+def test_pending_stock_in_cannot_be_resubmitted(client) -> None:
+    context = _workflow_setup(client)
+    payload = {
+        **context["payload"],
+        "resubmit_reason": "尝试重复提交",
+        "idempotency_key": "invalid-resubmit",
+    }
+    response = client.post(
+        f"/api/v1/stock-in-requests/{context['request']['id']}/resubmit",
+        headers=context["applicant_headers"],
+        json=payload,
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["code"] != 0
+    assert "只有已拒绝" in response.get_json()["message"]
+    assert db.session.query(OperationRequest).count() == 1
+
+
 def test_applicant_can_withdraw_pending_request_and_void_code(client) -> None:
     context = _workflow_setup(client)
     response = client.post(
         f"/api/v1/stock-in-requests/{context['request']['id']}/withdraw",
         headers=context["applicant_headers"],
+        json={"reason": "申请内容需要调整"},
     )
-    assert response.get_json()["data"]["approval_status"] == "WITHDRAWN"
+    payload = response.get_json()["data"]
+    assert payload["approval_status"] == "WITHDRAWN"
+    assert payload["withdrawn_by"] == context["applicant"].id
+    assert payload["withdrawn_at"] is not None
+    assert payload["withdrawal_reason"] == "申请内容需要调整"
+    operation = db.session.get(OperationRequest, context["request"]["id"])
+    assert operation is not None
+    assert operation.withdrawn_by == context["applicant"].id
+    assert operation.withdrawn_at is not None
+    assert operation.withdrawal_reason == "申请内容需要调整"
+    audit = (
+        db.session.query(OperationLog)
+        .filter(OperationLog.action == "APPROVAL_REQUEST_WITHDRAW")
+        .one()
+    )
+    assert audit.operator_id == context["applicant"].id
+    assert audit.reason == "申请内容需要调整"
     assert (
         db.session.query(AssetCodeReservation).one().status
         == AssetCodeStatus.VOID.value

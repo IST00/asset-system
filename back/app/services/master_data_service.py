@@ -2,19 +2,39 @@
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Iterable
+from typing import Any, NoReturn
 
-from app.common import BusinessException
+from sqlalchemy import func, or_, select
+from sqlalchemy.exc import IntegrityError
+
+from app.common import BusinessException, ResultCode
 from app.enums import RecordStatus
 from app.extensions import db
-from app.models import AssetCategory, AssetLocation, AssetSource, Unit
+from app.models import (
+    Asset,
+    AssetCategory,
+    AssetCodeSequence,
+    AssetLifecycleRecord,
+    AssetLocation,
+    AssetReturnRequest,
+    AssetSource,
+    AssetUsageRequest,
+    InventoryItem,
+    InventoryTask,
+    OperationLog,
+    StockInItem,
+    Unit,
+)
 from app.repositories.master_data_repository import (
     asset_category_repository,
     asset_location_repository,
+    location_code_sequence_repository,
     asset_source_repository,
     unit_repository,
 )
-from app.services import permission_service
+from app.repositories.rbac_repository import rbac_repository
+from app.services import audit_service, permission_service
 
 
 def _reference_dict(item: Unit | AssetSource) -> dict[str, Any]:
@@ -179,19 +199,25 @@ def _location_dict(location: AssetLocation) -> dict[str, Any]:
     }
 
 
+def _allocate_location_code() -> str:
+    location_code_sequence_repository.ensure_exists()
+    sequence = location_code_sequence_repository.find_for_update()
+    if sequence is None:
+        raise RuntimeError("location code sequence initialization failed")
+    sequence.current_value += 1
+    return f"{sequence.prefix}{sequence.current_value:06d}"
+
+
 def create_location(payload: dict[str, Any], actor_id: int) -> dict[str, Any]:
     permission_service.require_permission(actor_id, "location:manage")
-    code = str(payload["code"]).strip()
     name = str(payload["name"]).strip()
     parent_id = payload.get("parent_id")
-    if asset_location_repository.find_by_code(code) is not None:
-        raise BusinessException("地点编码已存在")
     if parent_id is not None:
         _require_location(parent_id, enabled=True)
     if asset_location_repository.find_sibling(parent_id, name) is not None:
         raise BusinessException("同一上级地点下名称不能重复")
     location = AssetLocation(
-        code=code,
+        code=_allocate_location_code(),
         name=name,
         parent_id=parent_id,
         is_selectable=bool(payload.get("is_selectable", True)),
@@ -360,6 +386,244 @@ def set_category_enabled(
     return _category_dict(category)
 
 
+def _require_super_admin(actor_id: int) -> None:
+    if "SUPER_ADMIN" not in rbac_repository.role_codes_for_user(actor_id):
+        raise BusinessException(
+            "仅超级管理员可以执行删除操作", result_code=ResultCode.FORBIDDEN
+        )
+
+
+def _count_rows(model: type[Any], *conditions: Any) -> int:
+    return int(
+        db.session.scalar(select(func.count()).select_from(model).where(*conditions))
+        or 0
+    )
+
+
+def _json_contains_identifier(value: object, keys: set[str], target_id: int) -> bool:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if key in keys:
+                if isinstance(child, list) and target_id in child:
+                    return True
+                if child == target_id:
+                    return True
+            if _json_contains_identifier(child, keys, target_id):
+                return True
+        return False
+    if isinstance(value, list):
+        return any(_json_contains_identifier(item, keys, target_id) for item in value)
+    return False
+
+
+def _count_json_references(
+    rows: Iterable[tuple[object | None, ...]], keys: set[str], target_id: int
+) -> int:
+    return sum(
+        1
+        for row in rows
+        if any(_json_contains_identifier(value, keys, target_id) for value in row)
+    )
+
+
+def _json_reference_counts(keys: set[str], target_id: int) -> tuple[int, int, int]:
+    inventory_tasks = _count_json_references(
+        db.session.execute(select(InventoryTask.scope_filters)).tuples(),
+        keys,
+        target_id,
+    )
+    operation_logs = _count_json_references(
+        db.session.execute(
+            select(OperationLog.before_data, OperationLog.after_data)
+        ).tuples(),
+        keys,
+        target_id,
+    )
+    lifecycle_records = _count_json_references(
+        db.session.execute(
+            select(AssetLifecycleRecord.before_data, AssetLifecycleRecord.after_data)
+        ).tuples(),
+        keys,
+        target_id,
+    )
+    return inventory_tasks, operation_logs, lifecycle_records
+
+
+def _reference_item(key: str, label: str, count: int) -> dict[str, Any]:
+    return {"key": key, "label": label, "count": count}
+
+
+def location_delete_impact(location_id: int, actor_id: int) -> dict[str, Any]:
+    permission_service.require_permission(actor_id, "location:delete")
+    _require_super_admin(actor_id)
+    location = _require_location(location_id)
+    child_count = _count_rows(AssetLocation, AssetLocation.parent_id == location.id)
+    asset_count = _count_rows(Asset, Asset.location_id == location.id)
+    stock_in_count = _count_rows(StockInItem, StockInItem.location_id == location.id)
+    usage_request_count = _count_rows(
+        AssetUsageRequest, AssetUsageRequest.target_location_id == location.id
+    )
+    return_request_count = _count_rows(
+        AssetReturnRequest, AssetReturnRequest.return_location_id == location.id
+    )
+    inventory_item_count = _count_rows(
+        InventoryItem,
+        or_(
+            InventoryItem.ledger_location_id == location.id,
+            InventoryItem.actual_location_id == location.id,
+        ),
+    )
+    inventory_task_count, operation_log_count, lifecycle_count = _json_reference_counts(
+        {
+            "location_id",
+            "location_ids",
+            "target_location_id",
+            "return_location_id",
+            "ledger_location_id",
+            "actual_location_id",
+        },
+        location.id,
+    )
+    references = [
+        _reference_item("children", "下级地点", child_count),
+        _reference_item("assets", "当前资产", asset_count),
+        _reference_item("stock_in_items", "入库明细", stock_in_count),
+        _reference_item("usage_requests", "领用申请", usage_request_count),
+        _reference_item("return_requests", "退还申请", return_request_count),
+        _reference_item("inventory_items", "盘点明细", inventory_item_count),
+        _reference_item("inventory_tasks", "盘点任务范围", inventory_task_count),
+        _reference_item("operation_logs", "操作审计记录", operation_log_count),
+        _reference_item("lifecycle_records", "资产履历", lifecycle_count),
+    ]
+    blockers = [
+        f"仍有 {item['count']} 条{item['label']}引用该地点"
+        for item in references
+        if item["count"]
+    ]
+    return {
+        "entity_id": location.id,
+        "code": location.code,
+        "name": location.name,
+        "version": location.version,
+        "can_delete": not blockers,
+        "blockers": blockers,
+        "references": references,
+    }
+
+
+def category_delete_impact(category_id: int, actor_id: int) -> dict[str, Any]:
+    permission_service.require_permission(actor_id, "asset-category:delete")
+    _require_super_admin(actor_id)
+    category = _require_category(category_id)
+    child_count = _count_rows(AssetCategory, AssetCategory.parent_id == category.id)
+    asset_count = _count_rows(Asset, Asset.category_id == category.id)
+    stock_in_count = _count_rows(StockInItem, StockInItem.category_id == category.id)
+    inventory_item_count = _count_rows(
+        InventoryItem, InventoryItem.category_id == category.id
+    )
+    code_sequence_count = _count_rows(
+        AssetCodeSequence, AssetCodeSequence.category_id == category.id
+    )
+    inventory_task_count, operation_log_count, lifecycle_count = _json_reference_counts(
+        {"category_id", "category_ids"}, category.id
+    )
+    references = [
+        _reference_item("children", "下级分类", child_count),
+        _reference_item("assets", "当前资产", asset_count),
+        _reference_item("stock_in_items", "入库明细", stock_in_count),
+        _reference_item("inventory_items", "盘点明细", inventory_item_count),
+        _reference_item("asset_code_sequences", "资产编码流水", code_sequence_count),
+        _reference_item("inventory_tasks", "盘点任务范围", inventory_task_count),
+        _reference_item("operation_logs", "操作审计记录", operation_log_count),
+        _reference_item("lifecycle_records", "资产履历", lifecycle_count),
+    ]
+    blockers = [
+        f"仍有 {item['count']} 条{item['label']}引用该分类"
+        for item in references
+        if item["count"]
+    ]
+    return {
+        "entity_id": category.id,
+        "code": category.code,
+        "name": category.name,
+        "version": category.version,
+        "can_delete": not blockers,
+        "blockers": blockers,
+        "references": references,
+    }
+
+
+def _raise_delete_integrity(entity_name: str, error: IntegrityError) -> NoReturn:
+    db.session.rollback()
+    context = f"{error.statement or ''} {error.orig}".lower()
+    if (
+        "foreign key constraint failed" in context
+        or "cannot delete or update" in context
+    ):
+        raise BusinessException(f"{entity_name}已被使用，不能删除") from None
+    raise BusinessException(
+        f"{entity_name}删除失败，请稍后重试", result_code=ResultCode.INTERNAL_ERROR
+    ) from None
+
+
+def delete_location(
+    location_id: int, payload: dict[str, Any], actor_id: int
+) -> dict[str, Any]:
+    permission_service.require_permission(actor_id, "location:delete")
+    _require_super_admin(actor_id)
+    location = _require_location(location_id)
+    if location.version != payload["version"]:
+        raise BusinessException("地点已被其他人修改，请刷新后重试")
+    impact = location_delete_impact(location_id, actor_id)
+    if not impact["can_delete"]:
+        raise BusinessException("；".join(impact["blockers"]))
+    before_data = _location_dict(location)
+    try:
+        db.session.delete(location)
+        audit_service.record_resource_change(
+            action="LOCATION_DELETE",
+            resource_type="asset_location",
+            resource_id=location.id,
+            actor_id=actor_id,
+            before_data=before_data,
+            after_data={"deleted": True, "impact": impact},
+            reason=str(payload["reason"]).strip(),
+        )
+        db.session.commit()
+    except IntegrityError as error:
+        _raise_delete_integrity("地点", error)
+    return {"id": location_id, "deleted": True}
+
+
+def delete_category(
+    category_id: int, payload: dict[str, Any], actor_id: int
+) -> dict[str, Any]:
+    permission_service.require_permission(actor_id, "asset-category:delete")
+    _require_super_admin(actor_id)
+    category = _require_category(category_id)
+    if category.version != payload["version"]:
+        raise BusinessException("资产分类已被其他人修改，请刷新后重试")
+    impact = category_delete_impact(category_id, actor_id)
+    if not impact["can_delete"]:
+        raise BusinessException("；".join(impact["blockers"]))
+    before_data = _category_dict(category)
+    try:
+        db.session.delete(category)
+        audit_service.record_resource_change(
+            action="ASSET_CATEGORY_DELETE",
+            resource_type="asset_category",
+            resource_id=category.id,
+            actor_id=actor_id,
+            before_data=before_data,
+            after_data={"deleted": True, "impact": impact},
+            reason=str(payload["reason"]).strip(),
+        )
+        db.session.commit()
+    except IntegrityError as error:
+        _raise_delete_integrity("资产分类", error)
+    return {"id": category_id, "deleted": True}
+
+
 def category_tree(actor_id: int) -> list[dict[str, Any]]:
     permission_service.require_permission(actor_id, "asset-category:view")
     items = asset_category_repository.list_all()
@@ -376,6 +640,10 @@ def category_tree(actor_id: int) -> list[dict[str, Any]]:
 
 
 __all__ = [
+    "location_delete_impact",
+    "delete_location",
+    "delete_category",
+    "category_delete_impact",
     "category_tree",
     "create_category",
     "create_location",

@@ -171,7 +171,7 @@ def test_complete_stock_in_workflow_through_http(client) -> None:
         client.post(
             "/api/v1/locations",
             headers=admin_headers,
-            json={"code": "E2E-LOC", "name": "E2E 仓库", "is_selectable": True},
+            json={"name": "E2E 仓库", "is_selectable": True},
         )
     )
     category = _data(

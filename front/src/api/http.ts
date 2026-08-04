@@ -5,7 +5,7 @@ import axios, {
   AxiosResponse,
   InternalAxiosRequestConfig,
 } from 'axios'
-import { message } from 'antd'
+import { message as staticMessage } from 'antd'
 import { useAuthStore } from '@/store/auth'
 import type { ApiResult } from '@/types'
 
@@ -38,6 +38,20 @@ const client: AxiosInstance = axios.create({
   timeout: 15_000,
 })
 
+type HttpMessageApi = {
+  error: (content: string) => unknown
+}
+
+let httpMessageApi: HttpMessageApi | null = null
+
+export const setHttpMessageApi = (api: HttpMessageApi | null): void => {
+  httpMessageApi = api
+}
+
+const showHttpError = (content: string): void => {
+  void (httpMessageApi ?? staticMessage).error(content)
+}
+
 client.interceptors.request.use((config: InternalAxiosRequestConfig) => {
   const token = useAuthStore.getState().token
   if (token) {
@@ -52,13 +66,13 @@ client.interceptors.response.use(
     const status = err.response?.status
     const msg = err.response?.data?.message || err.message
     if (status === 401) {
-      message.error('登录已过期，请重新登录')
+      showHttpError('登录已过期，请重新登录')
       useAuthStore.getState().logout()
       window.location.href = '/login'
     } else if (status === 403) {
-      message.error('无权限')
+      showHttpError('无权限')
     } else {
-      message.error(msg || '网络错误')
+      showHttpError(msg || '网络错误')
     }
     return Promise.reject(err)
   },
@@ -74,7 +88,7 @@ const unwrapResponse = <Data>(response: AxiosResponse<ApiResult<Data> | Data>): 
   if (!isApiResult(body)) return body
   if (body.code === 200) return body.data as Data
 
-  message.error(body.message || 'Request failed')
+  showHttpError(body.message || 'Request failed')
   throw new Error(body.message || 'Request failed')
 }
 
@@ -88,6 +102,7 @@ interface HttpClient {
     data?: RequestBody,
     config?: AxiosRequestConfig<RequestBody>,
   ): Promise<Data>
+  getBlob(url: string, config?: AxiosRequestConfig): Promise<Blob>
 }
 
 const http: HttpClient = {
@@ -108,6 +123,18 @@ const http: HttpClient = {
       AxiosResponse<ApiResult<Data> | Data>
     >(url, data, config)
     return unwrapResponse(response)
+  },
+  async getBlob(url: string, config?: AxiosRequestConfig): Promise<Blob> {
+    const response = await client.get<Blob>(url, { ...config, responseType: 'blob' })
+    const contentType = String(response.headers['content-type'] ?? '')
+    if (contentType.includes('application/json')) {
+      const body = JSON.parse(await response.data.text()) as ApiResult<unknown>
+      if (body.code !== 200) {
+        showHttpError(body.message || '下载失败')
+        throw new Error(body.message || '下载失败')
+      }
+    }
+    return response.data
   },
 }
 

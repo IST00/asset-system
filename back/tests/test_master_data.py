@@ -90,13 +90,12 @@ def test_location_sibling_names_are_unique_and_only_selectable_nodes_can_be_used
     office = client.post(
         "/api/v1/locations",
         headers=headers,
-        json={"code": "LOC000001", "name": "上海办公室", "is_selectable": False},
+        json={"name": "上海办公室", "is_selectable": False},
     ).get_json()["data"]
     room = client.post(
         "/api/v1/locations",
         headers=headers,
         json={
-            "code": "LOC000002",
             "name": "A会议室",
             "parent_id": office["id"],
             "is_selectable": True,
@@ -107,7 +106,6 @@ def test_location_sibling_names_are_unique_and_only_selectable_nodes_can_be_used
         "/api/v1/locations",
         headers=headers,
         json={
-            "code": "LOC000003",
             "name": "A会议室",
             "parent_id": office["id"],
             "is_selectable": True,
@@ -169,14 +167,14 @@ def test_master_data_can_be_updated_without_changing_stable_codes(client) -> Non
     root = client.post(
         "/api/v1/locations",
         headers=headers,
-        json={"code": "UPDATE_LOC", "name": "办公室", "is_selectable": False},
+        json={"name": "办公室", "is_selectable": False},
     ).get_json()["data"]
     updated_location = client.post(
         f"/api/v1/locations/{root['id']}/update",
         headers=headers,
         json={"name": "上海办公室", "is_selectable": True, "version": root["version"]},
     ).get_json()["data"]
-    assert updated_location["code"] == "UPDATE_LOC"
+    assert updated_location["code"] == "LOC000001"
     assert updated_location["is_selectable"] is True
     disabled_location = client.post(
         f"/api/v1/locations/{root['id']}/disable", headers=headers

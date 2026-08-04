@@ -9,7 +9,7 @@ import type { AssetFormInput } from './schema'
 const selectPopupClassNames = { popup: { root: 'asset-form-select-popup' } }
 const datePopupClassNames = { popup: { root: 'asset-form-date-popup' } }
 
-type TextFieldName = 'asset_name' | 'model' | 'serial_number' | 'zero_amount_reason'
+type TextFieldName = 'asset_name' | 'model' | 'serial_number' | 'rfid_tag' | 'zero_amount_reason'
 type SelectFieldName =
   | 'company_name'
   | 'category_name'
@@ -228,15 +228,23 @@ export function AmountFormField({ control, errors, label, placeholder }: AmountF
 }
 
 export interface TextAreaFormFieldProps extends AssetFormFieldsContext {
+  name?: 'remark' | 'change_reason'
   label: string
   placeholder: string
+  required?: boolean
 }
 
-export function TextAreaFormField({ control, errors, label, placeholder }: TextAreaFormFieldProps) {
-  const name = 'remark' as const
+export function TextAreaFormField({
+  control,
+  errors,
+  name = 'remark',
+  label,
+  placeholder,
+  required,
+}: TextAreaFormFieldProps) {
   const id = getFieldId(name)
   return (
-    <FormFieldFrame id={id} label={label} wide error={errors[name]}>
+    <FormFieldFrame id={id} label={label} wide error={errors[name]} required={required}>
       <Controller
         control={control}
         name={name}

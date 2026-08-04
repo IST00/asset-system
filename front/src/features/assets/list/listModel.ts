@@ -8,7 +8,10 @@ import {
 import type { AssetStatusMeta } from '../assetModel.ts'
 import type { AssetListQuery, AssetStatus, AssetSummary } from '../types.ts'
 
-export type AssetColumnKey = Exclude<keyof AssetSummary, 'id'>
+export type AssetColumnKey = Exclude<
+  keyof AssetSummary,
+  'id' | 'version' | 'parent_asset_id' | 'holder_user_id' | 'public_object_id' | 'usage_type'
+>
 export { canCreateAsset }
 
 export interface AssetListFilterValues {

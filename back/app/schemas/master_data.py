@@ -20,7 +20,8 @@ class CreateReferenceDataRequestSchema(Schema):
     name = fields.String(required=True, validate=validate.Length(min=1, max=128))
 
 
-class CreateLocationRequestSchema(CreateReferenceDataRequestSchema):
+class CreateLocationRequestSchema(Schema):
+    name = fields.String(required=True, validate=validate.Length(min=1, max=128))
     parent_id = fields.Integer(required=False, allow_none=True, strict=True)
     is_selectable = fields.Boolean(load_default=True)
 
@@ -51,11 +52,18 @@ class UpdateAssetCategoryRequestSchema(UpdateReferenceDataRequestSchema):
     default_unit_id = fields.Integer(required=True, strict=True)
 
 
+class DeleteMasterDataRequestSchema(Schema):
+    version = fields.Integer(required=True, strict=True, validate=validate.Range(min=1))
+    reason = fields.String(required=True, validate=validate.Length(min=2, max=500))
+    confirmed = fields.Boolean(required=True, validate=validate.Equal(True))
+
+
 __all__ = [
     "CreateAssetCategoryRequestSchema",
     "CreateLocationRequestSchema",
     "CreateOrganizationRequestSchema",
     "CreateReferenceDataRequestSchema",
+    "DeleteMasterDataRequestSchema",
     "UpdateAssetCategoryRequestSchema",
     "UpdateLocationRequestSchema",
     "UpdateOrganizationRequestSchema",

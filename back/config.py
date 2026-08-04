@@ -85,11 +85,28 @@ class BaseConfig:
         "JWT_SECRET", "change-me-change-me-change-me-change-me"
     )
     JWT_ACCESS_TOKEN_EXPIRES: timedelta = timedelta(
-        seconds=int(os.getenv("JWT_EXPIRE_SECONDS", "86400"))
+        seconds=int(os.getenv("JWT_EXPIRE_SECONDS", "28800"))
     )
     JWT_TOKEN_LOCATION: list[str] = ["headers"]
     JWT_HEADER_NAME: str = "Authorization"
     JWT_HEADER_TYPE: str = "Bearer"
+
+    # --- Local account security ---
+    SESSION_IDLE_MINUTES: int = int(os.getenv("SESSION_IDLE_MINUTES", "120"))
+    LOGIN_LOCK_THRESHOLD: int = int(os.getenv("LOGIN_LOCK_THRESHOLD", "5"))
+    LOGIN_LOCK_MINUTES: int = int(os.getenv("LOGIN_LOCK_MINUTES", "15"))
+    LOGIN_RATE_LIMIT_PER_MINUTE: int = int(
+        os.getenv("LOGIN_RATE_LIMIT_PER_MINUTE", "10")
+    )
+    USER_RATE_LIMIT_PER_MINUTE: int = int(
+        os.getenv("USER_RATE_LIMIT_PER_MINUTE", "120")
+    )
+    RATE_LIMIT_ENABLED: bool = os.getenv("RATE_LIMIT_ENABLED", "true").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
     # --- flask-smorest / OpenAPI ---
     API_TITLE: str = "Scaffold Python API"
@@ -108,6 +125,8 @@ class BaseConfig:
     APP_NAME: str = "scaffold-python"
     HEALTH_PORT: int = int(os.getenv("HEALTH_PORT", "8081"))
     HEALTH_BIND: str = os.getenv("HEALTH_BIND", "0.0.0.0")
+    EXPORT_RETENTION_HOURS: int = int(os.getenv("EXPORT_RETENTION_HOURS", "24"))
+    EXPORT_STORAGE_DIR: str | None = os.getenv("EXPORT_STORAGE_DIR")
 
 
 class DevConfig(BaseConfig):
@@ -139,6 +158,7 @@ class TestConfig(BaseConfig):
     DEBUG: bool = False
     SQLALCHEMY_DATABASE_URI: str = "sqlite:///:memory:"
     JWT_SECRET_KEY: str = "test-jwt-secret-test-jwt-secret-test-jwt-secret"
+    RATE_LIMIT_ENABLED: bool = False
 
 
 _PROFILES: dict[str, type[BaseConfig]] = {

@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import datetime, timezone
+from collections.abc import Mapping, Sequence
+from datetime import date, datetime, timezone
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import ColumnElement, func, or_, select
 from sqlalchemy.orm import aliased
 
 from app.common import BusinessException, PageResult, ResultCode
@@ -19,12 +20,17 @@ from app.enums import (
 )
 from app.extensions import db
 from app.models import (
+    ApprovalStep,
     ApprovalTask,
     Asset,
     AssetCategory,
     AssetLifecycleRecord,
     AssetLocation,
     AssetSource,
+    InventoryItem,
+    InventoryTask,
+    OperationRequest,
+    OperationRequestAsset,
     Organization,
     Supplier,
     Unit,
@@ -82,6 +88,8 @@ def stock_in_request(operation_request_id: int, actor_id: int) -> None:
             item.normalized_serial
         ):
             raise BusinessException("设备序列号已存在")
+        if item.rfid_tag and asset_repository.find_by_rfid_tag(item.rfid_tag):
+            raise BusinessException("RFID 标签已存在")
         asset = Asset(
             asset_code=item.asset_code,
             asset_name=item.asset_name,
@@ -102,6 +110,7 @@ def stock_in_request(operation_request_id: int, actor_id: int) -> None:
             serial_number=item.serial_number,
             normalized_serial=item.normalized_serial,
             receipt_no=item.receipt_no,
+            rfid_tag=item.rfid_tag,
             remark=item.remark,
             custom_attributes=deepcopy(item.custom_attributes),
             data_completeness=AssetDataCompleteness.COMPLETE.value,
@@ -120,7 +129,7 @@ def stock_in_request(operation_request_id: int, actor_id: int) -> None:
                 "organization_id": asset.organization_id,
             },
         )
-    stock_in_item_repository.release_serial_reservations(stock_in.id)
+    stock_in_item_repository.release_identifier_reservations(stock_in.id)
 
 
 def _entity_name(model: type[Any], entity_id: int | None) -> str | None:
@@ -167,6 +176,10 @@ def _serialize(asset: Asset, include_amount: bool) -> dict[str, Any]:
         "serial_number": asset.serial_number,
         "receipt_no": asset.receipt_no,
         "receipt_number": asset.receipt_no,
+        "rfid_tag": asset.rfid_tag,
+        "parent_asset_id": asset.parent_asset_id,
+        "usage_type": asset.usage_type,
+        "public_object_id": asset.public_object_id,
         "remark": asset.remark,
         "custom_attributes": dict(asset.custom_attributes),
         "data_completeness": asset.data_completeness,
@@ -272,6 +285,30 @@ def dashboard(actor_id: int) -> dict[str, Any]:
         if key in scrapped_counts:
             scrapped_counts[key] += 1
 
+    inventory_overview: dict[str, Any] = {
+        "exception_items": 0,
+        "checked_assets": 0,
+        "total_assets": 0,
+    }
+    inventory_task_name = "暂无进行中的盘点任务"
+    if permission_service.has_permission(actor_id, "inventory:view"):
+        from app.services import inventory_service
+
+        inventory_overview = inventory_service.overview(actor_id)
+        inventory_tasks = inventory_service.list_tasks(
+            actor_id=actor_id, page_index=0, size=20
+        ).items
+        active_task = next(
+            (
+                item
+                for item in inventory_tasks
+                if item["status"] in ["IN_PROGRESS", "OVERDUE", "REVIEWING"]
+            ),
+            None,
+        )
+        if active_task is not None:
+            inventory_task_name = str(active_task["name"])
+
     return {
         "metrics": {
             "total": total,
@@ -282,15 +319,15 @@ def dashboard(actor_id: int) -> dict[str, Any]:
         },
         "issues": {
             "pending_approvals": pending_approvals,
-            "inventory_exceptions": 0,
+            "inventory_exceptions": int(inventory_overview["exception_items"]),
             "incomplete_assets": incomplete_assets,
             "departed_owner_assets": departed_owner_assets,
         },
         "inventory": {
-            "task_name": "暂无进行中的盘点任务",
-            "checked": 0,
-            "total": 0,
-            "exceptions": 0,
+            "task_name": inventory_task_name,
+            "checked": int(inventory_overview["checked_assets"]),
+            "total": int(inventory_overview["total_assets"]),
+            "exceptions": int(inventory_overview["exception_items"]),
         },
         "categories": [
             {"name": str(name), "value": int(count)} for name, count in category_rows
@@ -310,26 +347,153 @@ def dashboard(actor_id: int) -> dict[str, Any]:
     }
 
 
+def _normalized_text(value: object | None) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    return normalized or None
+
+
+def _name_ids(model: type[Any], value: str) -> Any:
+    return select(model.id).where(model.name == value)
+
+
+def _user_name_ids(value: str) -> Any:
+    return select(User.id).where(or_(User.nickname == value, User.username == value))
+
+
+def _build_asset_filters(
+    *, actor_id: int, filters: Mapping[str, object | None]
+) -> list[ColumnElement[bool]]:
+    conditions: list[ColumnElement[bool]] = [
+        asset_access_service.access_filter(actor_id)
+    ]
+    keyword = _normalized_text(filters.get("keyword"))
+    if keyword:
+        conditions.append(
+            or_(
+                Asset.asset_code.contains(keyword, autoescape=True),
+                Asset.asset_name.contains(keyword, autoescape=True),
+                Asset.serial_number.contains(keyword, autoescape=True),
+                Asset.receipt_no.contains(keyword, autoescape=True),
+                Asset.rfid_tag.contains(keyword, autoescape=True),
+            )
+        )
+    asset_code = _normalized_text(filters.get("asset_code"))
+    if asset_code:
+        conditions.append(Asset.asset_code == asset_code)
+    raw_codes = filters.get("asset_codes")
+    asset_codes: list[str] = []
+    if isinstance(raw_codes, str):
+        asset_codes = [item.strip() for item in raw_codes.split(",") if item.strip()]
+    elif isinstance(raw_codes, Sequence):
+        asset_codes = [str(item).strip() for item in raw_codes if str(item).strip()]
+    if asset_codes:
+        conditions.append(Asset.asset_code.in_(sorted(set(asset_codes))))
+    asset_name = _normalized_text(filters.get("asset_name"))
+    if asset_name:
+        conditions.append(Asset.asset_name.contains(asset_name, autoescape=True))
+    serial_number = _normalized_text(filters.get("serial_number"))
+    if serial_number:
+        conditions.append(Asset.normalized_serial == serial_number.lower())
+
+    name_filters = (
+        ("company_name", Asset.organization_id, Organization),
+        ("category_name", Asset.category_id, AssetCategory),
+        ("department_name", Asset.usage_department_id, Organization),
+        ("location_name", Asset.location_id, AssetLocation),
+        ("supplier_name", Asset.supplier_id, Supplier),
+        ("source_name", Asset.source_id, AssetSource),
+    )
+    for key, column, model in name_filters:
+        value = _normalized_text(filters.get(key))
+        if value:
+            conditions.append(column.in_(_name_ids(model, value)))
+    for key, column in (
+        ("user_name", Asset.holder_user_id),
+        ("manager_name", Asset.manager_id),
+    ):
+        value = _normalized_text(filters.get(key))
+        if value:
+            conditions.append(column.in_(_user_name_ids(value)))
+
+    status = _normalized_text(filters.get("status"))
+    if status:
+        conditions.append(Asset.status == status)
+    data_completeness = _normalized_text(filters.get("data_completeness"))
+    if data_completeness:
+        conditions.append(Asset.data_completeness == data_completeness)
+    purchase_date_from = filters.get("purchase_date_from")
+    if isinstance(purchase_date_from, date):
+        conditions.append(Asset.purchase_date >= purchase_date_from)
+    purchase_date_to = filters.get("purchase_date_to")
+    if isinstance(purchase_date_to, date):
+        conditions.append(Asset.purchase_date <= purchase_date_to)
+    return conditions
+
+
+def list_for_export(
+    *, actor_id: int, filters: Mapping[str, object | None], limit: int = 5000
+) -> list[Asset]:
+    permission_service.require_permission(actor_id, "asset:view")
+    statement = (
+        select(Asset)
+        .where(*_build_asset_filters(actor_id=actor_id, filters=filters))
+        .order_by(Asset.id.asc())
+        .limit(limit + 1)
+    )
+    assets = list(db.session.scalars(statement).all())
+    if len(assets) > limit:
+        raise BusinessException(f"单次最多导出 {limit} 件资产，请缩小筛选范围")
+    return assets
+
+
 def page(
     *,
     actor_id: int,
     page_index: int,
     size: int,
+    keyword: str | None = None,
     asset_code: str | None = None,
+    asset_codes: str | None = None,
     asset_name: str | None = None,
     serial_number: str | None = None,
+    company_name: str | None = None,
+    category_name: str | None = None,
+    status: str | None = None,
+    department_name: str | None = None,
+    location_name: str | None = None,
+    user_name: str | None = None,
+    manager_name: str | None = None,
+    supplier_name: str | None = None,
+    source_name: str | None = None,
+    purchase_date_from: date | None = None,
+    purchase_date_to: date | None = None,
     data_completeness: str | None = None,
 ) -> PageResult:
     permission_service.require_permission(actor_id, "asset:view")
-    filters = [asset_access_service.access_filter(actor_id)]
-    if asset_code:
-        filters.append(Asset.asset_code == asset_code.strip())
-    if asset_name:
-        filters.append(Asset.asset_name.contains(asset_name.strip(), autoescape=True))
-    if serial_number and serial_number.strip():
-        filters.append(Asset.normalized_serial == serial_number.strip().lower())
-    if data_completeness is not None:
-        filters.append(Asset.data_completeness == data_completeness)
+    filters = _build_asset_filters(
+        actor_id=actor_id,
+        filters={
+            "keyword": keyword,
+            "asset_code": asset_code,
+            "asset_codes": asset_codes,
+            "asset_name": asset_name,
+            "serial_number": serial_number,
+            "company_name": company_name,
+            "category_name": category_name,
+            "status": status,
+            "department_name": department_name,
+            "location_name": location_name,
+            "user_name": user_name,
+            "manager_name": manager_name,
+            "supplier_name": supplier_name,
+            "source_name": source_name,
+            "purchase_date_from": purchase_date_from,
+            "purchase_date_to": purchase_date_to,
+            "data_completeness": data_completeness,
+        },
+    )
     result = asset_repository.page(
         QuerySpec(
             filters=filters,
@@ -371,6 +535,146 @@ def lifecycle(asset_id: int, actor_id: int) -> list[dict[str, Any]]:
     ]
 
 
+def related_records(asset_id: int, actor_id: int) -> dict[str, Any]:
+    get(asset_id, actor_id)
+    operation_rows = db.session.execute(
+        select(OperationRequest, OperationRequestAsset)
+        .join(
+            OperationRequestAsset,
+            OperationRequestAsset.operation_request_id == OperationRequest.id,
+        )
+        .where(OperationRequestAsset.asset_id == asset_id)
+        .order_by(OperationRequest.created_at.desc(), OperationRequest.id.desc())
+    ).all()
+    operation_ids = [operation.id for operation, _asset in operation_rows]
+    steps = (
+        list(
+            db.session.scalars(
+                select(ApprovalStep)
+                .where(ApprovalStep.operation_request_id.in_(operation_ids))
+                .order_by(
+                    ApprovalStep.operation_request_id.asc(), ApprovalStep.level_no.asc()
+                )
+            ).all()
+        )
+        if operation_ids
+        else []
+    )
+    step_ids = [step.id for step in steps]
+    tasks = (
+        list(
+            db.session.scalars(
+                select(ApprovalTask)
+                .where(ApprovalTask.approval_step_id.in_(step_ids))
+                .order_by(ApprovalTask.approval_step_id.asc(), ApprovalTask.id.asc())
+            ).all()
+        )
+        if step_ids
+        else []
+    )
+    user_ids = {operation.applicant_id for operation, _asset in operation_rows}
+    user_ids.update(task.approver_id for task in tasks)
+
+    inventory_rows = db.session.execute(
+        select(InventoryItem, InventoryTask)
+        .join(InventoryTask, InventoryTask.id == InventoryItem.task_id)
+        .where(InventoryItem.asset_id == asset_id)
+        .order_by(InventoryTask.created_at.desc(), InventoryItem.id.desc())
+    ).all()
+    user_ids.update(
+        item.submitted_by
+        for item, _task in inventory_rows
+        if item.submitted_by is not None
+    )
+    users = (
+        {
+            user.id: user.nickname or user.username
+            for user in db.session.scalars(
+                select(User).where(User.id.in_(user_ids))
+            ).all()
+        }
+        if user_ids
+        else {}
+    )
+
+    tasks_by_step: dict[int, list[dict[str, Any]]] = {}
+    for task in tasks:
+        tasks_by_step.setdefault(task.approval_step_id, []).append(
+            {
+                "id": task.id,
+                "approver_id": task.approver_id,
+                "approver_name": users.get(task.approver_id),
+                "status": task.status,
+                "opinion": task.opinion,
+                "decided_at": task.decided_at,
+            }
+        )
+    steps_by_operation: dict[int, list[dict[str, Any]]] = {}
+    for step in steps:
+        steps_by_operation.setdefault(step.operation_request_id, []).append(
+            {
+                "id": step.id,
+                "level_no": step.level_no,
+                "sign_mode": step.sign_mode,
+                "status": step.status,
+                "tasks": tasks_by_step.get(step.id, []),
+            }
+        )
+
+    operations = [
+        {
+            "id": operation.id,
+            "request_no": operation.request_no,
+            "operation_type": operation.operation_type,
+            "applicant_id": operation.applicant_id,
+            "applicant_name": users.get(operation.applicant_id),
+            "approval_channel": operation.approval_channel,
+            "approval_status": operation.approval_status,
+            "execution_status": operation.execution_status,
+            "submitted_at": operation.submitted_at,
+            "approved_at": operation.approved_at,
+            "withdrawn_at": operation.withdrawn_at,
+            "withdrawal_reason": operation.withdrawal_reason,
+            "executed_at": operation.executed_at,
+            "execution_error": operation.execution_error,
+            "before_data": request_asset.before_data,
+            "target_data": request_asset.target_data,
+            "approval_steps": steps_by_operation.get(operation.id, []),
+            "created_at": operation.created_at,
+        }
+        for operation, request_asset in operation_rows
+    ]
+    inventory_records = [
+        {
+            "id": item.id,
+            "task_id": task.id,
+            "task_no": task.task_no,
+            "task_name": task.name,
+            "task_status": task.status,
+            "deadline_at": task.deadline_at,
+            "item_status": item.status,
+            "physical_result": item.physical_result,
+            "location_result": item.location_result,
+            "ledger_location_name": item.ledger_location_name,
+            "actual_location_text": item.actual_location_text,
+            "loss_reason": item.loss_reason,
+            "loss_description": item.loss_description,
+            "borrowed_by": item.borrowed_by,
+            "submission_method": item.submission_method,
+            "submitted_by": item.submitted_by,
+            "submitted_by_name": users.get(item.submitted_by),
+            "submitted_at": item.submitted_at,
+            "is_late": item.is_late,
+            "review_status": item.review_status,
+            "resolution": item.resolution,
+            "resolution_reason": item.resolution_reason,
+            "created_at": item.created_at,
+        }
+        for item, task in inventory_rows
+    ]
+    return {"operations": operations, "inventory_records": inventory_records}
+
+
 def audit_logs(actor_id: int) -> list[dict[str, Any]]:
     permission_service.require_permission(actor_id, "audit:view")
     if permission_service.accessible_organization_ids(actor_id) is not None:
@@ -393,4 +697,12 @@ def audit_logs(actor_id: int) -> list[dict[str, Any]]:
     ]
 
 
-__all__ = ["audit_logs", "get", "lifecycle", "page", "stock_in_request"]
+__all__ = [
+    "audit_logs",
+    "get",
+    "lifecycle",
+    "list_for_export",
+    "page",
+    "related_records",
+    "stock_in_request",
+]

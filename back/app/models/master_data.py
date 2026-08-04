@@ -55,6 +55,13 @@ class AssetSource(TimestampMixin, db.Model):  # type: ignore[misc,name-defined]
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
 
+class LocationCodeSequence(TimestampMixin, db.Model):  # type: ignore[misc,name-defined]
+    __tablename__ = "location_code_sequences"
+
+    prefix: Mapped[str] = mapped_column(String(16), primary_key=True)
+    current_value: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
 class AssetLocation(TimestampMixin, db.Model):  # type: ignore[misc,name-defined]
     __tablename__ = "asset_locations"
     __table_args__ = (
@@ -99,4 +106,11 @@ class AssetCategory(TimestampMixin, db.Model):  # type: ignore[misc,name-defined
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
 
-__all__ = ["AssetCategory", "AssetLocation", "AssetSource", "Organization", "Unit"]
+__all__ = [
+    "AssetCategory",
+    "AssetLocation",
+    "AssetSource",
+    "LocationCodeSequence",
+    "Organization",
+    "Unit",
+]

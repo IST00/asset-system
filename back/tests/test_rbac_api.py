@@ -120,3 +120,112 @@ def test_role_can_update_name_scope_and_custom_organizations(client) -> None:
         },
     )
     assert immutable.status_code == 400
+
+
+def test_custom_role_delete_has_impact_confirmation_and_audit(client) -> None:
+    from app.models import OperationLog
+
+    headers = _authorized_client(client)
+    created = client.post(
+        "/api/v1/roles",
+        headers=headers,
+        json={
+            "code": "TEMP_ROLE",
+            "name": "临时角色",
+            "data_scope": "SELF",
+            "reason": "测试",
+        },
+    ).get_json()["data"]
+    impact = client.get(
+        f"/api/v1/roles/{created['id']}/delete-impact", headers=headers
+    ).get_json()["data"]
+    assert impact["can_delete"] is True
+
+    invalid = client.post(
+        f"/api/v1/roles/{created['id']}/delete",
+        headers=headers,
+        json={
+            "version": created["version"],
+            "reason": "删除临时角色",
+            "confirmed": False,
+        },
+    )
+    assert invalid.status_code == 400
+
+    deleted = client.post(
+        f"/api/v1/roles/{created['id']}/delete",
+        headers=headers,
+        json={
+            "version": created["version"],
+            "reason": "删除临时角色",
+            "confirmed": True,
+        },
+    ).get_json()["data"]
+    assert deleted["deleted"] is True
+    audit = db.session.query(OperationLog).filter_by(action="ROLE_DELETE").one()
+    assert audit.reason == "删除临时角色"
+    assert audit.before_data is not None
+    assert audit.before_data["code"] == "TEMP_ROLE"
+
+
+def test_role_delete_is_blocked_for_built_in_user_and_approval_references(
+    client,
+) -> None:
+    from app.enums import AssigneeType
+    from app.models import (
+        ApprovalFlowAssigneeRule,
+        ApprovalFlowDefinition,
+        ApprovalFlowLayer,
+        ApprovalFlowVersion,
+    )
+
+    headers = _authorized_client(client)
+    built_in = Role(
+        code="BUILT_IN_TEST",
+        name="内置测试",
+        data_scope=DataScope.ALL.value,
+        built_in=True,
+    )
+    assigned = Role(code="ASSIGNED_TEST", name="已授权", data_scope=DataScope.ALL.value)
+    approval = Role(
+        code="APPROVAL_TEST", name="审批角色", data_scope=DataScope.ALL.value
+    )
+    target = User(username="role-delete-target", password="x", enabled=True)
+    db.session.add_all([built_in, assigned, approval, target])
+    db.session.flush()
+    db.session.add(UserRole(user_id=target.id, role_id=assigned.id))
+    definition = ApprovalFlowDefinition(
+        operation_type="DELETE_ROLE_TEST", name="删除角色测试"
+    )
+    db.session.add(definition)
+    db.session.flush()
+    version = ApprovalFlowVersion(flow_definition_id=definition.id, version_no=1)
+    db.session.add(version)
+    db.session.flush()
+    layer = ApprovalFlowLayer(flow_version_id=version.id, level_no=1, sign_mode="ANY")
+    db.session.add(layer)
+    db.session.flush()
+    db.session.add(
+        ApprovalFlowAssigneeRule(
+            layer_id=layer.id,
+            assignee_type=AssigneeType.ROLE.value,
+            assignee_id=approval.id,
+        )
+    )
+    db.session.commit()
+
+    built_in_impact = client.get(
+        f"/api/v1/roles/{built_in.id}/delete-impact", headers=headers
+    ).get_json()["data"]
+    assigned_impact = client.get(
+        f"/api/v1/roles/{assigned.id}/delete-impact", headers=headers
+    ).get_json()["data"]
+    approval_impact = client.get(
+        f"/api/v1/roles/{approval.id}/delete-impact", headers=headers
+    ).get_json()["data"]
+    assert built_in_impact["can_delete"] is False
+    assert assigned_impact["can_delete"] is False
+    assert approval_impact["can_delete"] is False
+    assert "内置角色" in built_in_impact["blockers"][0]
+    assert "用户" in assigned_impact["blockers"][0]
+    assert "审批规则" in approval_impact["blockers"][0]

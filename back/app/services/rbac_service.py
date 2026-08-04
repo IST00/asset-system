@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from typing import Any
 
+from sqlalchemy import func, select
+
 from app.common import BusinessException, ResultCode
-from app.enums import DataScope
+from app.enums import AssigneeType, DataScope
 from app.extensions import db
-from app.models import Permission, Role
+from app.models import ApprovalFlowAssigneeRule, Permission, Role, UserRole
 from app.repositories import rbac_repository
-from app.services import permission_service, user_service
+from app.services import audit_service, permission_service, user_service
 
 
 def _role_to_dict(role: Role) -> dict[str, Any]:
@@ -23,6 +25,17 @@ def _role_to_dict(role: Role) -> dict[str, Any]:
         "version": role.version,
         "permissions": rbac_repository.permission_codes_for_role(role.id),
         "organization_ids": rbac_repository.custom_organization_ids_for_role(role.id),
+    }
+
+
+def _user_role_snapshot(user_id: int) -> dict[str, Any]:
+    user = rbac_repository.find_user(user_id)
+    if user is None:
+        raise BusinessException("用户不存在", result_code=ResultCode.NOT_FOUND)
+    return {
+        "id": user.id,
+        "username": user.username,
+        "role_codes": rbac_repository.role_codes_for_user(user.id),
     }
 
 
@@ -62,23 +75,49 @@ def create_role(payload: dict[str, Any], actor_id: int) -> dict[str, Any]:
         enabled=True,
     )
     db.session.add(role)
+    db.session.flush()
+    after_data = _role_to_dict(role)
+    audit_service.record_resource_change(
+        action="ROLE_CREATE",
+        resource_type="role",
+        resource_id=role.id,
+        actor_id=actor_id,
+        before_data=None,
+        after_data=after_data,
+        reason=payload.get("reason"),
+    )
     db.session.commit()
-    return _role_to_dict(role)
+    return after_data
 
 
 def update_role_permissions(
-    role_id: int, permission_ids: list[int], actor_id: int
+    role_id: int,
+    permission_ids: list[int],
+    actor_id: int,
+    reason: str | None = None,
 ) -> dict[str, Any]:
     permission_service.require_permission(actor_id, "system:role:manage")
     role = rbac_repository.get_role(role_id)
     if role is None:
         raise BusinessException("角色不存在", result_code=ResultCode.NOT_FOUND)
+    before_data = _role_to_dict(role)
     unique_ids = sorted(set(permission_ids))
     if len(rbac_repository.get_permissions(unique_ids)) != len(unique_ids):
         raise BusinessException("包含不存在的权限", result_code=ResultCode.BAD_REQUEST)
     rbac_repository.replace_role_permissions(role_id, unique_ids)
+    db.session.flush()
+    after_data = _role_to_dict(role)
+    audit_service.record_resource_change(
+        action="ROLE_PERMISSIONS_UPDATE",
+        resource_type="role",
+        resource_id=role.id,
+        actor_id=actor_id,
+        before_data=before_data,
+        after_data=after_data,
+        reason=reason,
+    )
     db.session.commit()
-    return _role_to_dict(role)
+    return after_data
 
 
 def update_role(role_id: int, payload: dict[str, Any], actor_id: int) -> dict[str, Any]:
@@ -86,6 +125,7 @@ def update_role(role_id: int, payload: dict[str, Any], actor_id: int) -> dict[st
     role = rbac_repository.get_role(role_id)
     if role is None:
         raise BusinessException("角色不存在", result_code=ResultCode.NOT_FOUND)
+    before_data = _role_to_dict(role)
     if role.version != payload["version"]:
         raise BusinessException("角色已被其他人修改，请刷新后重试")
     data_scope = str(payload["data_scope"])
@@ -111,29 +151,141 @@ def update_role(role_id: int, payload: dict[str, Any], actor_id: int) -> dict[st
     role.enabled = bool(payload["enabled"])
     role.version += 1
     rbac_repository.replace_role_scope_organizations(role.id, organization_ids)
+    db.session.flush()
+    after_data = _role_to_dict(role)
+    audit_service.record_resource_change(
+        action="ROLE_UPDATE",
+        resource_type="role",
+        resource_id=role.id,
+        actor_id=actor_id,
+        before_data=before_data,
+        after_data=after_data,
+        reason=payload.get("reason"),
+    )
     db.session.commit()
-    return _role_to_dict(role)
+    return after_data
+
+
+def role_delete_impact(role_id: int, actor_id: int) -> dict[str, Any]:
+    permission_service.require_permission(actor_id, "system:role:manage")
+    role = rbac_repository.get_role(role_id)
+    if role is None:
+        raise BusinessException("角色不存在", result_code=ResultCode.NOT_FOUND)
+    user_count = int(
+        db.session.scalar(
+            select(func.count())
+            .select_from(UserRole)
+            .where(UserRole.role_id == role.id)
+        )
+        or 0
+    )
+    approval_flow_rule_count = int(
+        db.session.scalar(
+            select(func.count())
+            .select_from(ApprovalFlowAssigneeRule)
+            .where(
+                ApprovalFlowAssigneeRule.assignee_type == AssigneeType.ROLE.value,
+                ApprovalFlowAssigneeRule.assignee_id == role.id,
+            )
+        )
+        or 0
+    )
+    blockers: list[str] = []
+    if role.built_in:
+        blockers.append("系统内置角色不能删除")
+    if user_count:
+        blockers.append(f"仍有 {user_count} 名用户使用该角色")
+    if approval_flow_rule_count:
+        blockers.append(f"仍有 {approval_flow_rule_count} 条审批规则引用该角色")
+    return {
+        "role_id": role.id,
+        "role_code": role.code,
+        "role_name": role.name,
+        "version": role.version,
+        "can_delete": not blockers,
+        "blockers": blockers,
+        "references": [
+            {"key": "users", "label": "已授权用户", "count": user_count},
+            {
+                "key": "approval_flow_rules",
+                "label": "审批流程规则",
+                "count": approval_flow_rule_count,
+            },
+            {
+                "key": "permissions",
+                "label": "将一并移除的权限点",
+                "count": len(rbac_repository.permission_codes_for_role(role.id)),
+            },
+            {
+                "key": "organizations",
+                "label": "将一并移除的自定义组织范围",
+                "count": len(rbac_repository.custom_organization_ids_for_role(role.id)),
+            },
+        ],
+    }
+
+
+def delete_role(role_id: int, payload: dict[str, Any], actor_id: int) -> dict[str, Any]:
+    permission_service.require_permission(actor_id, "system:role:manage")
+    role = rbac_repository.get_role(role_id)
+    if role is None:
+        raise BusinessException("角色不存在", result_code=ResultCode.NOT_FOUND)
+    if role.version != payload["version"]:
+        raise BusinessException("角色已被其他人修改，请刷新后重试")
+    impact = role_delete_impact(role_id, actor_id)
+    if not impact["can_delete"]:
+        raise BusinessException("；".join(impact["blockers"]))
+    before_data = _role_to_dict(role)
+    audit_service.record_resource_change(
+        action="ROLE_DELETE",
+        resource_type="role",
+        resource_id=role.id,
+        actor_id=actor_id,
+        before_data=before_data,
+        after_data={"deleted": True, "impact": impact},
+        reason=str(payload["reason"]).strip(),
+    )
+    db.session.delete(role)
+    db.session.commit()
+    return {"id": role_id, "deleted": True}
 
 
 def update_user_roles(
-    user_id: int, role_ids: list[int], actor_id: int
+    user_id: int,
+    role_ids: list[int],
+    actor_id: int,
+    reason: str | None = None,
 ) -> dict[str, Any]:
     permission_service.require_permission(actor_id, "system:role:manage")
     user = rbac_repository.find_user(user_id)
     if user is None:
         raise BusinessException("用户不存在", result_code=ResultCode.NOT_FOUND)
+    before_data = _user_role_snapshot(user_id)
     unique_ids = sorted(set(role_ids))
     if len(rbac_repository.get_roles(unique_ids)) != len(unique_ids):
         raise BusinessException("包含不存在的角色", result_code=ResultCode.BAD_REQUEST)
     rbac_repository.replace_user_roles(user_id, unique_ids)
+    db.session.flush()
+    after_data = _user_role_snapshot(user_id)
+    audit_service.record_resource_change(
+        action="USER_ROLES_UPDATE",
+        resource_type="user",
+        resource_id=user_id,
+        actor_id=actor_id,
+        before_data=before_data,
+        after_data=after_data,
+        reason=reason,
+    )
     db.session.commit()
     return user_service.get_current(user_id)
 
 
 __all__ = [
     "create_role",
+    "delete_role",
     "list_permissions",
     "list_roles",
+    "role_delete_impact",
     "update_role_permissions",
     "update_role",
     "update_user_roles",

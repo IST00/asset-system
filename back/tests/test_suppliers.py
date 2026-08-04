@@ -948,7 +948,10 @@ def test_http_supplier_lifecycle_closes_status_and_version_loop(client) -> None:
         json={"version": enabled["version"], "reason": "测试删除"},
     )
     assert deleted_response.status_code == 200
-    assert deleted_response.get_json() == {"code": 200, "message": "OK"}
+    deleted_body = deleted_response.get_json()
+    assert deleted_body["code"] == 200
+    assert deleted_body["message"] == "OK"
+    assert deleted_body["request_id"]
     assert client.get("/api/v1/suppliers", headers=headers).get_json()["data"] == []
 
 

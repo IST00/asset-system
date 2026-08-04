@@ -87,6 +87,9 @@ class AssetRepository(BaseRepository[Asset]):
     def find_by_normalized_serial(self, normalized_serial: str) -> Asset | None:
         return self.find_one(Asset.normalized_serial == normalized_serial)
 
+    def find_by_rfid_tag(self, rfid_tag: str) -> Asset | None:
+        return self.find_one(Asset.rfid_tag == rfid_tag)
+
     def has_supplier_reference(self, supplier_id: int) -> bool:
         statement = select(Asset.id).where(Asset.supplier_id == supplier_id).limit(1)
         return db.session.scalar(statement) is not None

@@ -15,7 +15,7 @@ from flask import Flask
 from app.common import register_error_handlers
 from app.extensions import db, jwt, migrate
 from app.observability import init_observability
-from app.security import register_jwt_callbacks
+from app.security import register_jwt_callbacks, register_request_security
 from config import BaseConfig, load_config
 
 
@@ -48,9 +48,7 @@ def _enable_cors(app: Flask) -> None:
             "Access-Control-Allow-Headers",
             "Authorization, Content-Type, X-Requested-With",
         )
-        resp.headers.setdefault(
-            "Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, PATCH"
-        )
+        resp.headers.setdefault("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         resp.headers.setdefault("Access-Control-Max-Age", "3600")
         return resp
 
@@ -75,6 +73,7 @@ def create_app(config: type[BaseConfig] | None = None) -> Flask:
 
     # --- JWT callbacks translate errors into Result envelope ---
     register_jwt_callbacks(app, jwt)
+    register_request_security(app)
 
     # --- blueprints ---
     from app.api import register_blueprints  # import here to avoid circular imports

@@ -1,9 +1,18 @@
-import { Button, Input, Modal, Segmented, Spin, message } from 'antd'
+import { Button, Input, Modal, Segmented, Select, Spin, message } from 'antd'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Check, ClipboardCheck, Clock3, FileCheck2, ShieldCheck, X } from 'lucide-react'
+import {
+  ArrowLeftRight,
+  Check,
+  ClipboardCheck,
+  Clock3,
+  RefreshCw,
+  ShieldCheck,
+  X,
+} from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { operationApi, type ApprovalTask } from '@/api/operations'
 import StatePanel from '@/components/ui/StatePanel'
+import { useAuthStore } from '@/store/auth'
 import type { Tone } from './data'
 import {
   GlassPanel,
@@ -22,6 +31,7 @@ const operationTypeLabels: Record<string, string> = {
   TRANSFER: '资产调拨',
   REPAIR_START: '发起维修',
   REPAIR_COMPLETE: '维修完成',
+  SCRAP: '资产报废',
 }
 
 function taskStatus(status: string): { label: string; tone: Tone } {
@@ -36,10 +46,20 @@ export default function Approvals() {
   const [filter, setFilter] = useState('待我审批')
   const [rejectTask, setRejectTask] = useState<ApprovalTask | null>(null)
   const [rejectOpinion, setRejectOpinion] = useState('')
+  const [transferTask, setTransferTask] = useState<ApprovalTask | null>(null)
+  const [toApproverId, setToApproverId] = useState<number | null>(null)
+  const [transferReason, setTransferReason] = useState('')
+  const permissions = useAuthStore((state) => state.user?.permissions ?? [])
+  const canTransfer = permissions.includes('approval:task:transfer')
   const queryClient = useQueryClient()
   const query = useQuery({
     queryKey: ['approval-tasks', 'my'],
     queryFn: operationApi.myTasks,
+  })
+  const candidateQuery = useQuery({
+    queryKey: ['approval-transfer-candidates', transferTask?.id],
+    queryFn: () => operationApi.transferCandidates(transferTask?.id ?? 0),
+    enabled: transferTask !== null,
   })
   const tasks = useMemo(() => query.data ?? [], [query.data])
   const filteredTasks = useMemo(() => {
@@ -61,6 +81,7 @@ export default function Approvals() {
       void message.success('审批已通过')
       await refresh()
     },
+    onError: (error: Error) => void message.error(error.message),
   })
   const rejectMutation = useMutation({
     mutationFn: ({ taskId, opinion }: { taskId: number; opinion: string }) =>
@@ -71,6 +92,26 @@ export default function Approvals() {
       void message.success('审批已退回')
       await refresh()
     },
+    onError: (error: Error) => void message.error(error.message),
+  })
+  const transferMutation = useMutation({
+    mutationFn: ({
+      task,
+      approverId,
+      reason,
+    }: {
+      task: ApprovalTask
+      approverId: number
+      reason: string
+    }) => operationApi.transfer(task.id, approverId, task.version, reason),
+    onSuccess: async () => {
+      setTransferTask(null)
+      setToApproverId(null)
+      setTransferReason('')
+      void message.success('审批任务已转交')
+      await refresh()
+    },
+    onError: (error: Error) => void message.error(error.message),
   })
 
   const pendingCount = tasks.filter((task) => task.status === 'PENDING').length
@@ -95,17 +136,32 @@ export default function Approvals() {
     rejectMutation.mutate({ taskId: rejectTask.id, opinion })
   }
 
+  const submitTransfer = () => {
+    const reason = transferReason.trim()
+    if (!transferTask || !toApproverId || reason.length < 2) {
+      void message.warning('请选择新审批人并填写转交原因')
+      return
+    }
+    transferMutation.mutate({ task: transferTask, approverId: toApproverId, reason })
+  }
+
   return (
     <div className="operations-page">
       <OperationsHero
         eyebrow="APPROVAL CENTER"
         title="把关键决定，放在清晰的上下文里"
-        description="审批收件箱已连接后端，可以直接通过或退回当前待办任务。"
+        description="审批收件箱已连接后端，支持通过、退回和受控转交；所有转交都会保留前后审批人与原因。"
         icon={ClipboardCheck}
         tone="violet"
         actions={
-          <Button type="primary" size="large" icon={<FileCheck2 size={18} />} disabled>
-            批量审批暂未开放
+          <Button
+            type="primary"
+            size="large"
+            icon={<RefreshCw size={18} />}
+            loading={query.isFetching}
+            onClick={() => void refresh()}
+          >
+            刷新审批待办
           </Button>
         }
         aside={
@@ -175,7 +231,8 @@ export default function Approvals() {
                         {task.request_no} · 第 {task.level_no} 级审批
                       </span>
                       <span className="operations-approval__summary">
-                        任务编号 #{task.id} · 流程 #{task.operation_request_id}
+                        任务编号 #{task.id} · 流程 #{task.operation_request_id} · 版本{' '}
+                        {task.version}
                       </span>
                       <div style={{ marginTop: 10 }}>
                         <StatusPill label={status.label} tone={status.tone} />
@@ -183,11 +240,25 @@ export default function Approvals() {
                     </div>
                     {task.status === 'PENDING' ? (
                       <div className="operations-approval__actions">
+                        {canTransfer ? (
+                          <Button
+                            size="small"
+                            icon={<ArrowLeftRight size={14} />}
+                            disabled={approveMutation.isPending || rejectMutation.isPending}
+                            onClick={() => {
+                              setTransferTask(task)
+                              setToApproverId(null)
+                              setTransferReason('')
+                            }}
+                          >
+                            转交
+                          </Button>
+                        ) : null}
                         <Button
                           size="small"
                           icon={<X size={14} />}
                           loading={isRejecting}
-                          disabled={approveMutation.isPending}
+                          disabled={approveMutation.isPending || transferMutation.isPending}
                           onClick={() => setRejectTask(task)}
                         >
                           退回
@@ -197,7 +268,7 @@ export default function Approvals() {
                           size="small"
                           icon={<Check size={14} />}
                           loading={isApproving}
-                          disabled={rejectMutation.isPending}
+                          disabled={rejectMutation.isPending || transferMutation.isPending}
                           onClick={() => approveMutation.mutate(task.id)}
                         >
                           通过
@@ -234,8 +305,8 @@ export default function Approvals() {
                 <Clock3 size={18} />
               </span>
               <div className="operations-setting__content">
-                <strong>退回必须填写原因</strong>
-                <span>意见会进入流程审批轨迹，便于申请人补充资料</span>
+                <strong>转交与退回必须填写原因</strong>
+                <span>转交校验目标人员权限、数据范围和任务版本，并写入审计</span>
               </div>
             </div>
           </div>
@@ -245,6 +316,7 @@ export default function Approvals() {
       <Modal
         title={`退回 ${rejectTask?.request_no ?? ''}`}
         open={Boolean(rejectTask)}
+        className="operations-glass-modal"
         okText="确认退回"
         cancelText="取消"
         confirmLoading={rejectMutation.isPending}
@@ -262,6 +334,52 @@ export default function Approvals() {
           placeholder="请填写退回原因（必填）"
           onChange={(event) => setRejectOpinion(event.target.value)}
         />
+      </Modal>
+
+      <Modal
+        title={`转交 ${transferTask?.request_no ?? ''}`}
+        open={Boolean(transferTask)}
+        className="operations-glass-modal"
+        okText="确认转交"
+        cancelText="取消"
+        confirmLoading={transferMutation.isPending}
+        onOk={submitTransfer}
+        onCancel={() => {
+          setTransferTask(null)
+          setToApproverId(null)
+          setTransferReason('')
+        }}
+      >
+        <div className="operations-modal-fields">
+          <label>
+            <span>新审批人</span>
+            <Select
+              value={toApproverId}
+              loading={candidateQuery.isLoading}
+              placeholder={candidateQuery.isError ? '候选人加载失败' : '选择具备权限的审批人'}
+              notFoundContent={candidateQuery.isLoading ? <Spin size="small" /> : '暂无可转交人员'}
+              options={(candidateQuery.data ?? []).map((candidate) => ({
+                label: `${candidate.nickname || candidate.username} · ${candidate.username}`,
+                value: candidate.id,
+              }))}
+              onChange={setToApproverId}
+            />
+          </label>
+          <label>
+            <span>转交原因</span>
+            <Input.TextArea
+              value={transferReason}
+              rows={4}
+              maxLength={500}
+              showCount
+              placeholder="请说明转交原因（至少 2 个字）"
+              onChange={(event) => setTransferReason(event.target.value)}
+            />
+          </label>
+          <p className="operations-modal-note">
+            转交后当前任务将从你的待办中移出，新审批人可继续处理；原审批人、目标审批人和原因都会永久留痕。
+          </p>
+        </div>
       </Modal>
     </div>
   )

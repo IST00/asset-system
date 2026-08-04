@@ -54,7 +54,8 @@ export default function Login() {
 
   const enterSystem = (token: string, user: Parameters<typeof setAuth>[1]) => {
     setAuth(token, user)
-    navigate(destination, { replace: true })
+    const target = user.must_change_password ? '/profile?changePassword=required' : destination
+    navigate(target, { replace: true })
   }
 
   const onFinish = async (values: LoginValues) => {

@@ -12,6 +12,7 @@ from app.schemas.supplier import (
     UpdateSupplierRequestSchema,
 )
 from app.schemas.user import (
+    ChangePasswordRequestSchema,
     LoginRequestSchema,
     LoginResponseSchema,
     PageQuerySchema,
@@ -25,6 +26,7 @@ __all__ = [
     "CompleteAssetDataRequestSchema",
     "CreateSupplierRequestSchema",
     "DeleteSupplierRequestSchema",
+    "ChangePasswordRequestSchema",
     "LoginRequestSchema",
     "LoginResponseSchema",
     "PageQuerySchema",
