@@ -16,6 +16,7 @@ import {
   administrationApi,
   masterDataApi,
   type DeleteImpact,
+  type PermissionItem,
   type RoleItem,
   type TreeItem,
 } from '@/api/administration'
@@ -37,6 +38,44 @@ const scopeLabels: Record<string, string> = {
   DEPARTMENT_TREE: '当前及下级组织',
   CUSTOM: '自定义组织范围',
   SELF: '仅本人数据',
+}
+
+const permissionModuleLabels: Record<string, string> = {
+  approval: '审批管理',
+  asset: '资产台账',
+  'asset-category': '资产分类',
+  'asset-lifecycle': '资产生命周期',
+  'asset-source': '资产来源',
+  audit: '审计日志',
+  inventory: '资产盘点',
+  location: '存放地点',
+  'master-data': '基础资料',
+  organization: '组织架构',
+  'stock-in': '资产入库',
+  supplier: '供应商',
+  system: '系统权限',
+  unit: '计量单位',
+}
+
+const permissionNameOverrides: Record<string, string> = {
+  'approval:execution:terminate': '终止审批执行',
+  'approval:flow:disable': '停用审批流程',
+  'approval:flow:edit': '编辑审批流程',
+  'approval:flow:publish': '发布审批流程',
+  'approval:flow:view': '查看审批流程',
+  'approval:task:approve': '审批待办任务',
+  'approval:task:view': '查看审批任务',
+  'operation:request:view': '查看业务申请',
+}
+
+function permissionModuleLabel(module: string): string {
+  return permissionModuleLabels[module] ?? '其他权限模块'
+}
+
+function permissionDisplayName(item: PermissionItem): string {
+  const override = permissionNameOverrides[item.code]
+  if (override) return override
+  return /[\u3400-\u9fff]/u.test(item.name) ? item.name : '其他权限操作'
 }
 
 const scopeOptions = Object.entries(scopeLabels).map(([value, label]) => ({ value, label }))
@@ -105,7 +144,10 @@ export default function Permissions() {
     [accessQuery.data?.permissionItems],
   )
   const modules = useMemo(
-    () => Array.from(new Set(permissionItems.map((item) => item.module))).sort(),
+    () =>
+      Array.from(new Set(permissionItems.map((item) => item.module))).sort((left, right) =>
+        permissionModuleLabel(left).localeCompare(permissionModuleLabel(right), 'zh-CN'),
+      ),
     [permissionItems],
   )
   const organizationOptions = useMemo(
@@ -287,7 +329,7 @@ export default function Permissions() {
   return (
     <div className="operations-page">
       <OperationsHero
-        eyebrow="ACCESS CONTROL"
+        eyebrow="权限控制"
         title="权限只给需要的人，每次变化都有理由"
         description="角色、权限点、组织数据范围与用户授权均连接后端；敏感修改需要填写原因并二次确认。"
         icon={ShieldCheck}
@@ -339,7 +381,7 @@ export default function Permissions() {
 
       <GlassPanel>
         <SectionHeading
-          eyebrow="ROLES"
+          eyebrow="角色配置"
           title="角色与数据范围"
           description="角色编码创建后不可修改；内置角色不会在本页提供删除入口。"
           action={
@@ -379,9 +421,7 @@ export default function Permissions() {
                     </div>
                   </div>
                   <h3>{role.name}</h3>
-                  <p>
-                    {role.code} · {scopeLabels[role.data_scope] ?? role.data_scope}
-                  </p>
+                  <p>{scopeLabels[role.data_scope] ?? '其他数据范围'}</p>
                   <div className="operations-role-card__counts">
                     <div>
                       <strong>{role.organization_ids.length || '—'}</strong>
@@ -433,7 +473,7 @@ export default function Permissions() {
       <div className="operations-split">
         <GlassPanel>
           <SectionHeading
-            eyebrow="MATRIX"
+            eyebrow="权限矩阵"
             title="权限覆盖矩阵"
             description="根据角色拥有的权限码，按后端模块实时汇总。"
           />
@@ -455,7 +495,7 @@ export default function Permissions() {
                       .map((item) => item.code)
                     return (
                       <tr key={module}>
-                        <td>{module}</td>
+                        <td>{permissionModuleLabel(module)}</td>
                         {roles.map((role) => (
                           <td key={`${module}-${role.id}`}>
                             {moduleCodes.some((code) => role.permissions.includes(code)) ? (
@@ -480,12 +520,12 @@ export default function Permissions() {
 
         <GlassPanel>
           <SectionHeading
-            eyebrow="USERS"
+            eyebrow="用户授权"
             title="授权用户"
             description={
               canViewUsers
                 ? '显示后端返回的前 100 名用户，可整组替换用户角色。'
-                : '当前账号没有 system:user:view 权限。'
+                : '当前账号没有用户查看权限。'
             }
           />
           {canViewUsers ? (
@@ -594,7 +634,7 @@ export default function Permissions() {
                 },
               ]}
             >
-              <Input placeholder="例如 ASSET_OPERATOR" maxLength={64} />
+              <Input placeholder="请输入系统使用的角色标识" maxLength={64} />
             </Form.Item>
           ) : null}
           {roleDialog !== 'permissions' ? (
@@ -648,14 +688,13 @@ export default function Permissions() {
               <Checkbox.Group className="operations-permission-picker">
                 {modules.map((module) => (
                   <section key={module}>
-                    <strong>{module}</strong>
+                    <strong>{permissionModuleLabel(module)}</strong>
                     <div>
                       {permissionItems
                         .filter((item) => item.module === module && item.enabled)
                         .map((item) => (
                           <Checkbox key={item.id} value={item.id}>
-                            {item.name}
-                            <small>{item.code}</small>
+                            {permissionDisplayName(item)}
                           </Checkbox>
                         ))}
                     </div>
@@ -705,9 +744,7 @@ export default function Permissions() {
                 .map((role) => (
                   <Checkbox key={role.id} value={role.id}>
                     <strong>{role.name}</strong>
-                    <small>
-                      {role.code} · {scopeLabels[role.data_scope] ?? role.data_scope}
-                    </small>
+                    <small>{scopeLabels[role.data_scope] ?? '其他数据范围'}</small>
                   </Checkbox>
                 ))}
             </Checkbox.Group>
