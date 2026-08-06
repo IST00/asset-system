@@ -867,6 +867,7 @@ def test_self_scope_consistently_allows_own_list_detail_and_withdraw(client) -> 
     withdrawn = client.post(
         f"/api/v1/stock-in-requests/{submitted['id']}/withdraw",
         headers=context["headers"],
+        json={"reason": "申请内容需要调整"},
     ).get_json()
     assert withdrawn["code"] == 200
     assert withdrawn["data"]["approval_status"] == "WITHDRAWN"

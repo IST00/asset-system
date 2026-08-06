@@ -19,6 +19,8 @@ export const assetFormDefaultValues: Partial<AssetFormValues> = {
   model: '',
   serial_number: '',
   manager_name: '',
+  rfid_tag: '',
+  change_reason: '',
   remark: '',
 }
 
@@ -37,6 +39,8 @@ export function toAssetFormValues(asset: AssetDetail): AssetFormValues {
     model: asset.model ?? '',
     serial_number: asset.serial_number ?? '',
     manager_name: asset.manager_name ?? '',
+    rfid_tag: asset.rfid_tag ?? '',
+    change_reason: '',
     remark: asset.remark ?? '',
   }
 }

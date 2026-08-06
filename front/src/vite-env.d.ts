@@ -13,6 +13,7 @@ interface ImportMetaEnv {
   readonly VITE_APP_DESCRIPTION: string
   readonly VITE_DISABLE_SENSORS: string
   readonly VITE_IS_IPAD: string
+  readonly VITE_ENABLE_DEMO_LOGIN?: string
 }
 
 interface ImportMeta {

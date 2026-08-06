@@ -10,6 +10,7 @@ from app.schemas.master_data import (
     CreateAssetCategoryRequestSchema,
     CreateLocationRequestSchema,
     CreateReferenceDataRequestSchema,
+    DeleteMasterDataRequestSchema,
     UpdateAssetCategoryRequestSchema,
     UpdateLocationRequestSchema,
     UpdateReferenceDataRequestSchema,
@@ -22,6 +23,7 @@ bp = Blueprint("master_data", __name__, url_prefix="/api/v1")
 _reference_schema = CreateReferenceDataRequestSchema()
 _location_schema = CreateLocationRequestSchema()
 _category_schema = CreateAssetCategoryRequestSchema()
+_delete_master_data_schema = DeleteMasterDataRequestSchema()
 _update_reference_schema = UpdateReferenceDataRequestSchema()
 _update_location_schema = UpdateLocationRequestSchema()
 _update_category_schema = UpdateAssetCategoryRequestSchema()
@@ -124,6 +126,23 @@ def create_location() -> dict:
     ).to_dict()
 
 
+@bp.get("/locations/<int:location_id>/delete-impact")
+@jwt_required()
+def location_delete_impact(location_id: int) -> dict:
+    return Result.success(
+        master_data_service.location_delete_impact(location_id, current_user_id())
+    ).to_dict()
+
+
+@bp.post("/locations/<int:location_id>/delete")
+@jwt_required()
+def delete_location(location_id: int) -> dict:
+    payload = _delete_master_data_schema.load(request.get_json(silent=True) or {})
+    return Result.success(
+        master_data_service.delete_location(location_id, payload, current_user_id())
+    ).to_dict()
+
+
 @bp.post("/locations/<int:location_id>/update")
 @jwt_required()
 def update_location(location_id: int) -> dict:
@@ -163,6 +182,23 @@ def create_category() -> dict:
     payload = _category_schema.load(request.get_json(silent=True) or {})
     return Result.success(
         master_data_service.create_category(payload, current_user_id())
+    ).to_dict()
+
+
+@bp.get("/asset-categories/<int:category_id>/delete-impact")
+@jwt_required()
+def category_delete_impact(category_id: int) -> dict:
+    return Result.success(
+        master_data_service.category_delete_impact(category_id, current_user_id())
+    ).to_dict()
+
+
+@bp.post("/asset-categories/<int:category_id>/delete")
+@jwt_required()
+def delete_category(category_id: int) -> dict:
+    payload = _delete_master_data_schema.load(request.get_json(silent=True) or {})
+    return Result.success(
+        master_data_service.delete_category(category_id, payload, current_user_id())
     ).to_dict()
 
 

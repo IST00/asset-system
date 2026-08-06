@@ -4,6 +4,7 @@ export type AssetTone = 'brand' | 'success' | 'warning' | 'danger' | 'slate'
 
 export interface AssetSummary {
   id: number
+  version: number
   asset_code: string
   asset_name: string
   category_name: string
@@ -22,9 +23,25 @@ export interface AssetSummary {
   purchase_date: string
   purchase_amount: number
   information_complete: boolean
+  parent_asset_id?: number
+  holder_user_id?: number
+  public_object_id?: number
+  usage_type?: string
 }
 
 export interface AssetDetail extends AssetSummary {
+  organization_id?: number
+  category_id?: number
+  unit_id?: number
+  supplier_id?: number
+  manager_id?: number
+  source_id?: number
+  location_id?: number
+  holder_user_id?: number
+  usage_department_id?: number
+  public_object_id?: number
+  usage_type?: string
+  rfid_tag?: string
   zero_amount_reason?: string
   remark?: string
   created_at: string
@@ -64,6 +81,8 @@ export interface AssetFormValues {
   model?: string
   serial_number?: string
   manager_name: string
+  rfid_tag?: string
+  change_reason?: string
   remark?: string
 }
 

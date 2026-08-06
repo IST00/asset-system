@@ -1,174 +1,429 @@
-import type { PageResult } from '../types/index.ts'
-import { normalizeAssetPayload } from '../features/assets/assetModel.ts'
-import { demoAssets } from '../features/assets/assetData.ts'
+import http from '@/api/http'
+import {
+  administrationApi,
+  masterDataApi,
+  type ReferenceItem,
+  type TreeItem,
+} from '@/api/administration'
+import type { PageResult } from '@/types'
 import type {
   AssetDetail,
   AssetListQuery,
   AssetPayload,
   AssetSummary,
-} from '../features/assets/types.ts'
+} from '@/features/assets/types'
 
-let assetStore: AssetDetail[] = demoAssets.map((asset) => ({ ...asset }))
-let nextAssetId = assetStore.reduce((highestId, asset) => Math.max(highestId, asset.id), 0) + 1
-
-const summaryFields = (asset: AssetDetail): AssetSummary => ({
-  id: asset.id,
-  asset_code: asset.asset_code,
-  asset_name: asset.asset_name,
-  category_name: asset.category_name,
-  status: asset.status,
-  model: asset.model,
-  serial_number: asset.serial_number,
-  receipt_number: asset.receipt_number,
-  user_name: asset.user_name,
-  department_name: asset.department_name,
-  location_name: asset.location_name,
-  manager_name: asset.manager_name,
-  company_name: asset.company_name,
-  supplier_name: asset.supplier_name,
-  source_name: asset.source_name,
-  unit_name: asset.unit_name,
-  purchase_date: asset.purchase_date,
-  purchase_amount: asset.purchase_amount,
-  information_complete: asset.information_complete,
-})
-
-const cloneDetail = (asset: AssetDetail): AssetDetail => ({ ...asset })
-
-const includesText = (value: string | undefined, expected: string): boolean =>
-  value !== undefined && value.toLocaleLowerCase().indexOf(expected) >= 0
-
-const isFiniteInteger = (value: number): boolean =>
-  value === value && value !== Infinity && value !== -Infinity && Math.floor(value) === value
-
-const normalizePage = (page: number): number => (isFiniteInteger(page) && page > 0 ? page : 1)
-
-const normalizeSize = (size: number): 20 | 50 | 100 => {
-  if (size === 20 || size === 50 || size === 100) return size
-  return 50
+interface BackendPage<T> {
+  items: T[]
+  total: number
+  page: number
+  size: number
 }
 
-const padNumber = (value: number, minimumLength: number): string => {
-  let result = String(value)
-  while (result.length < minimumLength) result = `0${result}`
-  return result
+export interface AssetLifecycleRecord {
+  id: number
+  operation_type: string
+  operation_no: string
+  operator_id: number
+  before_data: Record<string, unknown> | null
+  after_data: Record<string, unknown> | null
+  remark?: string | null
+  created_at: string
 }
 
-function createAssetCode(now: Date): string {
-  const prefix = `PC-${now.getFullYear()}-`
-  let highestSequence = 0
+import { mapBackendAsset, type BackendAsset } from '@/api/assetMapper'
 
-  assetStore.forEach((asset) => {
-    if (asset.asset_code.indexOf(prefix) !== 0) return
+const toSummary = (asset: AssetDetail): AssetSummary => asset
 
-    const sequence = Number(asset.asset_code.slice(prefix.length))
-    if (isFiniteInteger(sequence) && sequence > highestSequence) highestSequence = sequence
+export async function listAssets(query: AssetListQuery): Promise<PageResult<AssetSummary>> {
+  const params: Record<string, string | number> = {
+    page: Math.max(0, query.page - 1),
+    size: query.size,
+  }
+  const assignText = (key: keyof AssetListQuery) => {
+    const value = query[key]
+    if (typeof value === 'string' && value.trim()) params[key] = value.trim()
+  }
+  const textFilterKeys: Array<keyof AssetListQuery> = [
+    'keyword',
+    'company_name',
+    'category_name',
+    'status',
+    'department_name',
+    'location_name',
+    'user_name',
+    'manager_name',
+    'supplier_name',
+    'source_name',
+    'purchase_date_from',
+    'purchase_date_to',
+  ]
+  textFilterKeys.forEach(assignText)
+  if (query.asset_codes?.length) params.asset_codes = query.asset_codes.join(',')
+  if (query.information_complete !== undefined) {
+    params.data_completeness = query.information_complete ? 'COMPLETE' : 'INCOMPLETE'
+  }
+
+  const result = await http.get<unknown, BackendPage<BackendAsset>>('/assets', { params })
+  return {
+    records: result.items.map(mapBackendAsset).map(toSummary),
+    total: result.total,
+    page: result.page + 1,
+    size: result.size,
+  }
+}
+
+export async function getAsset(assetId: number): Promise<AssetDetail> {
+  try {
+    const result = await http.get<unknown, BackendAsset>(`/assets/${assetId}`)
+    return mapBackendAsset(result)
+  } catch (error) {
+    if (error instanceof Error && /not found|不存在/i.test(error.message)) {
+      throw new Error('ASSET_NOT_FOUND')
+    }
+    throw error
+  }
+}
+
+export function getAssetLifecycle(assetId: number): Promise<AssetLifecycleRecord[]> {
+  return http.get<unknown, AssetLifecycleRecord[]>(`/assets/${assetId}/lifecycle`)
+}
+
+export interface AssetApprovalTaskRecord {
+  id: number
+  approver_id: number
+  approver_name?: string | null
+  status: string
+  opinion?: string | null
+  decided_at?: string | null
+}
+
+export interface AssetApprovalStepRecord {
+  id: number
+  level_no: number
+  sign_mode: string
+  status: string
+  tasks: AssetApprovalTaskRecord[]
+}
+
+export interface AssetOperationRecord {
+  id: number
+  request_no: string
+  operation_type: string
+  applicant_id: number
+  applicant_name?: string | null
+  approval_channel: string
+  approval_status: string
+  execution_status: string
+  submitted_at?: string | null
+  approved_at?: string | null
+  withdrawn_at?: string | null
+  withdrawal_reason?: string | null
+  executed_at?: string | null
+  execution_error?: string | null
+  before_data: Record<string, unknown>
+  target_data: Record<string, unknown>
+  approval_steps: AssetApprovalStepRecord[]
+  created_at: string
+}
+
+export interface AssetInventoryRecord {
+  id: number
+  task_id: number
+  task_no: string
+  task_name: string
+  task_status: string
+  deadline_at: string
+  item_status: string
+  physical_result?: string | null
+  location_result?: string | null
+  ledger_location_name?: string | null
+  actual_location_text?: string | null
+  loss_reason?: string | null
+  loss_description?: string | null
+  borrowed_by?: string | null
+  submission_method?: string | null
+  submitted_by?: number | null
+  submitted_by_name?: string | null
+  submitted_at?: string | null
+  is_late: boolean
+  review_status: string
+  resolution?: string | null
+  resolution_reason?: string | null
+  created_at: string
+}
+
+export interface AssetRelatedRecords {
+  operations: AssetOperationRecord[]
+  inventory_records: AssetInventoryRecord[]
+}
+
+export function getAssetRelatedRecords(assetId: number): Promise<AssetRelatedRecords> {
+  return http.get<unknown, AssetRelatedRecords>(`/assets/${assetId}/related-records`)
+}
+
+export interface AssetReferenceData {
+  organizations: TreeItem[]
+  categories: TreeItem[]
+  units: ReferenceItem[]
+  sources: ReferenceItem[]
+  locations: TreeItem[]
+  suppliers: ReferenceItem[]
+  managers: Array<{ id: number; name: string; enabled: boolean }>
+}
+
+export interface StockInSubmitResult {
+  id: number
+  request_no: string
+  approval_status: string
+  execution_status: string
+}
+
+export interface StockInRequestItem {
+  id: number
+  asset_code: string
+  asset_name: string
+  category_id: number
+  unit_id: number
+  supplier_id?: number | null
+  original_amount?: string
+  zero_amount_reason?: string | null
+  purchase_date: string
+  service_life_months: number
+  manager_id: number
+  source_id: number
+  location_id: number
+  specification_model?: string | null
+  serial_number?: string | null
+  receipt_no?: string | null
+  rfid_tag?: string | null
+  remark?: string | null
+  custom_attributes: Record<string, unknown>
+}
+
+export interface StockInRequestDetail extends StockInSubmitResult {
+  parent_request_id?: number | null
+  organization_id: number
+  applicant_id: number
+  remark?: string | null
+  items: StockInRequestItem[]
+}
+
+const flattenTree = (items: TreeItem[]): TreeItem[] =>
+  items.flatMap((item) => [item, ...flattenTree(item.children ?? [])])
+
+const requireNamed = <T extends { id: number; name: string }>(
+  items: T[],
+  name: string | undefined,
+  label: string,
+): T => {
+  const normalized = name?.trim()
+  const item = items.find((candidate) => candidate.name === normalized)
+  if (!item) throw new Error(`${label}已失效，请刷新页面后重新选择`)
+  return item
+}
+
+export async function loadAssetReferences(): Promise<AssetReferenceData> {
+  const [organizations, categories, units, sources, locations, suppliers, users] =
+    await Promise.all([
+      masterDataApi.organizations(),
+      masterDataApi.categories(),
+      masterDataApi.units(),
+      masterDataApi.sources(),
+      masterDataApi.locations(),
+      masterDataApi.suppliers(),
+      administrationApi.users(),
+    ])
+  return {
+    organizations,
+    categories,
+    units,
+    sources,
+    locations,
+    suppliers,
+    managers: users.items.map((user) => ({
+      id: user.id,
+      name: user.nickname || user.username,
+      enabled: user.enabled !== false,
+    })),
+  }
+}
+
+function buildStockInRequestPayload(payload: AssetPayload, references: AssetReferenceData) {
+  const organizations = flattenTree(references.organizations)
+  const categories = flattenTree(references.categories)
+  const locations = flattenTree(references.locations)
+  const organization = requireNamed(organizations, payload.company_name, '所属公司')
+  const category = requireNamed(categories, payload.category_name, '资产分类')
+  const unit = requireNamed(references.units, payload.unit_name, '计量单位')
+  const source = requireNamed(references.sources, payload.source_name, '资产来源')
+  const location = requireNamed(locations, payload.location_name, '存放地点')
+  const manager = requireNamed(references.managers, payload.manager_name, '责任管理员')
+  const supplier = payload.supplier_name
+    ? requireNamed(references.suppliers, payload.supplier_name, '供应商')
+    : undefined
+
+  return {
+    organization_id: organization.id,
+    remark: payload.remark,
+    idempotency_key: crypto.randomUUID(),
+    items: [
+      {
+        asset_name: payload.asset_name,
+        category_id: category.id,
+        unit_id: unit.id,
+        original_amount: payload.purchase_amount.toFixed(2),
+        zero_amount_reason: payload.zero_amount_reason,
+        purchase_date: payload.purchase_date,
+        supplier_id: supplier?.id,
+        manager_id: manager.id,
+        source_id: source.id,
+        location_id: location.id,
+        specification_model: payload.model,
+        serial_number: payload.serial_number,
+        rfid_tag: payload.rfid_tag || undefined,
+        remark: payload.remark,
+        custom_attributes: {},
+      },
+    ],
+  }
+}
+
+export function createAsset(
+  payload: AssetPayload,
+  references: AssetReferenceData,
+): Promise<StockInSubmitResult> {
+  return http.post<unknown, StockInSubmitResult>(
+    '/stock-in-requests',
+    buildStockInRequestPayload(payload, references),
+  )
+}
+
+export function getStockInRequest(requestId: number): Promise<StockInRequestDetail> {
+  return http.get<unknown, StockInRequestDetail>(`/stock-in-requests/${requestId}`)
+}
+
+export function resubmitAsset(
+  parentRequestId: number,
+  payload: AssetPayload,
+  references: AssetReferenceData,
+  original: StockInRequestDetail,
+): Promise<StockInSubmitResult> {
+  const reason = payload.change_reason?.trim()
+  if (!reason) throw new Error('请填写重新提交说明')
+  const requestPayload = buildStockInRequestPayload(payload, references)
+  return http.post<unknown, StockInSubmitResult>(`/stock-in-requests/${parentRequestId}/resubmit`, {
+    ...requestPayload,
+    items: requestPayload.items.map((item, index) => ({
+      ...item,
+      service_life_months: original.items[index]?.service_life_months,
+      receipt_no: original.items[index]?.receipt_no,
+      custom_attributes: original.items[index]?.custom_attributes ?? {},
+    })),
+    resubmit_reason: reason,
   })
-
-  return `${prefix}${padNumber(highestSequence + 1, 3)}`
 }
 
-function matchesKeyword(asset: AssetDetail, keyword: string | undefined): boolean {
-  const expected = keyword?.trim().toLocaleLowerCase()
-  if (!expected) return true
-
-  return [
-    asset.asset_code,
-    asset.asset_name,
-    asset.serial_number,
-    asset.user_name,
-    asset.receipt_number,
-  ].some((value) => includesText(value, expected))
-}
-
-function matchesExactFilter(value: string | undefined, expected: string | undefined): boolean {
-  return !expected || value === expected
-}
-
-function buildAssetCodeIndex(
-  assetCodes: readonly string[] | undefined,
-): Record<string, true> | null {
-  if (!assetCodes?.length) return null
-
-  const index: Record<string, true> = {}
-  assetCodes.forEach((assetCode) => {
-    index[`asset-code:${assetCode}`] = true
+export async function updateAsset(
+  assetId: number,
+  payload: AssetPayload,
+  current: AssetDetail,
+  references: AssetReferenceData,
+): Promise<AssetDetail> {
+  const categories = flattenTree(references.categories)
+  const locations = flattenTree(references.locations)
+  const category = requireNamed(categories, payload.category_name, '资产分类')
+  const unit = requireNamed(references.units, payload.unit_name, '计量单位')
+  const source = requireNamed(references.sources, payload.source_name, '资产来源')
+  const location = requireNamed(locations, payload.location_name, '存放地点')
+  const manager = requireNamed(references.managers, payload.manager_name, '责任管理员')
+  const supplier = payload.supplier_name
+    ? requireNamed(references.suppliers, payload.supplier_name, '供应商')
+    : undefined
+  const result = await http.post<unknown, BackendAsset>(`/assets/${assetId}/update`, {
+    version: current.version,
+    reason: payload.change_reason?.trim() || '修正资产资料',
+    asset_name: payload.asset_name,
+    category_id: category.id,
+    unit_id: unit.id,
+    supplier_id: supplier?.id ?? null,
+    original_amount: payload.purchase_amount.toFixed(2),
+    zero_amount_reason: payload.zero_amount_reason ?? null,
+    purchase_date: payload.purchase_date,
+    manager_id: manager.id,
+    source_id: source.id,
+    location_id: location.id,
+    specification_model: payload.model ?? null,
+    serial_number: payload.serial_number ?? null,
+    rfid_tag: payload.rfid_tag ?? null,
+    remark: payload.remark ?? null,
   })
-  return index
+  return mapBackendAsset(result)
 }
 
-function matchesQuery(
-  asset: AssetDetail,
-  query: AssetListQuery,
-  assetCodeIndex: Record<string, true> | null,
-): boolean {
-  if (!matchesKeyword(asset, query.keyword)) return false
-  if (assetCodeIndex && assetCodeIndex[`asset-code:${asset.asset_code}`] !== true) return false
-  if (!matchesExactFilter(asset.company_name, query.company_name)) return false
-  if (!matchesExactFilter(asset.category_name, query.category_name)) return false
-  if (query.status && asset.status !== query.status) return false
-  if (!matchesExactFilter(asset.department_name, query.department_name)) return false
-  if (!matchesExactFilter(asset.location_name, query.location_name)) return false
-  if (
-    query.information_complete !== undefined &&
-    asset.information_complete !== query.information_complete
-  ) {
-    return false
-  }
-  if (!matchesExactFilter(asset.user_name, query.user_name)) return false
-  if (!matchesExactFilter(asset.manager_name, query.manager_name)) return false
-  if (!matchesExactFilter(asset.supplier_name, query.supplier_name)) return false
-  if (!matchesExactFilter(asset.source_name, query.source_name)) return false
-  if (query.purchase_date_from && asset.purchase_date < query.purchase_date_from) return false
-  if (query.purchase_date_to && asset.purchase_date > query.purchase_date_to) return false
-  return true
+export interface CsvAssetImportRow {
+  organization_name: string
+  asset_name: string
+  category_name: string
+  unit_name: string
+  original_amount: number
+  zero_amount_reason?: string
+  purchase_date: string
+  supplier_name?: string
+  manager_name: string
+  source_name: string
+  location_name: string
+  specification_model?: string
+  serial_number?: string
+  rfid_tag?: string
+  remark?: string
 }
 
-export function listAssets(query: AssetListQuery): Promise<PageResult<AssetSummary>> {
-  const size = normalizeSize(query.size)
-  const assetCodeIndex = buildAssetCodeIndex(query.asset_codes)
-  const filtered = assetStore.filter((asset) => matchesQuery(asset, query, assetCodeIndex))
-  const total = filtered.length
-  const lastPage = Math.max(1, Math.ceil(total / size))
-  const page = Math.min(normalizePage(query.page), lastPage)
-  const start = (page - 1) * size
-  const records = filtered.slice(start, start + size).map(summaryFields)
+export function createAssetsBatch(
+  rows: CsvAssetImportRow[],
+  references: AssetReferenceData,
+): Promise<StockInSubmitResult> {
+  if (!rows.length) throw new Error('导入文件没有可提交的数据')
+  if (rows.length > 100) throw new Error('单次导入最多 100 条资产')
 
-  return Promise.resolve({ records, total, page, size })
-}
-
-export function getAsset(assetId: number): Promise<AssetDetail> {
-  const asset = assetStore.find((item) => item.id === assetId)
-  return asset ? Promise.resolve(cloneDetail(asset)) : Promise.reject(new Error('ASSET_NOT_FOUND'))
-}
-
-export function createAsset(payload: AssetPayload): Promise<AssetDetail> {
-  const values = normalizeAssetPayload(payload)
-  const now = new Date()
-  const asset: AssetDetail = {
-    ...values,
-    id: nextAssetId,
-    asset_code: createAssetCode(now),
-    status: 'IDLE',
-    information_complete: true,
-    created_at: now.toISOString(),
-    updated_at: now.toISOString(),
+  const organizations = flattenTree(references.organizations)
+  const categories = flattenTree(references.categories)
+  const locations = flattenTree(references.locations)
+  const organization = requireNamed(organizations, rows[0].organization_name, '所属公司')
+  if (rows.some((row) => row.organization_name.trim() !== organization.name)) {
+    throw new Error('同一个导入文件只能包含一个所属公司')
   }
 
-  nextAssetId += 1
-  assetStore = assetStore.concat(asset)
-  return Promise.resolve(cloneDetail(asset))
-}
-
-export function updateAsset(assetId: number, payload: AssetPayload): Promise<AssetDetail> {
-  const current = assetStore.find((asset) => asset.id === assetId)
-  if (!current) return Promise.reject(new Error('ASSET_NOT_FOUND'))
-
-  const updated: AssetDetail = {
-    ...current,
-    ...normalizeAssetPayload(payload),
-    updated_at: new Date().toISOString(),
-  }
-  assetStore = assetStore.map((asset) => (asset.id === assetId ? updated : asset))
-  return Promise.resolve(cloneDetail(updated))
+  return http.post<unknown, StockInSubmitResult>('/stock-in-requests', {
+    organization_id: organization.id,
+    remark: `CSV 批量导入，共 ${rows.length} 条`,
+    idempotency_key: crypto.randomUUID(),
+    items: rows.map((row) => {
+      const category = requireNamed(categories, row.category_name, '资产分类')
+      const unit = requireNamed(references.units, row.unit_name, '计量单位')
+      const source = requireNamed(references.sources, row.source_name, '资产来源')
+      const location = requireNamed(locations, row.location_name, '存放地点')
+      const manager = requireNamed(references.managers, row.manager_name, '责任管理员')
+      const supplier = row.supplier_name
+        ? requireNamed(references.suppliers, row.supplier_name, '供应商')
+        : undefined
+      return {
+        asset_name: row.asset_name,
+        category_id: category.id,
+        unit_id: unit.id,
+        original_amount: row.original_amount.toFixed(2),
+        zero_amount_reason: row.zero_amount_reason || undefined,
+        purchase_date: row.purchase_date,
+        supplier_id: supplier?.id,
+        manager_id: manager.id,
+        source_id: source.id,
+        location_id: location.id,
+        specification_model: row.specification_model || undefined,
+        serial_number: row.serial_number || undefined,
+        rfid_tag: row.rfid_tag || undefined,
+        remark: row.remark || undefined,
+        custom_attributes: {},
+      }
+    }),
+  })
 }

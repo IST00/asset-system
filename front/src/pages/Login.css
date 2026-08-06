@@ -1,0 +1,578 @@
+.asset-login {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(420px, 1.08fr) minmax(480px, 0.92fr);
+  min-height: 100vh;
+  overflow: hidden;
+  color: var(--asset-color-text);
+  background: #f4f7fb;
+}
+
+.asset-login::before {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  content: '';
+  background-image:
+    linear-gradient(rgba(37, 99, 235, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(37, 99, 235, 0.035) 1px, transparent 1px);
+  background-size: 32px 32px;
+  mask-image: linear-gradient(to right, transparent 35%, #000 100%);
+}
+
+.asset-login__glow {
+  position: absolute;
+  border-radius: 999px;
+  pointer-events: none;
+  filter: blur(4px);
+}
+
+.asset-login__glow--top {
+  top: -220px;
+  right: -170px;
+  width: 520px;
+  height: 520px;
+  background: rgba(37, 99, 235, 0.1);
+}
+
+.asset-login__glow--bottom {
+  right: 28%;
+  bottom: -260px;
+  width: 480px;
+  height: 480px;
+  background: rgba(20, 184, 166, 0.08);
+}
+
+.asset-login__story {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  padding: clamp(32px, 4vw, 64px) clamp(36px, 6vw, 96px);
+  color: #fff;
+  background:
+    radial-gradient(circle at 82% 14%, rgba(96, 165, 250, 0.27), transparent 28%),
+    radial-gradient(circle at 14% 82%, rgba(45, 212, 191, 0.13), transparent 26%),
+    linear-gradient(145deg, #0f1f3a 0%, #142a50 48%, #183665 100%);
+}
+
+.asset-login__story::after {
+  position: absolute;
+  right: -1px;
+  bottom: 10%;
+  width: 1px;
+  height: 54%;
+  content: '';
+  background: linear-gradient(transparent, rgba(255, 255, 255, 0.22), transparent);
+}
+
+.asset-login__brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 13px;
+  width: fit-content;
+}
+
+.asset-login__brand-mark {
+  display: grid;
+  width: 46px;
+  height: 46px;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 14px;
+  color: #dbeafe;
+  background: rgba(255, 255, 255, 0.1);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(12px);
+}
+
+.asset-login__brand > span:last-child {
+  display: grid;
+  gap: 2px;
+}
+
+.asset-login__brand strong {
+  font-size: 18px;
+  font-weight: 650;
+  letter-spacing: 0.03em;
+}
+
+.asset-login__brand small {
+  color: rgba(219, 234, 254, 0.64);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+}
+
+.asset-login__story-content {
+  width: min(100%, 630px);
+  margin: auto 0;
+  padding: 70px 0;
+}
+
+.asset-login__eyebrow,
+.asset-login__secure-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+
+.asset-login__eyebrow {
+  padding: 8px 12px;
+  border: 1px solid rgba(191, 219, 254, 0.18);
+  color: #bfdbfe;
+  background: rgba(59, 130, 246, 0.12);
+}
+
+.asset-login__story h1 {
+  margin-top: 26px;
+  font-size: clamp(44px, 5vw, 72px);
+  font-weight: 640;
+  line-height: 1.12;
+  letter-spacing: -0.055em;
+}
+
+.asset-login__story-content > p {
+  max-width: 560px;
+  margin-top: 24px;
+  color: rgba(226, 232, 240, 0.76);
+  font-size: 16px;
+  line-height: 1.8;
+}
+
+.asset-login__capabilities {
+  display: grid;
+  gap: 11px;
+  margin-top: 38px;
+}
+
+.asset-login__capability {
+  display: grid;
+  grid-template-columns: 38px 1fr auto;
+  align-items: center;
+  gap: 12px;
+  max-width: 470px;
+  min-height: 56px;
+  padding: 9px 14px 9px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 14px;
+  color: rgba(239, 246, 255, 0.92);
+  background: rgba(255, 255, 255, 0.055);
+  transition:
+    transform 180ms ease,
+    background 180ms ease,
+    border-color 180ms ease;
+}
+
+.asset-login__capability:hover {
+  transform: translateX(4px);
+  border-color: rgba(147, 197, 253, 0.24);
+  background: rgba(255, 255, 255, 0.085);
+}
+
+.asset-login__capability > span {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border-radius: 11px;
+  color: #bfdbfe;
+  background: rgba(59, 130, 246, 0.16);
+}
+
+.asset-login__capability p {
+  font-size: 14px;
+}
+
+.asset-login__capability > svg {
+  color: #5eead4;
+}
+
+.asset-login__story-footer {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: rgba(203, 213, 225, 0.62);
+  font-size: 12px;
+}
+
+.asset-login__access {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 40px clamp(28px, 6vw, 96px) 28px;
+}
+
+.asset-login__card {
+  width: min(100%, 430px);
+  padding: 38px 40px 32px;
+  border: 1px solid rgba(215, 221, 231, 0.82);
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow:
+    0 24px 70px rgba(23, 32, 51, 0.11),
+    0 2px 10px rgba(23, 32, 51, 0.035);
+  backdrop-filter: blur(18px);
+}
+
+.asset-login__mobile-brand {
+  display: none;
+}
+
+.asset-login__secure-label {
+  padding: 6px 10px;
+  color: #1d4ed8;
+  background: #edf4ff;
+}
+
+.asset-login__card-heading h2 {
+  margin-top: 18px;
+  color: #15213a;
+  font-size: 30px;
+  font-weight: 650;
+  letter-spacing: -0.035em;
+}
+
+.asset-login__card-heading > p {
+  margin-top: 8px;
+  color: var(--asset-color-text-muted);
+  font-size: 14px;
+}
+
+.asset-login__form {
+  margin-top: 30px;
+}
+
+.asset-login__form .ant-form-item {
+  margin-bottom: 20px;
+}
+
+.asset-login__form .ant-form-item-label > label {
+  height: auto;
+  color: #344054;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.asset-login__form .ant-input,
+.asset-login__form .ant-input-affix-wrapper {
+  min-height: 48px;
+  border-radius: 10px;
+}
+
+.asset-login__form .ant-input-prefix {
+  margin-right: 10px;
+  color: #98a2b3;
+}
+
+.asset-login__submit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 48px;
+  margin-top: 4px;
+  border-radius: 10px;
+  font-weight: 600;
+  box-shadow: 0 10px 20px rgba(37, 99, 235, 0.2);
+}
+
+.asset-login__demo {
+  margin-top: 23px;
+}
+
+.asset-login__divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: #98a2b3;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+}
+
+.asset-login__divider::before,
+.asset-login__divider::after {
+  flex: 1;
+  height: 1px;
+  content: '';
+  background: #e6eaf0;
+}
+
+.asset-login__demo-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 46px;
+  margin-top: 17px;
+  border-color: #cdd9ed;
+  border-radius: 10px;
+  color: #1d4ed8;
+  font-weight: 600;
+  background: #f8fbff;
+}
+
+.asset-login__demo > p {
+  margin-top: 9px;
+  color: #98a2b3;
+  font-size: 11px;
+  text-align: center;
+}
+
+.asset-login__security-note {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  margin-top: 24px;
+  color: #7a8599;
+  font-size: 11px;
+}
+
+.asset-login__security-note svg {
+  color: #169c68;
+}
+
+.asset-login__footer {
+  display: flex;
+  gap: 18px;
+  justify-content: space-between;
+  width: min(100%, 430px);
+  margin-top: 22px;
+  color: #98a2b3;
+  font-size: 11px;
+}
+
+@media (max-width: 980px) {
+  .asset-login {
+    grid-template-columns: minmax(330px, 0.82fr) minmax(430px, 1.18fr);
+  }
+
+  .asset-login__story {
+    padding-right: 42px;
+    padding-left: 42px;
+  }
+
+  .asset-login__story h1 {
+    font-size: 48px;
+  }
+
+  .asset-login__capability {
+    grid-template-columns: 34px 1fr;
+  }
+
+  .asset-login__capability > svg {
+    display: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .asset-login {
+    display: block;
+    background:
+      radial-gradient(circle at 50% -10%, rgba(37, 99, 235, 0.15), transparent 38%), #f4f7fb;
+  }
+
+  .asset-login::before {
+    mask-image: linear-gradient(#000, transparent 82%);
+  }
+
+  .asset-login__story {
+    display: none;
+  }
+
+  .asset-login__access {
+    justify-content: flex-start;
+    padding: max(28px, env(safe-area-inset-top)) 20px max(24px, env(safe-area-inset-bottom));
+  }
+
+  .asset-login__card {
+    margin: auto 0;
+    padding: 30px 24px 26px;
+    border-radius: 18px;
+  }
+
+  .asset-login__mobile-brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    margin-bottom: 28px;
+    color: #1d4ed8;
+    font-size: 14px;
+    font-weight: 650;
+  }
+
+  .asset-login__card-heading h2 {
+    margin-top: 14px;
+    font-size: 27px;
+  }
+
+  .asset-login__footer {
+    flex-direction: column;
+    gap: 5px;
+    align-items: center;
+    margin-top: 16px;
+    text-align: center;
+  }
+}
+
+@media (max-height: 760px) and (min-width: 761px) {
+  .asset-login__story,
+  .asset-login__access {
+    min-height: 760px;
+  }
+
+  .asset-login__story-content {
+    padding: 38px 0;
+  }
+
+  .asset-login__story h1 {
+    font-size: 48px;
+  }
+
+  .asset-login__capabilities {
+    margin-top: 26px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .asset-login__capability {
+    transition: none;
+  }
+}
+
+/* Liquid Glass refinement */
+.asset-login__access {
+  background:
+    radial-gradient(circle at 88% 10%, rgba(129, 117, 255, 0.12), transparent 28%),
+    radial-gradient(circle at 16% 82%, rgba(91, 200, 255, 0.15), transparent 30%);
+}
+
+.asset-login__brand-mark {
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.22), rgba(91, 200, 255, 0.08)),
+    rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.28);
+  box-shadow:
+    0 12px 30px rgba(3, 15, 38, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.38);
+  backdrop-filter: blur(20px) saturate(150%);
+  -webkit-backdrop-filter: blur(20px) saturate(150%);
+}
+
+.asset-login__capability {
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.1), rgba(142, 194, 255, 0.025)),
+    rgba(255, 255, 255, 0.045);
+  border-color: rgba(255, 255, 255, 0.15);
+  box-shadow:
+    0 12px 32px rgba(3, 15, 38, 0.11),
+    inset 0 1px 0 rgba(255, 255, 255, 0.16);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+}
+
+.asset-login__capability:hover {
+  border-color: rgba(168, 213, 255, 0.34);
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.14), rgba(100, 169, 255, 0.05)),
+    rgba(255, 255, 255, 0.07);
+  box-shadow:
+    0 16px 36px rgba(3, 15, 38, 0.16),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22);
+}
+
+.asset-login__card {
+  position: relative;
+  overflow: hidden;
+  border-color: rgba(255, 255, 255, 0.84);
+  border-radius: 28px;
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.88), rgba(241, 247, 255, 0.62)),
+    rgba(255, 255, 255, 0.7);
+  box-shadow:
+    0 30px 80px rgba(31, 62, 112, 0.16),
+    inset 0 1px 0 #ffffff,
+    inset 0 -1px 0 rgba(94, 126, 173, 0.08);
+  backdrop-filter: blur(30px) saturate(155%);
+  -webkit-backdrop-filter: blur(30px) saturate(155%);
+}
+
+.asset-login__card::before {
+  position: absolute;
+  top: 0;
+  right: 30px;
+  left: 30px;
+  height: 1px;
+  content: '';
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, #ffffff, transparent);
+}
+
+.asset-login__card::after {
+  position: absolute;
+  z-index: -1;
+  top: -110px;
+  right: -120px;
+  width: 260px;
+  height: 260px;
+  content: '';
+  pointer-events: none;
+  background: radial-gradient(circle, rgba(91, 200, 255, 0.17), transparent 68%);
+}
+
+.asset-login__secure-label {
+  color: #1d5ad7;
+  background: rgba(220, 236, 255, 0.58);
+  border: 1px solid rgba(255, 255, 255, 0.82);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.86);
+}
+
+.asset-login__form .ant-input,
+.asset-login__form .ant-input-affix-wrapper {
+  border-radius: 14px;
+}
+
+.asset-login__submit,
+.asset-login__demo-button {
+  border-radius: 11px;
+}
+
+.asset-login__submit {
+  box-shadow:
+    0 3px 8px rgba(27, 82, 181, 0.25),
+    inset 0 1px 0 rgba(255, 255, 255, 0.32);
+}
+
+.asset-login__demo-button {
+  color: #1d5ad7;
+  border-color: rgba(83, 108, 146, 0.24);
+  background: rgba(255, 255, 255, 0.7);
+  box-shadow:
+    0 1px 2px rgba(31, 54, 88, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.78);
+}
+
+.asset-login__divider::before,
+.asset-login__divider::after {
+  background: linear-gradient(90deg, transparent, rgba(117, 146, 187, 0.3));
+}
+
+.asset-login__divider::after {
+  background: linear-gradient(90deg, rgba(117, 146, 187, 0.3), transparent);
+}
+
+@supports not ((backdrop-filter: blur(2px)) or (-webkit-backdrop-filter: blur(2px))) {
+  .asset-login__card {
+    background: #ffffff;
+  }
+}

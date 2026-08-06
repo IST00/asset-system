@@ -27,8 +27,16 @@ export const designTokens = {
     medium: 12,
     large: 16,
   },
+  glass: {
+    surface: 'rgba(255, 255, 255, 0.68)',
+    surfaceStrong: 'rgba(255, 255, 255, 0.84)',
+    border: 'rgba(255, 255, 255, 0.78)',
+    highlight: 'rgba(255, 255, 255, 0.92)',
+    blur: 24,
+  },
   shadow: {
-    floating: '0 14px 36px rgba(23, 32, 51, 0.12)',
+    floating: '0 18px 48px rgba(31, 62, 112, 0.14)',
+    glass: '0 18px 44px rgba(31, 62, 112, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.82)',
   },
   layout: {
     railWidth: 72,
@@ -50,12 +58,19 @@ export const appTheme: ThemeConfig = {
     colorBgContainer: designTokens.color.surface,
     borderRadius: designTokens.radius.medium,
     fontFamily:
-      "Inter, 'PingFang SC', 'Microsoft YaHei', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+      "-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', 'Microsoft YaHei', 'Segoe UI', sans-serif",
   },
   components: {
     Button: {
-      controlHeight: 40,
-      borderRadius: designTokens.radius.small,
+      controlHeight: 42,
+      controlHeightLG: 46,
+      controlHeightSM: 34,
+      borderRadius: 11,
+      borderRadiusLG: 12,
+      borderRadiusSM: 9,
+      fontWeight: 600,
+      paddingInline: 16,
+      paddingInlineLG: 18,
     },
     Drawer: {
       paddingLG: 20,

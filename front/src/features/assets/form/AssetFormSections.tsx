@@ -14,7 +14,6 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import SectionPanel from '@/components/ui/SectionPanel'
-import { demoAssets } from '@/features/assets/assetData'
 import { getAssetStatusMeta } from '@/features/assets/assetModel'
 import type { AssetDetail } from '@/features/assets/types'
 import {
@@ -27,29 +26,27 @@ import {
 } from './AssetFormFields'
 import type { AssetFormInput } from './schema'
 
-const uniqueOptions = (values: Array<string | undefined>) =>
-  Array.from(new Set(values.filter((value): value is string => Boolean(value)))).map((value) => ({
-    label: value,
-    value,
-  }))
-
-const companyOptions = uniqueOptions(demoAssets.map((asset) => asset.company_name))
-const categoryOptions = uniqueOptions(demoAssets.map((asset) => asset.category_name))
-const sourceOptions = uniqueOptions(demoAssets.map((asset) => asset.source_name))
-const unitOptions = uniqueOptions(demoAssets.map((asset) => asset.unit_name))
-const supplierOptions = uniqueOptions(demoAssets.map((asset) => asset.supplier_name))
-const locationOptions = uniqueOptions(demoAssets.map((asset) => asset.location_name))
-const managerOptions = uniqueOptions(demoAssets.map((asset) => asset.manager_name))
+export interface AssetFormOptions {
+  companies: Array<{ label: string; value: string }>
+  categories: Array<{ label: string; value: string }>
+  sources: Array<{ label: string; value: string }>
+  units: Array<{ label: string; value: string }>
+  suppliers: Array<{ label: string; value: string }>
+  locations: Array<{ label: string; value: string }>
+  managers: Array<{ label: string; value: string }>
+}
 
 interface SectionsProps {
   asset?: AssetDetail
   control: Control<AssetFormInput>
   errors: FieldErrors<AssetFormInput>
   isEdit: boolean
+  isResubmit: boolean
   showAmount: boolean
+  options: AssetFormOptions
 }
 
-function BasicSection({ asset, control, errors, isEdit }: SectionsProps) {
+function BasicSection({ asset, control, errors, isEdit, options }: SectionsProps) {
   const { t } = useTranslation()
   return (
     <SectionPanel
@@ -87,7 +84,7 @@ function BasicSection({ asset, control, errors, isEdit }: SectionsProps) {
           name="category_name"
           label={t('assets.form.labels.category_name')}
           placeholder={t('assets.form.placeholders.category_name')}
-          options={categoryOptions}
+          options={options.categories}
           required
         />
         <TextFormField
@@ -104,12 +101,19 @@ function BasicSection({ asset, control, errors, isEdit }: SectionsProps) {
           label={t('assets.form.labels.serial_number')}
           placeholder={t('assets.form.placeholders.serial_number')}
         />
+        <TextFormField
+          control={control}
+          errors={errors}
+          name="rfid_tag"
+          label="RFID 标签"
+          placeholder="可选，用于兼容既有 RFID 标识"
+        />
       </div>
     </SectionPanel>
   )
 }
 
-function OwnershipSection({ asset, control, errors, isEdit }: SectionsProps) {
+function OwnershipSection({ asset, control, errors, isEdit, options }: SectionsProps) {
   const { t } = useTranslation()
   const emptyValue = t('assets.detail.unassigned')
   return (
@@ -124,7 +128,8 @@ function OwnershipSection({ asset, control, errors, isEdit }: SectionsProps) {
           name="company_name"
           label={t('assets.form.labels.company_name')}
           placeholder={t('assets.form.placeholders.company_name')}
-          options={companyOptions}
+          options={options.companies}
+          disabled={isEdit}
           required
         />
         <SelectFormField
@@ -133,8 +138,7 @@ function OwnershipSection({ asset, control, errors, isEdit }: SectionsProps) {
           name="location_name"
           label={t('assets.form.labels.location_name')}
           placeholder={t('assets.form.placeholders.location_name')}
-          options={locationOptions}
-          disabled={isEdit}
+          options={options.locations}
           required
         />
       </div>
@@ -155,7 +159,7 @@ function OwnershipSection({ asset, control, errors, isEdit }: SectionsProps) {
   )
 }
 
-function PurchaseSection({ control, errors, showAmount }: SectionsProps) {
+function PurchaseSection({ control, errors, showAmount, options }: SectionsProps) {
   const { t } = useTranslation()
   const purchaseAmount = useWatch({ control, name: 'purchase_amount' })
   return (
@@ -170,7 +174,7 @@ function PurchaseSection({ control, errors, showAmount }: SectionsProps) {
           name="source_name"
           label={t('assets.form.labels.source_name')}
           placeholder={t('assets.form.placeholders.source_name')}
-          options={sourceOptions}
+          options={options.sources}
           required
         />
         <SelectFormField
@@ -179,7 +183,7 @@ function PurchaseSection({ control, errors, showAmount }: SectionsProps) {
           name="supplier_name"
           label={t('assets.form.labels.supplier_name')}
           placeholder={t('assets.form.placeholders.supplier_name')}
-          options={supplierOptions}
+          options={options.suppliers}
           allowClear
         />
         <DateFormField
@@ -212,7 +216,7 @@ function PurchaseSection({ control, errors, showAmount }: SectionsProps) {
   )
 }
 
-function ManagementSection({ control, errors }: SectionsProps) {
+function ManagementSection({ control, errors, options }: SectionsProps) {
   const { t } = useTranslation()
   return (
     <SectionPanel
@@ -226,7 +230,7 @@ function ManagementSection({ control, errors }: SectionsProps) {
           name="unit_name"
           label={t('assets.form.labels.unit_name')}
           placeholder={t('assets.form.placeholders.unit_name')}
-          options={unitOptions}
+          options={options.units}
           required
         />
         <SelectFormField
@@ -235,7 +239,7 @@ function ManagementSection({ control, errors }: SectionsProps) {
           name="manager_name"
           label={t('assets.form.labels.manager_name')}
           placeholder={t('assets.form.placeholders.manager_name')}
-          options={managerOptions}
+          options={options.managers}
           required
         />
       </div>
@@ -243,7 +247,7 @@ function ManagementSection({ control, errors }: SectionsProps) {
   )
 }
 
-function RemarkSection({ control, errors }: SectionsProps) {
+function RemarkSection({ control, errors, isEdit, isResubmit }: SectionsProps) {
   const { t } = useTranslation()
   return (
     <SectionPanel
@@ -251,6 +255,20 @@ function RemarkSection({ control, errors }: SectionsProps) {
       icon={<MessageSquareText aria-hidden="true" size={18} />}
     >
       <div className="asset-form__field-grid">
+        {isEdit || isResubmit ? (
+          <TextAreaFormField
+            control={control}
+            errors={errors}
+            name="change_reason"
+            label={isResubmit ? '重新提交说明' : '修改原因'}
+            placeholder={
+              isResubmit
+                ? '说明如何根据退回意见修改，本次提交会生成关联的新审批记录'
+                : '说明本次资料调整原因，保存后写入审计记录'
+            }
+            required
+          />
+        ) : null}
         <TextAreaFormField
           control={control}
           errors={errors}
@@ -274,20 +292,28 @@ export default function AssetFormEditor({
   control,
   errors,
   isEdit,
+  isResubmit,
   isSubmitting,
   onCancel,
   onSubmit,
   showAmount,
+  options,
   submitFailed,
 }: AssetFormEditorProps) {
   const { t } = useTranslation()
-  const sections = { asset, control, errors, isEdit, showAmount }
+  const sections = { asset, control, errors, isEdit, isResubmit, showAmount, options }
   return (
     <>
       {isEdit && asset ? (
         <div className="asset-form__workflow-note" role="note">
           <Info aria-hidden="true" size={17} />
           <span>{t('assets.form.hints.workflowFields')}</span>
+        </div>
+      ) : null}
+      {isResubmit ? (
+        <div className="asset-form__workflow-note" role="note">
+          <Info aria-hidden="true" size={17} />
+          <span>原拒绝记录会永久保留，本次修改将生成关联的新一轮审批和新资产编码。</span>
         </div>
       ) : null}
 
@@ -314,7 +340,9 @@ export default function AssetFormEditor({
             icon={<Save aria-hidden="true" size={16} />}
             loading={isSubmitting}
           >
-            {t(isEdit ? 'assets.form.actions.update' : 'assets.form.actions.create')}
+            {isResubmit
+              ? '重新提交审批'
+              : t(isEdit ? 'assets.form.actions.update' : 'assets.form.actions.create')}
           </Button>
         </div>
       </form>

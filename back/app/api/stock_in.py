@@ -10,8 +10,10 @@ from app.schemas.stock_in import (
     ApprovalDecisionRequestSchema,
     CreateStockInRequestSchema,
     RejectStockInRequestSchema,
+    ResubmitStockInRequestSchema,
     StockInPageQuerySchema,
 )
+from app.schemas.operation import ReasonSchema
 from app.security import current_user_id
 from app.services import stock_in_service
 
@@ -20,7 +22,9 @@ bp = Blueprint("stock_in", __name__, url_prefix="/api/v1/stock-in-requests")
 _create_schema = CreateStockInRequestSchema()
 _decision_schema = ApprovalDecisionRequestSchema()
 _reject_schema = RejectStockInRequestSchema()
+_resubmit_schema = ResubmitStockInRequestSchema()
 _page_schema = StockInPageQuerySchema()
+_reason_schema = ReasonSchema()
 
 
 @bp.get("")
@@ -43,6 +47,15 @@ def page() -> dict:
 def submit() -> dict:
     payload = _create_schema.load(request.get_json(silent=True) or {})
     return Result.success(stock_in_service.submit(payload, current_user_id())).to_dict()
+
+
+@bp.post("/<int:operation_request_id>/resubmit")
+@jwt_required()
+def resubmit(operation_request_id: int) -> dict:
+    payload = _resubmit_schema.load(request.get_json(silent=True) or {})
+    return Result.success(
+        stock_in_service.resubmit(operation_request_id, payload, current_user_id())
+    ).to_dict()
 
 
 @bp.get("/<int:operation_request_id>")
@@ -78,8 +91,11 @@ def reject(operation_request_id: int) -> dict:
 @bp.post("/<int:operation_request_id>/withdraw")
 @jwt_required()
 def withdraw(operation_request_id: int) -> dict:
+    payload = _reason_schema.load(request.get_json(silent=True) or {})
     return Result.success(
-        stock_in_service.withdraw(operation_request_id, current_user_id())
+        stock_in_service.withdraw(
+            operation_request_id, current_user_id(), payload["reason"]
+        )
     ).to_dict()
 
 

@@ -29,12 +29,31 @@ def page() -> dict:
         actor_id=current_user_id(),
         page_index=query["page"],
         size=query["size"],
+        keyword=query.get("keyword"),
         asset_code=query.get("asset_code"),
+        asset_codes=query.get("asset_codes"),
         asset_name=query.get("asset_name"),
         serial_number=query.get("serial_number"),
+        company_name=query.get("company_name"),
+        category_name=query.get("category_name"),
+        status=query.get("status"),
+        department_name=query.get("department_name"),
+        location_name=query.get("location_name"),
+        user_name=query.get("user_name"),
+        manager_name=query.get("manager_name"),
+        supplier_name=query.get("supplier_name"),
+        source_name=query.get("source_name"),
+        purchase_date_from=query.get("purchase_date_from"),
+        purchase_date_to=query.get("purchase_date_to"),
         data_completeness=query.get("data_completeness"),
     )
     return Result.success(result.to_dict()).to_dict()
+
+
+@bp.get("/assets/dashboard")
+@jwt_required()
+def dashboard() -> dict:
+    return Result.success(asset_service.dashboard(current_user_id())).to_dict()
 
 
 @bp.get("/assets/<int:asset_id>")
@@ -73,6 +92,14 @@ def complete_data_batch() -> dict:
 def lifecycle(asset_id: int) -> dict:
     return Result.success(
         asset_service.lifecycle(asset_id, current_user_id())
+    ).to_dict()
+
+
+@bp.get("/assets/<int:asset_id>/related-records")
+@jwt_required()
+def related_records(asset_id: int) -> dict:
+    return Result.success(
+        asset_service.related_records(asset_id, current_user_id())
     ).to_dict()
 
 

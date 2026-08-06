@@ -224,11 +224,27 @@ class StockInItemRepository(BaseRepository[StockInItem]):
         )
         return db.session.scalar(stmt) is not None
 
-    def release_serial_reservations(self, stock_in_request_id: int) -> None:
+    def rfid_in_open_request(self, rfid_tag: str) -> bool:
+        stmt = (
+            select(StockInItem.id)
+            .join(StockInRequest, StockInRequest.id == StockInItem.stock_in_request_id)
+            .join(
+                OperationRequest,
+                OperationRequest.id == StockInRequest.operation_request_id,
+            )
+            .where(
+                StockInItem.rfid_tag == rfid_tag,
+                OperationRequest.approval_status == ApprovalStatus.PENDING.value,
+            )
+            .limit(1)
+        )
+        return db.session.scalar(stmt) is not None
+
+    def release_identifier_reservations(self, stock_in_request_id: int) -> None:
         db.session.execute(
             update(StockInItem)
             .where(StockInItem.stock_in_request_id == stock_in_request_id)
-            .values(serial_reservation_key=None)
+            .values(serial_reservation_key=None, rfid_reservation_key=None)
             .execution_options(synchronize_session=False)
         )
 

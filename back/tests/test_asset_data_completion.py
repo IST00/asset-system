@@ -659,10 +659,10 @@ def test_completion_requires_jwt_and_exact_functional_permission(client) -> None
         json={"version": asset.version, "unit_id": context.unit.id},
     )
     assert forbidden.status_code == 200
-    assert forbidden.get_json() == {
-        "code": ResultCode.FORBIDDEN.code,
-        "message": "无操作权限",
-    }
+    forbidden_body = forbidden.get_json()
+    assert forbidden_body["code"] == ResultCode.FORBIDDEN.code
+    assert forbidden_body["message"] == "无操作权限"
+    assert forbidden_body["request_id"]
 
 
 def test_self_scope_holder_can_complete_data(client) -> None:
@@ -716,14 +716,13 @@ def test_out_of_scope_and_absent_assets_share_not_found_response(client) -> None
     )
 
     assert hidden.status_code == absent.status_code == 200
-    assert (
-        hidden.get_json()
-        == absent.get_json()
-        == {
-            "code": ResultCode.NOT_FOUND.code,
-            "message": "资产不存在",
-        }
-    )
+    hidden_body = hidden.get_json()
+    absent_body = absent.get_json()
+    for body in (hidden_body, absent_body):
+        assert body["code"] == ResultCode.NOT_FOUND.code
+        assert body["message"] == "资产不存在"
+        assert body["request_id"]
+    assert hidden_body["request_id"] != absent_body["request_id"]
 
 
 def test_active_business_lock_is_actionable_and_leaves_no_transaction(

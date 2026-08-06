@@ -208,6 +208,7 @@ def test_stock_in_route_methods_remain_get_and_post_only(app) -> None:
         "/api/v1/stock-in-requests/<int:operation_request_id>": {"GET"},
         "/api/v1/stock-in-requests/<int:operation_request_id>/approve": {"POST"},
         "/api/v1/stock-in-requests/<int:operation_request_id>/reject": {"POST"},
+        "/api/v1/stock-in-requests/<int:operation_request_id>/resubmit": {"POST"},
         "/api/v1/stock-in-requests/<int:operation_request_id>/retry": {"POST"},
         "/api/v1/stock-in-requests/<int:operation_request_id>/withdraw": {"POST"},
     }

@@ -16,10 +16,10 @@ def test_unexpected_error_hides_internal_details(app, client, caplog) -> None:
         response = client.get("/_test/unexpected-error")
 
     assert response.status_code == 500
-    assert response.get_json() == {
-        "code": ResultCode.INTERNAL_ERROR.code,
-        "message": ResultCode.INTERNAL_ERROR.message,
-    }
+    body = response.get_json()
+    assert body["code"] == ResultCode.INTERNAL_ERROR.code
+    assert body["message"] == ResultCode.INTERNAL_ERROR.message
+    assert body["request_id"]
     assert secret_detail not in response.get_data(as_text=True)
     assert secret_detail not in caplog.text
     assert "Unexpected error (RuntimeError)" in caplog.text

@@ -1,5 +1,6 @@
 import { Avatar, Button, Drawer, Dropdown, Tooltip } from 'antd'
 import type { MenuProps } from 'antd'
+import { useQuery } from '@tanstack/react-query'
 import {
   ArrowLeftRight,
   Bell,
@@ -22,6 +23,7 @@ import type { LucideIcon } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
+import { authApi } from '@/api'
 import { navigationEntries } from '@/config/navigation'
 import { filterNavigation } from '@/config/navigationModel'
 import type { NavigationEntry } from '@/config/navigationModel'
@@ -52,8 +54,19 @@ export default function AppShell() {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const location = useLocation()
-  const { user, logout } = useAuthStore()
+  const { token, user, setUser, logout } = useAuthStore()
   const [drawerOpen, setDrawerOpen] = useState(false)
+
+  useQuery({
+    queryKey: ['auth', 'me'],
+    queryFn: async () => {
+      const currentUser = await authApi.me()
+      setUser(currentUser)
+      return currentUser
+    },
+    enabled: Boolean(token),
+    staleTime: 5 * 60 * 1000,
+  })
 
   const permissions = useMemo(() => new Set(user?.permissions ?? []), [user?.permissions])
   const visibleEntries = useMemo(
@@ -70,22 +83,29 @@ export default function AppShell() {
       : location.pathname.startsWith(entry.path)
 
   const handleNavigation = (entry: NavigationEntry) => {
-    if (entry.key === 'profile') {
-      setDrawerOpen(true)
-      return
-    }
     if (entry.disabled) return
     navigate(entry.path)
     setDrawerOpen(false)
   }
 
   const handleLogout = () => {
-    logout()
-    navigate('/login')
+    void authApi.logout().finally(() => {
+      logout()
+      navigate('/login')
+    })
   }
 
   const accountMenu: MenuProps = {
     items: [
+      {
+        key: 'profile',
+        icon: <UserRound aria-hidden="true" size={16} />,
+        label: t('nav.profile'),
+        onClick: () => navigate('/profile'),
+      },
+      {
+        type: 'divider',
+      },
       {
         key: 'logout',
         icon: <LogOut aria-hidden="true" size={16} />,
@@ -109,6 +129,11 @@ export default function AppShell() {
       <Tooltip
         key={entry.key}
         title={entry.disabled ? `${label} · ${t('common.comingSoon')}` : label}
+        placement="right"
+        mouseEnterDelay={0.35}
+        mouseLeaveDelay={0}
+        arrow={false}
+        classNames={{ root: 'asset-shell__rail-tooltip' }}
       >
         <button
           type="button"
@@ -141,12 +166,24 @@ export default function AppShell() {
         </nav>
 
         <div className="asset-shell__rail-footer">
-          <Tooltip title={`${t('nav.settings')} · ${t('common.comingSoon')}`}>
+          <Tooltip
+            title={t('nav.settings')}
+            placement="right"
+            mouseEnterDelay={0.35}
+            mouseLeaveDelay={0}
+            arrow={false}
+            classNames={{ root: 'asset-shell__rail-tooltip' }}
+          >
             <button
               type="button"
-              className="asset-shell__rail-button asset-shell__rail-button--disabled"
+              className={
+                location.pathname.startsWith('/settings')
+                  ? 'asset-shell__rail-button asset-shell__rail-button--active'
+                  : 'asset-shell__rail-button'
+              }
               aria-label={t('nav.settings')}
-              aria-disabled="true"
+              aria-current={location.pathname.startsWith('/settings') ? 'page' : undefined}
+              onClick={() => navigate('/settings')}
             >
               <Settings aria-hidden="true" size={20} strokeWidth={1.8} />
             </button>
@@ -170,12 +207,13 @@ export default function AppShell() {
             <span>{t('app.shortName')}</span>
           </div>
           <div className="asset-shell__topbar-actions">
-            <Tooltip title={t('common.comingSoon')}>
+            <Tooltip title={t('common.notifications')}>
               <Button
                 type="text"
                 shape="circle"
                 aria-label={t('common.notifications')}
                 icon={<Bell size={19} />}
+                onClick={() => navigate('/notifications')}
               />
             </Tooltip>
             <Dropdown menu={accountMenu} placement="bottomRight" trigger={['click']}>
@@ -250,6 +288,16 @@ export default function AppShell() {
               {entry.disabled ? <small>{t('common.comingSoon')}</small> : null}
             </button>
           ))}
+          <button
+            type="button"
+            onClick={() => {
+              navigate('/settings')
+              setDrawerOpen(false)
+            }}
+          >
+            <Settings aria-hidden="true" size={18} />
+            <span>{t('nav.settings')}</span>
+          </button>
         </div>
         <button type="button" className="asset-shell__drawer-logout" onClick={handleLogout}>
           <LogOut aria-hidden="true" size={18} />

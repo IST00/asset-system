@@ -33,6 +33,9 @@ class StockInItemRequestSchema(Schema):
     receipt_no = fields.String(
         required=False, allow_none=True, validate=validate.Length(max=128)
     )
+    rfid_tag = fields.String(
+        required=False, allow_none=True, validate=validate.Length(max=191)
+    )
     remark = fields.String(
         required=False, allow_none=True, validate=validate.Length(max=2000)
     )
@@ -83,6 +86,12 @@ class CreateStockInRequestSchema(Schema):
     )
 
 
+class ResubmitStockInRequestSchema(CreateStockInRequestSchema):
+    resubmit_reason = fields.String(
+        required=True, validate=validate.Length(min=2, max=2000)
+    )
+
+
 class StockInPageQuerySchema(Schema):
     page = fields.Integer(load_default=0, validate=validate.Range(min=0))
     size = fields.Integer(load_default=50, validate=validate.Range(min=1, max=100))
@@ -115,6 +124,7 @@ __all__ = [
     "ApprovalDecisionRequestSchema",
     "CreateStockInRequestSchema",
     "RejectStockInRequestSchema",
+    "ResubmitStockInRequestSchema",
     "StockInPageQuerySchema",
     "StockInItemRequestSchema",
 ]

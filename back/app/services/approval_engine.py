@@ -286,6 +286,9 @@ def withdraw(operation_request_id: int, actor_id: int, reason: str | None) -> No
         db.session.expire(operation)
         raise BusinessException("申请已被其他人完成审批")
     db.session.expire(operation, ["approval_status", "version"])
+    operation.withdrawn_at = utc_now()
+    operation.withdrawn_by = actor_id
+    operation.withdrawal_reason = reason.strip() if reason else None
     for step in approval_step_repository.find_by_operation_ordered(operation.id):
         if step.status in {
             RuntimeTaskStatus.PENDING.value,

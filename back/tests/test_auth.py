@@ -72,3 +72,66 @@ def test_login_validation_error(client) -> None:
         "/api/v1/auth/login", json={"username": "ab", "password": "12345"}
     )
     assert response.status_code == 400
+
+
+def test_current_user_can_change_password_and_change_is_audited(client) -> None:
+    from app.models import OperationLog
+
+    _create_login_user(username="password-user", password="old-password")
+    login = client.post(
+        "/api/v1/auth/login",
+        json={"username": "password-user", "password": "old-password"},
+    ).get_json()["data"]
+
+    updated = client.post(
+        "/api/v1/users/me/password/update",
+        headers={"Authorization": f"Bearer {login['token']}"},
+        json={
+            "current_password": "old-password",
+            "new_password": "New-Password-2026!",
+        },
+    )
+    assert updated.status_code == 200
+    assert updated.get_json()["code"] == 200
+
+    old_login = client.post(
+        "/api/v1/auth/login",
+        json={"username": "password-user", "password": "old-password"},
+    )
+    assert old_login.get_json()["code"] == 401
+
+    new_login = client.post(
+        "/api/v1/auth/login",
+        json={"username": "password-user", "password": "New-Password-2026!"},
+    )
+    assert new_login.get_json()["code"] == 200
+    audit = db.session.query(OperationLog).filter_by(action="PASSWORD_UPDATE").one()
+    assert audit.reason == "用户主动修改密码"
+    assert audit.before_data == {"password_changed": False}
+    assert audit.after_data == {"password_changed": True}
+
+
+def test_change_password_rejects_wrong_current_or_weak_new_password(client) -> None:
+    _create_login_user(username="password-policy", password="old-password")
+    login = client.post(
+        "/api/v1/auth/login",
+        json={"username": "password-policy", "password": "old-password"},
+    ).get_json()["data"]
+    headers = {"Authorization": f"Bearer {login['token']}"}
+
+    wrong_current = client.post(
+        "/api/v1/users/me/password/update",
+        headers=headers,
+        json={
+            "current_password": "wrong-password",
+            "new_password": "New-Password-2026!",
+        },
+    )
+    assert wrong_current.get_json()["code"] == 400
+
+    weak = client.post(
+        "/api/v1/users/me/password/update",
+        headers=headers,
+        json={"current_password": "old-password", "new_password": "weakpassword12"},
+    )
+    assert weak.get_json()["code"] == 400

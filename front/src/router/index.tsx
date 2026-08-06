@@ -9,6 +9,16 @@ const Home = lazy(() => import('@/pages/Home'))
 const Assets = lazy(() => import('@/pages/Assets'))
 const AssetDetail = lazy(() => import('@/pages/AssetDetail'))
 const AssetForm = lazy(() => import('@/pages/AssetForm'))
+const Workflows = lazy(() => import('@/pages/Workflows'))
+const Inventory = lazy(() => import('@/pages/Inventory'))
+const Approvals = lazy(() => import('@/pages/Approvals'))
+const Imports = lazy(() => import('@/pages/Imports'))
+const MasterData = lazy(() => import('@/pages/MasterData'))
+const Permissions = lazy(() => import('@/pages/Permissions'))
+const AuditLogs = lazy(() => import('@/pages/AuditLogs'))
+const Profile = lazy(() => import('@/pages/Profile'))
+const Notifications = lazy(() => import('@/pages/Notifications'))
+const Settings = lazy(() => import('@/pages/Settings'))
 const NotFound = lazy(() => import('@/pages/NotFound'))
 const AppShell = lazy(() => import('@/layouts/AppShell'))
 
@@ -65,6 +75,16 @@ export default function AppRouter() {
               </AssetAccessBoundary>
             }
           />
+          <Route path="workflows" element={<Workflows />} />
+          <Route path="inventory" element={<Inventory />} />
+          <Route path="approvals" element={<Approvals />} />
+          <Route path="imports" element={<Imports />} />
+          <Route path="master-data" element={<MasterData />} />
+          <Route path="permissions" element={<Permissions />} />
+          <Route path="logs" element={<AuditLogs />} />
+          <Route path="profile" element={<Profile />} />
+          <Route path="notifications" element={<Notifications />} />
+          <Route path="settings" element={<Settings />} />
         </Route>
         <Route path="*" element={<NotFound />} />
       </Routes>

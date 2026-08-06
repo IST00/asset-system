@@ -91,6 +91,8 @@ test('normalizes optional form values without changing snake_case fields', () =>
       model: undefined,
       serial_number: undefined,
       manager_name: '周明',
+      rfid_tag: undefined,
+      change_reason: undefined,
       remark: undefined,
     },
   )

@@ -41,6 +41,20 @@ class ActionKeySchema(Schema):
     )
 
 
+class ApprovalTransferSchema(Schema):
+    to_approver_id = fields.Integer(
+        required=True, strict=True, validate=validate.Range(min=1)
+    )
+    task_version = fields.Integer(
+        required=True, strict=True, validate=validate.Range(min=1)
+    )
+    reason = fields.String(required=True, validate=validate.Length(min=2, max=500))
+
+
+class ApprovalReminderSchema(Schema):
+    reason = fields.String(required=True, validate=validate.Length(min=2, max=500))
+
+
 class OperationResponseSchema(Schema):
     data = fields.Dict(required=True)
 

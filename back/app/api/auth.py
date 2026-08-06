@@ -7,6 +7,7 @@ Blueprints load requests via marshmallow schemas and delegate to
 from __future__ import annotations
 
 from flask import Blueprint, request
+from flask_jwt_extended import get_jwt, jwt_required
 
 from app.common import Result
 from app.schemas import LoginRequestSchema
@@ -23,5 +24,18 @@ def login() -> dict:
     login_data = auth_service.login(
         username=payload["username"],
         password=payload["password"],
+        ip_address=request.remote_addr or "unknown",
+        user_agent=request.headers.get("User-Agent"),
     )
     return Result.success(login_data).to_dict()
+
+
+@bp.post("/logout")
+@jwt_required()
+def logout() -> dict:
+    claims = get_jwt()
+    auth_service.logout(
+        user_id=int(claims["sub"]),
+        session_id=str(claims.get("sid") or ""),
+    )
+    return Result.success(None).to_dict()

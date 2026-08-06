@@ -81,6 +81,13 @@ class OperationRequest(TimestampMixin, db.Model):  # type: ignore[misc,name-defi
     approved_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    withdrawn_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    withdrawn_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=True, index=True
+    )
+    withdrawal_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     executed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -162,6 +169,10 @@ class StockInItem(TimestampMixin, db.Model):  # type: ignore[misc,name-defined]
         String(191), nullable=True, unique=True, index=True
     )
     receipt_no: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    rfid_tag: Mapped[str | None] = mapped_column(String(191), nullable=True, index=True)
+    rfid_reservation_key: Mapped[str | None] = mapped_column(
+        String(191), nullable=True, unique=True, index=True
+    )
     remark: Mapped[str | None] = mapped_column(Text, nullable=True)
     custom_attributes: Mapped[dict[str, Any]] = mapped_column(
         JSON, nullable=False, default=dict

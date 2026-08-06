@@ -24,6 +24,8 @@ export const assetFormSchema = z
     model: optionalString,
     serial_number: optionalString,
     manager_name: requiredString('assets.form.errors.managerRequired'),
+    rfid_tag: optionalString,
+    change_reason: optionalString,
     remark: optionalString,
   })
   .superRefine((values, context) => {

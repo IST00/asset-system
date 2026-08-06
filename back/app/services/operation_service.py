@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Any
 from uuid import uuid4
 
@@ -26,6 +27,7 @@ from app.models import (
     AssetLocation,
     ApprovalStep,
     ApprovalTask,
+    ApprovalTaskEvent,
     OperationActionIdempotency,
     OperationExecutionAttempt,
     OperationRequest,
@@ -44,7 +46,7 @@ from app.repositories.workflow_repository import (
     approval_task_repository,
     operation_request_repository,
 )
-from app.services import asset_lock_service, permission_service
+from app.services import asset_lock_service, audit_service, permission_service
 
 
 @dataclass(frozen=True)
@@ -268,6 +270,20 @@ def _serialize(operation: OperationRequest, actor_id: int) -> dict[str, Any]:
             .order_by(OperationExecutionAttempt.attempt_no.asc())
         ).all()
     )
+    latest_reminder = db.session.scalar(
+        select(ApprovalTaskEvent)
+        .where(
+            ApprovalTaskEvent.operation_request_id == operation.id,
+            ApprovalTaskEvent.event_type == "REMIND",
+        )
+        .order_by(ApprovalTaskEvent.created_at.desc(), ApprovalTaskEvent.id.desc())
+        .limit(1)
+    )
+    next_remind_at = (
+        latest_reminder.created_at + timedelta(hours=1)
+        if latest_reminder is not None
+        else None
+    )
     return {
         "id": operation.id,
         "request_no": operation.request_no,
@@ -327,6 +343,21 @@ def _serialize(operation: OperationRequest, actor_id: int) -> dict[str, Any]:
         ],
         "termination_reason": operation.termination_reason,
         "terminated_by": operation.terminated_by,
+        "withdrawn_at": (
+            operation.withdrawn_at.isoformat()
+            if operation.withdrawn_at is not None
+            else None
+        ),
+        "withdrawn_by": operation.withdrawn_by,
+        "withdrawal_reason": operation.withdrawal_reason,
+        "last_reminded_at": (
+            latest_reminder.created_at.isoformat()
+            if latest_reminder is not None
+            else None
+        ),
+        "next_remind_at": (
+            next_remind_at.isoformat() if next_remind_at is not None else None
+        ),
     }
 
 
@@ -412,8 +443,231 @@ def my_tasks(actor_id: int) -> list[dict[str, Any]]:
             "operation_type": operation.operation_type,
             "level_no": step.level_no,
             "status": task.status,
+            "version": task.version,
         }
         for task, step, operation in db.session.execute(statement).tuples().all()
+    ]
+
+
+def _task_context(task_id: int) -> tuple[ApprovalTask, ApprovalStep, OperationRequest]:
+    statement = (
+        select(ApprovalTask, ApprovalStep, OperationRequest)
+        .join(ApprovalStep, ApprovalStep.id == ApprovalTask.approval_step_id)
+        .join(
+            OperationRequest,
+            OperationRequest.id == ApprovalStep.operation_request_id,
+        )
+        .where(ApprovalTask.id == task_id)
+        .with_for_update()
+    )
+    row = db.session.execute(statement).tuples().one_or_none()
+    if row is None:
+        raise BusinessException("审批任务不存在", result_code=ResultCode.NOT_FOUND)
+    return row
+
+
+def _operation_organization_ids(operation_request_id: int) -> set[int]:
+    statement = select(OperationRequestAsset.organization_id_snapshot).where(
+        OperationRequestAsset.operation_request_id == operation_request_id
+    )
+    return set(db.session.scalars(statement).all())
+
+
+def transfer_candidates(task_id: int, actor_id: int) -> list[dict[str, Any]]:
+    permission_service.require_permission(actor_id, "approval:task:transfer")
+    task, step, operation = _task_context(task_id)
+    if task.approver_id != actor_id:
+        raise BusinessException(
+            "只有当前审批人可以转交", result_code=ResultCode.FORBIDDEN
+        )
+    current_step = approval_step_repository.find_current_for_update(operation.id)
+    if current_step is None or current_step.id != step.id or task.status != "PENDING":
+        raise BusinessException("只有当前待审批任务可以转交")
+
+    existing_approver_ids = {
+        item.approver_id for item in approval_task_repository.find_by_step(step.id)
+    }
+    organization_ids = _operation_organization_ids(operation.id)
+    candidates: list[dict[str, Any]] = []
+    for user_id in rbac_repository.enabled_user_ids_with_permission(
+        "approval:task:approve"
+    ):
+        if user_id == operation.applicant_id or user_id in existing_approver_ids:
+            continue
+        if not permission_service.has_permission(user_id, "approval:task:view"):
+            continue
+        accessible_ids = permission_service.accessible_organization_ids(user_id)
+        if accessible_ids is not None and not organization_ids.issubset(accessible_ids):
+            continue
+        user = rbac_repository.find_user(user_id)
+        if user is None:
+            continue
+        candidates.append(
+            {
+                "id": user.id,
+                "username": user.username,
+                "nickname": user.nickname,
+                "organization_id": user.organization_id,
+            }
+        )
+    return candidates
+
+
+def transfer_task(
+    task_id: int,
+    actor_id: int,
+    *,
+    to_approver_id: int,
+    task_version: int,
+    reason: str,
+) -> dict[str, Any]:
+    permission_service.require_permission(actor_id, "approval:task:transfer")
+    task, step, operation = _task_context(task_id)
+    if task.approver_id != actor_id:
+        raise BusinessException(
+            "只有当前审批人可以转交", result_code=ResultCode.FORBIDDEN
+        )
+    current_step = approval_step_repository.find_current_for_update(operation.id)
+    if current_step is None or current_step.id != step.id or task.status != "PENDING":
+        raise BusinessException("只有当前待审批任务可以转交")
+    if task.version != task_version:
+        raise BusinessException("审批任务已被其他人修改，请刷新后重试")
+    if to_approver_id == actor_id:
+        raise BusinessException("不能转交给当前审批人")
+    if to_approver_id == operation.applicant_id:
+        raise BusinessException("不能转交给申请人本人")
+
+    candidate_ids = {item["id"] for item in transfer_candidates(task_id, actor_id)}
+    if to_approver_id not in candidate_ids:
+        raise BusinessException("目标审批人无审批权限或数据范围不匹配")
+
+    before_data = {
+        "approver_id": task.approver_id,
+        "status": task.status,
+        "version": task.version,
+    }
+    previous_approver_id = task.approver_id
+    task.approver_id = to_approver_id
+    task.version += 1
+    event = ApprovalTaskEvent(
+        operation_request_id=operation.id,
+        approval_task_id=task.id,
+        actor_id=actor_id,
+        event_type="TRANSFER",
+        from_approver_id=previous_approver_id,
+        to_approver_id=to_approver_id,
+        reason=reason.strip(),
+    )
+    db.session.add(event)
+    audit_service.record_resource_change(
+        action="APPROVAL_TASK_TRANSFER",
+        resource_type="approval_task",
+        resource_id=task.id,
+        actor_id=actor_id,
+        before_data=before_data,
+        after_data={
+            "approver_id": task.approver_id,
+            "status": task.status,
+            "version": task.version,
+        },
+        reason=reason.strip(),
+    )
+    db.session.commit()
+    return {
+        "id": task.id,
+        "operation_request_id": operation.id,
+        "request_no": operation.request_no,
+        "operation_type": operation.operation_type,
+        "level_no": step.level_no,
+        "status": task.status,
+        "version": task.version,
+        "approver_id": task.approver_id,
+    }
+
+
+def remind_request(
+    operation_request_id: int, actor_id: int, reason: str
+) -> dict[str, Any]:
+    operation = operation_request_repository.get(operation_request_id)
+    if operation is None:
+        raise BusinessException("申请不存在", result_code=ResultCode.NOT_FOUND)
+    if operation.applicant_id != actor_id:
+        permission_service.require_permission(actor_id, "approval:task:remind")
+        _require_action_scope(operation_request_id, actor_id)
+    if operation.approval_status != ApprovalStatus.PENDING.value:
+        raise BusinessException("只有待审批申请可以催办")
+
+    cutoff = utc_now() - timedelta(hours=1)
+    latest = db.session.scalar(
+        select(ApprovalTaskEvent)
+        .where(
+            ApprovalTaskEvent.operation_request_id == operation_request_id,
+            ApprovalTaskEvent.event_type == "REMIND",
+        )
+        .order_by(ApprovalTaskEvent.created_at.desc(), ApprovalTaskEvent.id.desc())
+        .limit(1)
+        .with_for_update()
+    )
+    if latest is not None:
+        created_at = latest.created_at
+        if created_at.tzinfo is None:
+            cutoff = cutoff.replace(tzinfo=None)
+        if created_at > cutoff:
+            raise BusinessException("每个申请一小时内只能催办一次")
+
+    current_step = approval_step_repository.find_current_for_update(operation.id)
+    event = ApprovalTaskEvent(
+        operation_request_id=operation.id,
+        approval_task_id=None,
+        actor_id=actor_id,
+        event_type="REMIND",
+        reason=reason.strip(),
+    )
+    db.session.add(event)
+    audit_service.record_resource_change(
+        action="APPROVAL_REQUEST_REMIND",
+        resource_type="operation_request",
+        resource_id=operation.id,
+        actor_id=actor_id,
+        before_data=None,
+        after_data={
+            "approval_step_id": current_step.id if current_step is not None else None,
+            "channel": "SYSTEM",
+        },
+        reason=reason.strip(),
+    )
+    db.session.commit()
+    return {
+        "operation_request_id": operation.id,
+        "event_id": event.id,
+        "channel": "SYSTEM",
+        "reminded_at": event.created_at.isoformat(),
+        "next_allowed_at": (event.created_at + timedelta(hours=1)).isoformat(),
+    }
+
+
+def approval_events(operation_request_id: int, actor_id: int) -> list[dict[str, Any]]:
+    get_request(operation_request_id, actor_id)
+    events = list(
+        db.session.scalars(
+            select(ApprovalTaskEvent)
+            .where(ApprovalTaskEvent.operation_request_id == operation_request_id)
+            .order_by(ApprovalTaskEvent.created_at.asc(), ApprovalTaskEvent.id.asc())
+        ).all()
+    )
+    return [
+        {
+            "id": event.id,
+            "operation_request_id": event.operation_request_id,
+            "approval_task_id": event.approval_task_id,
+            "actor_id": event.actor_id,
+            "event_type": event.event_type,
+            "from_approver_id": event.from_approver_id,
+            "to_approver_id": event.to_approver_id,
+            "reason": event.reason,
+            "created_at": event.created_at.isoformat(),
+        }
+        for event in events
     ]
 
 
@@ -614,6 +868,15 @@ def withdraw_request(
     from app.services import approval_engine
 
     approval_engine.withdraw(operation_request_id, actor_id, reason)
+    audit_service.record_resource_change(
+        action="APPROVAL_REQUEST_WITHDRAW",
+        resource_type="operation_request",
+        resource_id=operation_request_id,
+        actor_id=actor_id,
+        before_data={"approval_status": ApprovalStatus.PENDING.value},
+        after_data={"approval_status": ApprovalStatus.WITHDRAWN.value},
+        reason=reason,
+    )
     release_locks(operation_request_id)
     if action_record is not None:
         action_record.status = "COMPLETED"
@@ -689,6 +952,10 @@ def terminate_request(
 __all__ = [
     "CreateOperationResult",
     "approve_task",
+    "transfer_task",
+    "transfer_candidates",
+    "remind_request",
+    "approval_events",
     "create_request",
     "get_by_idempotency_key",
     "get_request",

@@ -100,6 +100,60 @@ def run_cmd(host: str, port: int) -> None:  # pragma: no cover
     app.run(host=host, port=port, debug=app.config.get("DEBUG", False))
 
 
+@app.cli.command("reset-admin-password")
+@click.option("--username", default="admin", show_default=True)
+@click.password_option(confirmation_prompt=True)
+def reset_admin_password(username: str, password: str) -> None:
+    """Reset a local SUPER_ADMIN password and force first-login change."""
+    from app.common import BusinessException
+    from app.services import security_service
+
+    try:
+        security_service.reset_super_admin_password(
+            username=username, new_password=password
+        )
+    except BusinessException as exc:
+        raise click.ClickException(exc.message) from exc
+    click.echo(f"Password reset for {username}; next login must change it.")
+
+
+@app.cli.command("cleanup-security-data")
+@click.option(
+    "--event-retention-days", default=365, show_default=True, type=click.IntRange(min=1)
+)
+@click.option(
+    "--session-retention-days",
+    default=30,
+    show_default=True,
+    type=click.IntRange(min=1),
+)
+def cleanup_security_data(
+    event_retention_days: int, session_retention_days: int
+) -> None:
+    """Remove expired limiter buckets and security records past retention."""
+    from app.services import security_service
+
+    result = security_service.cleanup_security_data(
+        event_retention_days=event_retention_days,
+        session_retention_days=session_retention_days,
+    )
+    click.echo(
+        "Security cleanup complete: "
+        f"events={result['security_events']}, "
+        f"sessions={result['user_sessions']}, "
+        f"rate_buckets={result['rate_limit_buckets']}"
+    )
+
+
+@app.cli.command("cleanup-export-files")
+def cleanup_export_files() -> None:
+    """Delete expired generated exports and mark their jobs expired."""
+    from app.services import export_service
+
+    removed = export_service.cleanup_expired_files()
+    click.echo(f"Export cleanup complete: files={removed}")
+
+
 if __name__ == "__main__":  # pragma: no cover
     # Allow `python manage.py run` without `flask` on PATH.
     if len(sys.argv) > 1 and sys.argv[1] == "run":

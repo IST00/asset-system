@@ -144,6 +144,9 @@ class Asset(TimestampMixin, db.Model):  # type: ignore[misc,name-defined]
         String(191), nullable=True, unique=True, index=True
     )
     receipt_no: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    rfid_tag: Mapped[str | None] = mapped_column(
+        String(191), nullable=True, unique=True, index=True
+    )
     remark: Mapped[str | None] = mapped_column(Text, nullable=True)
     custom_attributes: Mapped[dict[str, Any]] = mapped_column(
         JSON, nullable=False, default=dict

@@ -8,15 +8,28 @@ from app.enums import AssetDataCompleteness
 class AssetPageQuerySchema(Schema):
     page = fields.Integer(load_default=0, validate=validate.Range(min=0))
     size = fields.Integer(load_default=50, validate=validate.Range(min=1, max=100))
+    keyword = fields.String(required=False, validate=validate.Length(max=255))
     asset_code = fields.String(
         required=False, allow_none=True, validate=validate.Length(max=191)
     )
+    asset_codes = fields.String(required=False, validate=validate.Length(max=4000))
     asset_name = fields.String(
         required=False, allow_none=True, validate=validate.Length(max=255)
     )
     serial_number = fields.String(
         required=False, allow_none=True, validate=validate.Length(max=191)
     )
+    company_name = fields.String(required=False, validate=validate.Length(max=255))
+    category_name = fields.String(required=False, validate=validate.Length(max=255))
+    status = fields.String(required=False, validate=validate.Length(max=32))
+    department_name = fields.String(required=False, validate=validate.Length(max=255))
+    location_name = fields.String(required=False, validate=validate.Length(max=255))
+    user_name = fields.String(required=False, validate=validate.Length(max=255))
+    manager_name = fields.String(required=False, validate=validate.Length(max=255))
+    supplier_name = fields.String(required=False, validate=validate.Length(max=255))
+    source_name = fields.String(required=False, validate=validate.Length(max=255))
+    purchase_date_from = fields.Date(required=False)
+    purchase_date_to = fields.Date(required=False)
     data_completeness = fields.String(
         required=False,
         allow_none=True,

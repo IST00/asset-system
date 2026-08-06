@@ -109,6 +109,46 @@ class UsageType(StringEnum):
     PUBLIC = "PUBLIC"
 
 
+class InventoryTaskStatus(StringEnum):
+    DRAFT = "DRAFT"
+    IN_PROGRESS = "IN_PROGRESS"
+    REVIEWING = "REVIEWING"
+    COMPLETED = "COMPLETED"
+    CANCELLED = "CANCELLED"
+
+
+class InventoryItemStatus(StringEnum):
+    PENDING = "PENDING"
+    FOUND = "FOUND"
+    LOSS = "LOSS"
+    UNSUBMITTED = "UNSUBMITTED"
+    EXEMPTED = "EXEMPTED"
+
+
+class InventoryLocationResult(StringEnum):
+    MATCHED = "MATCHED"
+    DIFFERENT = "DIFFERENT"
+    TEMPORARY = "TEMPORARY"
+
+
+class InventorySubmissionMethod(StringEnum):
+    SCANNED = "SCANNED"
+    ADMIN_MARKED = "ADMIN_MARKED"
+
+
+class InventoryReviewStatus(StringEnum):
+    NONE = "NONE"
+    AUTO_CONFIRMED = "AUTO_CONFIRMED"
+    PENDING = "PENDING"
+    RESOLVED = "RESOLVED"
+    RETURNED = "RETURNED"
+
+
+class InventoryPhotoSourceMode(StringEnum):
+    CAMERA_ONLY = "CAMERA_ONLY"
+    CAMERA_OR_ALBUM = "CAMERA_OR_ALBUM"
+
+
 class OperationType(StringEnum):
     STOCK_IN = "STOCK_IN"
     PERSONAL_USE = "PERSONAL_USE"
@@ -139,6 +179,12 @@ __all__ = [
     "ExecutionStatus",
     "ExecutionTriggerType",
     "FlowStatus",
+    "InventoryItemStatus",
+    "InventoryLocationResult",
+    "InventoryPhotoSourceMode",
+    "InventoryReviewStatus",
+    "InventorySubmissionMethod",
+    "InventoryTaskStatus",
     "OperationType",
     "RecordStatus",
     "RuntimeTaskStatus",

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timezone
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import event
+from sqlalchemy import event, select
 from sqlalchemy.dialects import mysql
 
 import app.services as services
@@ -17,7 +17,13 @@ from app.models import (
     AssetLifecycleRecord,
     AssetLocation,
     AssetSource,
+    ApprovalStep,
+    ApprovalTask,
+    InventoryItem,
+    InventoryTask,
     OperationLog,
+    OperationRequest,
+    OperationRequestAsset,
     Organization,
     Permission,
     Role,
@@ -195,6 +201,52 @@ def test_asset_list_applies_scope_and_amount_field_permission(client) -> None:
     assert self_result["total"] == 1
     assert "original_amount" not in self_result["items"][0]
     assert self_result["items"][0]["asset_code"] == asset.asset_code
+
+
+def test_asset_dashboard_returns_real_scoped_aggregates(client) -> None:
+    organization, _other, manager, asset = _asset_fixture()
+    departed_holder = User(
+        username="departed-holder",
+        password="x",
+        enabled=False,
+        organization_id=organization.id,
+    )
+    db.session.add(departed_holder)
+    db.session.flush()
+    second = _copy_asset(
+        asset,
+        asset_code="ASSET-DASHBOARD-SECOND",
+        organization_id=organization.id,
+        manager_id=manager.id,
+        holder_user_id=departed_holder.id,
+    )
+    second.status = AssetStatus.IN_USE.value
+    second.data_completeness = AssetDataCompleteness.INCOMPLETE.value
+    db.session.commit()
+    _user, headers = _reader(
+        client,
+        "dashboard-reader",
+        DataScope.ALL.value,
+        ["asset:view"],
+    )
+
+    response = client.get("/api/v1/assets/dashboard", headers=headers)
+    result = response.get_json()["data"]
+
+    assert response.status_code == 200
+    assert result["metrics"] == {
+        "total": 2,
+        "idle": 1,
+        "in_use": 1,
+        "repairing": 0,
+        "scrapped": 0,
+    }
+    assert result["issues"]["incomplete_assets"] == 1
+    assert result["issues"]["departed_owner_assets"] == 1
+    assert result["issues"]["pending_approvals"] == 0
+    assert result["categories"] == [{"name": "电脑", "value": 2}]
+    assert sum(item["intake"] for item in result["monthly_changes"]) == 2
+    assert sum(item["value"] for item in result["statuses"]) == 2
 
 
 def test_asset_detail_lifecycle_and_audit_require_permissions(client) -> None:
@@ -584,3 +636,224 @@ def test_asset_get_and_lifecycle_delegate_to_access_service(
         (asset.id, user.id, "asset:view"),
     ]
     assert not hasattr(services.asset_service, "_access_filter")
+
+
+def test_asset_related_records_returns_real_operations_approvals_and_inventory(
+    client,
+) -> None:
+    organization, _other, manager, asset = _asset_fixture()
+    approver = User(
+        username="asset-related-approver",
+        password="x",
+        nickname="审批负责人",
+        enabled=True,
+    )
+    db.session.add(approver)
+    db.session.flush()
+    now = datetime(2026, 8, 3, 9, 30, tzinfo=timezone.utc)
+    operation = OperationRequest(
+        request_no="OP-RELATED-001",
+        operation_type="TRANSFER",
+        applicant_id=manager.id,
+        approval_channel="INTERNAL",
+        approval_status="APPROVED",
+        execution_status="SUCCESS",
+        submitted_at=now,
+        approved_at=now,
+        executed_at=now,
+    )
+    db.session.add(operation)
+    db.session.flush()
+    request_asset = OperationRequestAsset(
+        operation_request_id=operation.id,
+        asset_id=asset.id,
+        asset_code_snapshot=asset.asset_code,
+        asset_name_snapshot=asset.asset_name,
+        asset_status_snapshot=asset.status,
+        asset_version_snapshot=asset.version,
+        organization_id_snapshot=asset.organization_id,
+        before_data={"location_name": "仓库"},
+        target_data={"location_name": "研发中心"},
+    )
+    step = ApprovalStep(
+        operation_request_id=operation.id,
+        level_no=1,
+        sign_mode="OR_SIGN",
+        status="APPROVED",
+    )
+    db.session.add_all([request_asset, step])
+    db.session.flush()
+    approval_task = ApprovalTask(
+        approval_step_id=step.id,
+        approver_id=approver.id,
+        status="APPROVED",
+        opinion="同意调拨",
+        decided_at=now,
+    )
+    inventory_task = InventoryTask(
+        task_no="INV-RELATED-001",
+        name="研发设备季度盘点",
+        status="COMPLETED",
+        deadline_at=datetime(2026, 8, 10, 15, 59, tzinfo=timezone.utc),
+        created_by=manager.id,
+        scope_filters={"organization_ids": [organization.id]},
+    )
+    db.session.add_all([approval_task, inventory_task])
+    db.session.flush()
+    inventory_item = InventoryItem(
+        task_id=inventory_task.id,
+        asset_id=asset.id,
+        responsible_user_id=manager.id,
+        asset_code=asset.asset_code,
+        asset_name=asset.asset_name,
+        asset_status_snapshot=asset.status,
+        organization_id=organization.id,
+        organization_name=organization.name,
+        category_id=asset.category_id,
+        category_name="电脑",
+        ledger_location_id=asset.location_id,
+        ledger_location_name="仓库",
+        status="FOUND",
+        physical_result="FOUND",
+        location_result="MISMATCH",
+        actual_location_text="研发中心 A 区",
+        submission_method="MANUAL",
+        submitted_by=manager.id,
+        submitted_at=now,
+        is_late=False,
+        review_status="CONFIRMED",
+        resolution="UPDATE_LOCATION",
+        resolution_reason="现场地点已核实",
+    )
+    db.session.add(inventory_item)
+    db.session.commit()
+    _, headers = _reader(
+        client,
+        "asset-related-reader",
+        DataScope.ALL.value,
+        ["asset:view"],
+    )
+
+    response = client.get(
+        f"/api/v1/assets/{asset.id}/related-records",
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["code"] == 200
+    related = body["data"]
+    assert len(related["operations"]) == 1
+    operation_data = related["operations"][0]
+    assert operation_data["request_no"] == "OP-RELATED-001"
+    assert operation_data["applicant_name"] == manager.username
+    assert operation_data["before_data"] == {"location_name": "仓库"}
+    assert operation_data["target_data"] == {"location_name": "研发中心"}
+    assert operation_data["approval_steps"][0]["status"] == "APPROVED"
+    approval_data = operation_data["approval_steps"][0]["tasks"][0]
+    assert approval_data["approver_name"] == "审批负责人"
+    assert approval_data["opinion"] == "同意调拨"
+
+    assert len(related["inventory_records"]) == 1
+    inventory_data = related["inventory_records"][0]
+    assert inventory_data["task_no"] == "INV-RELATED-001"
+    assert inventory_data["physical_result"] == "FOUND"
+    assert inventory_data["location_result"] == "MISMATCH"
+    assert inventory_data["actual_location_text"] == "研发中心 A 区"
+    assert inventory_data["submitted_by_name"] == manager.username
+    assert inventory_data["resolution"] == "UPDATE_LOCATION"
+
+
+def test_asset_related_records_enforces_permission_and_asset_data_scope(client) -> None:
+    _organization, _other, _manager, asset = _asset_fixture()
+    _, no_permission_headers = _reader(
+        client,
+        "asset-related-no-permission",
+        DataScope.ALL.value,
+        [],
+    )
+    _, self_scope_headers = _reader(
+        client,
+        "asset-related-self-scope",
+        DataScope.SELF.value,
+        ["asset:view"],
+    )
+
+    forbidden = client.get(
+        f"/api/v1/assets/{asset.id}/related-records",
+        headers=no_permission_headers,
+    )
+    hidden = client.get(
+        f"/api/v1/assets/{asset.id}/related-records",
+        headers=self_scope_headers,
+    )
+
+    assert forbidden.status_code == 200
+    assert forbidden.get_json()["code"] == ResultCode.FORBIDDEN.code
+    assert hidden.status_code == 200
+    assert hidden.get_json()["code"] == ResultCode.NOT_FOUND.code
+
+
+def test_repair_and_scrap_reasons_are_persisted_in_asset_lifecycle(client) -> None:
+    _organization, _other, _manager, asset = _asset_fixture()
+    _, headers = _reader(
+        client,
+        "asset-lifecycle-operator",
+        DataScope.ALL.value,
+        ["asset:view", "asset:repair", "asset:scrap"],
+    )
+
+    repair_started = client.post(
+        "/api/v1/asset-actions/repair/start",
+        headers=headers,
+        json={
+            "items": [{"asset_id": asset.id, "version": asset.version}],
+            "vendor": "苹果授权维修中心",
+            "estimated_cost": "680.00",
+            "reason": "设备无法正常启动",
+        },
+    ).get_json()
+    assert repair_started["code"] == 200
+    repairing_asset = repair_started["data"]["items"][0]
+
+    repair_completed = client.post(
+        "/api/v1/asset-actions/repair/complete",
+        headers=headers,
+        json={
+            "items": [{"asset_id": asset.id, "version": repairing_asset["version"]}],
+            "actual_cost": "620.00",
+            "result": "更换主板后测试通过",
+        },
+    ).get_json()
+    assert repair_completed["code"] == 200
+    repaired_asset = repair_completed["data"]["items"][0]
+
+    scrapped = client.post(
+        "/api/v1/asset-actions/scrap",
+        headers=headers,
+        json={
+            "items": [{"asset_id": asset.id, "version": repaired_asset["version"]}],
+            "scrap_date": "2026-08-03",
+            "scrap_amount": "300.00",
+            "child_action": "BLOCK",
+            "reason": "设备超过维修价值，批准报废",
+        },
+    ).get_json()
+    assert scrapped["code"] == 200
+
+    lifecycle = db.session.scalars(
+        select(AssetLifecycleRecord)
+        .where(
+            AssetLifecycleRecord.asset_id == asset.id,
+            AssetLifecycleRecord.operation_type.in_(
+                ["REPAIR_START", "REPAIR_COMPLETE", "SCRAP"]
+            ),
+        )
+        .order_by(AssetLifecycleRecord.id.asc())
+    ).all()
+
+    assert [(item.operation_type, item.remark) for item in lifecycle] == [
+        ("REPAIR_START", "设备无法正常启动"),
+        ("REPAIR_COMPLETE", "更换主板后测试通过"),
+        ("SCRAP", "设备超过维修价值，批准报废"),
+    ]
