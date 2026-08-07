@@ -92,7 +92,8 @@ def test_organization_import_previews_differences_and_confirms_atomically(
 
 def test_category_xlsx_template_accepts_seeded_default_unit(client) -> None:
     _, headers = _actor(client, ["asset-category:import"])
-    db.session.add(Unit(code="TAI", name="台", status="ENABLED"))
+    unit = Unit(code="TAI", name="台", status="ENABLED")
+    db.session.add(unit)
     db.session.commit()
 
     template = client.get("/api/v1/imports/templates/CATEGORY", headers=headers)
@@ -105,7 +106,29 @@ def test_category_xlsx_template_accepts_seeded_default_unit(client) -> None:
     assert preview["status"] == "PREVIEW_READY"
     assert preview["error_count"] == 0
     assert preview["create_count"] == 1
-    assert preview["rows"][0]["normalized"]["default_unit_id"] is not None
+    row = preview["rows"][0]
+    assert row["values"]["默认计量单位编码"] == "TAI"
+    assert row["normalized"]["default_unit_id"] == unit.id
+
+
+def test_category_xlsx_template_without_default_unit_provides_error_report(
+    client,
+) -> None:
+    _, headers = _actor(client, ["asset-category:import"])
+    template = client.get("/api/v1/imports/templates/CATEGORY", headers=headers)
+    assert template.status_code == 200
+
+    response = _upload(client, headers, "CATEGORY", template.data, "category.xlsx")
+    assert response.status_code == 200
+    preview = response.get_json()["data"]
+    assert preview["status"] == "VALIDATION_FAILED"
+    assert preview["error_count"] > 0
+
+    report = client.get(
+        f"/api/v1/imports/{preview['id']}/error-report", headers=headers
+    )
+    assert report.status_code == 200
+    assert report.data.startswith(b"PK")
 
 
 def test_asset_import_keeps_unmatched_optional_master_text_and_creates_assets(
