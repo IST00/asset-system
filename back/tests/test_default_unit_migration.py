@@ -7,7 +7,10 @@ import sqlite3
 import subprocess
 import sys
 
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
 import pytest
+import sqlalchemy as sa
 
 
 BACK_DIR = Path(__file__).resolve().parents[1]
@@ -131,6 +134,45 @@ def test_default_unit_migration_preserves_identical_existing_unit(
     assert count == 1
 
 
+def test_default_unit_migration_rejects_inexact_code_from_nocase_database(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = importlib.util.spec_from_file_location("migration_019_nocase", MIGRATION)
+    if spec is None or spec.loader is None:
+        pytest.fail("could not load migration 019")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    database = tmp_path / "default-unit-nocase-conflict.db"
+    engine = sa.create_engine(f"sqlite:///{database}")
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            "CREATE TABLE units ("
+            "code TEXT COLLATE NOCASE PRIMARY KEY, "
+            "name TEXT NOT NULL UNIQUE, "
+            "status TEXT NOT NULL, "
+            "version INTEGER NOT NULL, "
+            "created_at DATETIME NOT NULL, "
+            "updated_at DATETIME NOT NULL)"
+        )
+        connection.exec_driver_sql(
+            "INSERT INTO units "
+            "(code, name, status, version, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+            ("tai", "台", "ENABLED", 1),
+        )
+        operations = Operations(MigrationContext.configure(connection))
+        monkeypatch.setattr(module, "op", operations)
+
+        with pytest.raises(RuntimeError) as exc_info:
+            module.upgrade()
+
+    message = str(exc_info.value)
+    assert "默认编码 'TAI'" in message
+    assert "现有编码 'tai'" in message
+
+
 @pytest.mark.parametrize(
     ("code", "name", "expected_message"),
     [
@@ -158,3 +200,27 @@ def test_default_unit_migration_rejects_semantic_conflicts(
 
     assert upgrade.returncode != 0
     assert expected_message in upgrade.stdout + upgrade.stderr
+
+
+def test_default_unit_migration_rolls_back_all_seeds_on_late_conflict(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "default-unit-late-conflict.db"
+    _prepare_018(database)
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "INSERT INTO units "
+            "(code, name, status, version, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+            ("BA", "把手", "ENABLED", 1),
+        )
+
+    upgrade = _migrate(database, "upgrade", "019")
+
+    assert upgrade.returncode != 0
+    assert _unit_rows(database) == [("BA", "把手", "ENABLED", 1)]
+    with sqlite3.connect(database) as connection:
+        revision = connection.execute(
+            "SELECT version_num FROM alembic_version"
+        ).fetchone()[0]
+    assert revision == "018"

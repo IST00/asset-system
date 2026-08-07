@@ -49,6 +49,11 @@ def upgrade() -> None:
             .first()
         )
         if existing_code is not None:
+            if existing_code["code"] != code:
+                raise RuntimeError(
+                    f"默认计量单位冲突：默认编码 {code!r} 查询到"
+                    f"现有编码 {existing_code['code']!r}，不能初始化"
+                )
             if existing_code["name"] != name:
                 raise RuntimeError(
                     f"默认计量单位冲突：编码 {code} "
