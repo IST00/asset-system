@@ -59,6 +59,7 @@ back/.env.deploy
 .eslintcache
 
 # ----- Local AI/agent tooling (never commit) -----
+.worktrees/
 .omc/
 .claude/
 memory/
