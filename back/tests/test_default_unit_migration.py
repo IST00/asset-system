@@ -129,3 +129,32 @@ def test_default_unit_migration_preserves_identical_existing_unit(
 
     assert unit == ("TAI", "台", "DISABLED", 7)
     assert count == 1
+
+
+@pytest.mark.parametrize(
+    ("code", "name", "expected_message"),
+    [
+        ("TAI", "设备台", "编码 TAI 已对应“设备台”"),
+        ("CUSTOM", "台", "名称“台”已使用编码 CUSTOM"),
+    ],
+)
+def test_default_unit_migration_rejects_semantic_conflicts(
+    tmp_path: Path,
+    code: str,
+    name: str,
+    expected_message: str,
+) -> None:
+    database = tmp_path / f"default-unit-conflict-{code.lower()}.db"
+    _prepare_018(database)
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "INSERT INTO units "
+            "(code, name, status, version, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+            (code, name, "ENABLED", 1),
+        )
+
+    upgrade = _migrate(database, "upgrade", "019")
+
+    assert upgrade.returncode != 0
+    assert expected_message in upgrade.stdout + upgrade.stderr

@@ -48,8 +48,18 @@ def upgrade() -> None:
             .mappings()
             .first()
         )
-        if existing_code is not None or existing_name is not None:
+        if existing_code is not None:
+            if existing_code["name"] != name:
+                raise RuntimeError(
+                    f"默认计量单位冲突：编码 {code} "
+                    f"已对应“{existing_code['name']}”，不能初始化为“{name}”"
+                )
             continue
+        if existing_name is not None:
+            raise RuntimeError(
+                f"默认计量单位冲突：名称“{name}”已使用编码 "
+                f"{existing_name['code']}，不能初始化为 {code}"
+            )
 
         bind.execute(
             sa.text(
