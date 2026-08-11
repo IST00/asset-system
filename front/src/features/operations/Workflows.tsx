@@ -291,11 +291,11 @@ export default function Workflows() {
           result: values.reason,
         })
       }
+      if (values.scrap_amount === undefined) throw new Error('请填写报废回收金额')
       return assetManagementApi.scrap({
         items,
         scrap_date: (values.scrap_date ?? dayjs()).format('YYYY-MM-DD'),
-        scrap_amount:
-          values.scrap_amount === undefined ? undefined : values.scrap_amount.toFixed(2),
+        scrap_amount: values.scrap_amount.toFixed(2),
         child_action: values.child_action ?? 'BLOCK',
         reason: values.reason,
       })
@@ -638,7 +638,11 @@ export default function Workflows() {
               <Form.Item name="scrap_date" label="报废日期" rules={[{ required: true }]}>
                 <DatePicker style={{ width: '100%' }} />
               </Form.Item>
-              <Form.Item name="scrap_amount" label="回收金额">
+              <Form.Item
+                name="scrap_amount"
+                label="回收金额"
+                rules={[{ required: true, message: '请填写回收金额，可填写 0' }]}
+              >
                 <InputNumber min={0} precision={2} prefix="¥" style={{ width: '100%' }} />
               </Form.Item>
               <Form.Item name="child_action" label="主资产的附属资产处理">

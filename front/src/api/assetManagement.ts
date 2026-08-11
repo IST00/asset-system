@@ -107,7 +107,7 @@ export const assetManagementApi = {
   scrap: async (payload: {
     items: AssetTarget[]
     scrap_date: string
-    scrap_amount?: string
+    scrap_amount: string
     child_action: 'BLOCK' | 'DETACH' | 'SCRAP'
     reason: string
   }) => mapCommand(await http.post('/asset-actions/scrap', payload)),

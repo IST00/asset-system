@@ -137,7 +137,11 @@ class RepairStartSchema(Schema):
         required=False, allow_none=True, validate=validate.Length(max=128)
     )
     estimated_cost = fields.Decimal(
-        required=False, allow_none=True, as_string=True, places=2
+        required=False,
+        allow_none=True,
+        as_string=True,
+        places=2,
+        validate=validate.Range(min=0),
     )
     reason = fields.String(required=True, validate=validate.Length(min=2, max=500))
 
@@ -149,7 +153,11 @@ class RepairCompleteSchema(Schema):
         validate=validate.Length(min=1, max=100),
     )
     actual_cost = fields.Decimal(
-        required=False, allow_none=True, as_string=True, places=2
+        required=False,
+        allow_none=True,
+        as_string=True,
+        places=2,
+        validate=validate.Range(min=0),
     )
     result = fields.String(required=True, validate=validate.Length(min=2, max=500))
 
@@ -162,7 +170,10 @@ class ScrapAssetsSchema(Schema):
     )
     scrap_date = fields.Date(required=True)
     scrap_amount = fields.Decimal(
-        required=False, allow_none=True, as_string=True, places=2
+        required=True,
+        as_string=True,
+        places=2,
+        validate=validate.Range(min=0),
     )
     child_action = fields.String(
         load_default="BLOCK", validate=validate.OneOf(["BLOCK", "DETACH", "SCRAP"])

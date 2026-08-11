@@ -465,6 +465,8 @@ def list_public_objects(
 def create_public_object(payload: dict[str, Any], actor_id: int) -> dict[str, Any]:
     permission_service.require_permission(actor_id, "public-object:manage")
     name = str(payload["name"]).strip()
+    if not name:
+        raise BusinessException("公共使用对象名称不能为空")
     exists = db.session.scalar(
         select(PublicUsageObject.id).where(
             func.lower(PublicUsageObject.name) == name.lower()
@@ -473,7 +475,7 @@ def create_public_object(payload: dict[str, Any], actor_id: int) -> dict[str, An
     if exists is not None:
         raise BusinessException("公共使用对象名称已存在")
     current = int(db.session.scalar(select(func.max(PublicUsageObject.id))) or 0) + 1
-    item = PublicUsageObject(code=f"PUB{current:04d}", name=name)
+    item = PublicUsageObject(code=f"PUB{current:06d}", name=name)
     db.session.add(item)
     db.session.flush()
     audit_service.record_resource_change(
@@ -498,6 +500,8 @@ def update_public_object(
     before = _public_object_dict(item)
     if "name" in payload:
         name = str(payload["name"]).strip()
+        if not name:
+            raise BusinessException("公共使用对象名称不能为空")
         duplicate = db.session.scalar(
             select(PublicUsageObject.id).where(
                 func.lower(PublicUsageObject.name) == name.lower(),
