@@ -14,6 +14,8 @@ from marshmallow import (
     validates_schema,
 )
 
+from app.schemas.fields import UTCDateTime
+
 
 LOSS_REASONS = (
     "NOT_WITH_ME",
@@ -66,7 +68,7 @@ class InventoryScanEventPageQuerySchema(Schema):
 
 class CreateInventoryTaskSchema(Schema):
     name = fields.String(required=True, validate=validate.Length(min=2, max=255))
-    deadline_at = fields.DateTime(required=True, format="iso")
+    deadline_at = UTCDateTime(required=True, format="iso")
     admin_user_ids = fields.List(
         fields.Integer(strict=True),
         required=True,
@@ -242,7 +244,7 @@ class ReopenInventoryItemsSchema(Schema):
         required=True,
         validate=validate.Length(min=1, max=500),
     )
-    deadline_at = fields.DateTime(required=True, format="iso")
+    deadline_at = UTCDateTime(required=True, format="iso")
     reason = fields.String(required=True, validate=validate.Length(min=2, max=2000))
 
 
@@ -261,7 +263,7 @@ class UpdateInventoryAdminsSchema(Schema):
 
 
 class UpdateInventoryDeadlineSchema(Schema):
-    deadline_at = fields.DateTime(required=True, format="iso")
+    deadline_at = UTCDateTime(required=True, format="iso")
     reason = fields.String(required=True, validate=validate.Length(min=2, max=2000))
 
 

@@ -69,9 +69,15 @@ def bootstrap_env(profile: str | None = None) -> str:
     return resolved
 
 
+# Config classes read environment variables at definition time, so dotenv must
+# be loaded before those class bodies execute. Subsequent calls are idempotent.
+bootstrap_env()
+
+
 class BaseConfig:
     # --- Flask core ---
     SECRET_KEY: str = os.getenv("SECRET_KEY", "change-me-flask-secret")
+    DEPLOYMENT_STAGE: str = os.getenv("DEPLOYMENT_STAGE", "development")
 
     # --- SQLAlchemy ---
     SQLALCHEMY_TRACK_MODIFICATIONS: bool = False
@@ -127,10 +133,12 @@ class BaseConfig:
     HEALTH_BIND: str = os.getenv("HEALTH_BIND", "0.0.0.0")
     EXPORT_RETENTION_HOURS: int = int(os.getenv("EXPORT_RETENTION_HOURS", "24"))
     EXPORT_STORAGE_DIR: str | None = os.getenv("EXPORT_STORAGE_DIR")
+    CORS_ALLOWED_ORIGINS: str = os.getenv("CORS_ALLOWED_ORIGINS", "*")
 
 
 class DevConfig(BaseConfig):
     DEBUG: bool = True
+    DEPLOYMENT_STAGE: str = "development"
     SQLALCHEMY_DATABASE_URI: str = os.getenv("DB_URL", "sqlite:///instance/dev.db")
     # dev defaults: weaker secrets are OK, but keep the shape
     JWT_SECRET_KEY: str = os.getenv(
@@ -140,15 +148,21 @@ class DevConfig(BaseConfig):
 
 class ProdConfig(BaseConfig):
     DEBUG: bool = False
+    DEPLOYMENT_STAGE: str = os.getenv("DEPLOYMENT_STAGE", "production")
+    SQLALCHEMY_ENGINE_OPTIONS: dict = {
+        **BaseConfig.SQLALCHEMY_ENGINE_OPTIONS,
+        "connect_args": {"init_command": "SET time_zone = '+00:00'"},
+    }
+    MYSQL_REQUIRED_SERIES: str = os.getenv("MYSQL_REQUIRED_SERIES", "8.4")
     SQLALCHEMY_DATABASE_URI: str = os.getenv(
         "DB_URL",
         # pymysql driver; env-driven credentials
         "mysql+pymysql://{user}:{pwd}@{host}:{port}/{db}?charset=utf8mb4".format(
-            user=os.getenv("DB_USER", "scaffold"),
-            pwd=os.getenv("DB_PASSWORD", "scaffold"),
-            host=os.getenv("DB_HOST", "mysql"),
+            user=os.getenv("DB_USER", "CHANGE_ME_IN_DEPLOYMENT"),
+            pwd=os.getenv("DB_PASSWORD", "CHANGE_ME_IN_DEPLOYMENT"),
+            host=os.getenv("DB_HOST", "CHANGE_ME_IN_DEPLOYMENT"),
             port=os.getenv("DB_PORT", "3306"),
-            db=os.getenv("DB_NAME", "scaffold"),
+            db=os.getenv("DB_NAME", "CHANGE_ME_IN_DEPLOYMENT"),
         ),
     )
 
@@ -156,6 +170,7 @@ class ProdConfig(BaseConfig):
 class TestConfig(BaseConfig):
     TESTING: bool = True
     DEBUG: bool = False
+    DEPLOYMENT_STAGE: str = "testing"
     SQLALCHEMY_DATABASE_URI: str = "sqlite:///:memory:"
     JWT_SECRET_KEY: str = "test-jwt-secret-test-jwt-secret-test-jwt-secret"
     RATE_LIMIT_ENABLED: bool = False

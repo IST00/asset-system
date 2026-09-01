@@ -7,6 +7,14 @@ BusinessException.
 """
 
 from app.repositories.base import BaseRepository, Page, QuerySpec
+from app.repositories.asset_lifecycle_request_repository import (
+    AssetScrapRequestItemRepository,
+    AssetScrapRequestRepository,
+    AssetTransferRequestRepository,
+    asset_scrap_request_item_repository,
+    asset_scrap_request_repository,
+    asset_transfer_request_repository,
+)
 from app.repositories.asset_repository import (
     AssetCodeReservationRepository,
     AssetCodeSequenceRepository,
@@ -71,6 +79,9 @@ __all__ = [
     "AssetRepository",
     "AssetBusinessLockRepository",
     "AssetLifecycleRepository",
+    "AssetScrapRequestItemRepository",
+    "AssetScrapRequestRepository",
+    "AssetTransferRequestRepository",
     "ApprovalFlowRepository",
     "ExecutionAttemptRepository",
     "ExternalApprovalEventRepository",
@@ -97,6 +108,9 @@ __all__ = [
     "asset_repository",
     "asset_business_lock_repository",
     "asset_lifecycle_repository",
+    "asset_scrap_request_item_repository",
+    "asset_scrap_request_repository",
+    "asset_transfer_request_repository",
     "operation_log_repository",
     "approval_flow_repository",
     "execution_attempt_repository",

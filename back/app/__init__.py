@@ -13,9 +13,14 @@ from typing import Any
 from flask import Flask
 
 from app.common import register_error_handlers
+from app.common.json_provider import UTCJSONProvider
 from app.extensions import db, jwt, migrate
 from app.observability import init_observability
-from app.security import register_jwt_callbacks, register_request_security
+from app.security import (
+    register_jwt_callbacks,
+    register_request_security,
+    validate_runtime_security,
+)
 from config import BaseConfig, load_config
 
 
@@ -27,9 +32,16 @@ def _enable_cors(app: Flask) -> None:
     - 具体域名列表：只对命中的 Origin 回写 Allow-Origin 头，未命中则不回写
       （浏览器会拦住，等同于拒绝）。
     """
-    raw = os.getenv("CORS_ALLOWED_ORIGINS", "*").strip()
-    allow_any = raw == "*"
-    whitelist = {o.strip() for o in raw.split(",") if o.strip() and o.strip() != "*"}
+    raw = str(app.config.get("CORS_ALLOWED_ORIGINS") or "").strip()
+    allow_any = raw == "*" and app.config.get("DEPLOYMENT_STAGE") in {
+        "development",
+        "testing",
+    }
+    whitelist = {
+        origin.strip()
+        for origin in raw.split(",")
+        if origin.strip() and origin.strip() != "*"
+    }
 
     @app.after_request
     def _set_cors_headers(resp: Any) -> Any:
@@ -55,7 +67,10 @@ def _enable_cors(app: Flask) -> None:
 
 def create_app(config: type[BaseConfig] | None = None) -> Flask:
     app = Flask(__name__, instance_relative_config=True)
+    app.json_provider_class = UTCJSONProvider
+    app.json = app.json_provider_class(app)
     app.config.from_object(config or load_config())
+    validate_runtime_security(app)
 
     # Ensure SQLite instance dir exists for dev profile
     try:

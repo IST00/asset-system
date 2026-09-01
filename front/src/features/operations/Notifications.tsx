@@ -6,6 +6,7 @@ import { useNavigate } from 'react-router-dom'
 import { inventoryApi } from '@/api/inventory'
 import { operationApi } from '@/api/operations'
 import StatePanel from '@/components/ui/StatePanel'
+import { formatBeijingDateTime } from '@/utils/dateTime'
 import type { Tone } from './data'
 import { GlassPanel, OperationsHero, SectionHeading, StatusPill } from './OperationsUI'
 
@@ -63,7 +64,7 @@ export default function Notifications() {
           result.push({
             id: `inventory-pending-${task.id}`,
             title: `${task.name}仍有 ${task.counts.pending} 件待盘点`,
-            detail: `任务 ${task.task_no}，截止时间 ${new Date(task.deadline_at).toLocaleString('zh-CN')}。`,
+            detail: `任务 ${task.task_no}，截止时间 ${formatBeijingDateTime(task.deadline_at)}。`,
             meta: task.status === 'OVERDUE' ? '已超过软截止时间' : `当前进度 ${task.progress}%`,
             type: '盘点待办',
             tone: task.status === 'OVERDUE' ? 'red' : 'amber',

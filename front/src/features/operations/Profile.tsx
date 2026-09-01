@@ -6,6 +6,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { authApi } from '@/api'
 import StatePanel from '@/components/ui/StatePanel'
 import { useAuthStore } from '@/store/auth'
+import { formatBeijingDateTime } from '@/utils/dateTime'
 import { GlassPanel, OperationsHero, SectionHeading, StatusPill } from './OperationsUI'
 
 interface PasswordFormValues {
@@ -353,7 +354,7 @@ export default function Profile() {
                         <strong>{session.current ? '当前浏览器' : '其他登录设备'}</strong>
                         <span>
                           {session.ip_address ?? '未知网络'} · 最近活动{' '}
-                          {new Date(session.last_seen_at).toLocaleString('zh-CN')}
+                          {formatBeijingDateTime(session.last_seen_at)}
                         </span>
                         <small>{session.user_agent || '未记录浏览器信息'}</small>
                       </div>

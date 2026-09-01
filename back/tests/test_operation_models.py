@@ -148,6 +148,7 @@ def test_operation_foundation_enums_expose_stable_persisted_values() -> None:
         "PERSONAL_RETURN",
         "PUBLIC_RETURN",
         "TRANSFER",
+        "SCRAP",
         "REPAIR_START",
         "REPAIR_COMPLETE",
     }

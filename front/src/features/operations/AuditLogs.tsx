@@ -4,6 +4,7 @@ import { Activity, Download, FileClock, Filter, KeyRound, Search, ShieldAlert } 
 import { useMemo, useState } from 'react'
 import { administrationApi } from '@/api/administration'
 import StatePanel from '@/components/ui/StatePanel'
+import { beijingDateKey, formatBeijingDateTime } from '@/utils/dateTime'
 import type { Tone } from './data'
 import {
   GlassPanel,
@@ -36,16 +37,6 @@ function securityRisk(eventType: string): { label: '正常' | '关注' | '阻断
     return { label: '关注', tone: 'amber' }
   }
   return { label: '正常', tone: 'green' }
-}
-
-function formatTime(value: string): string {
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return value
-  return new Intl.DateTimeFormat('zh-CN', {
-    dateStyle: 'medium',
-    timeStyle: 'medium',
-    hour12: false,
-  }).format(date)
 }
 
 function csvCell(value: unknown): string {
@@ -120,9 +111,9 @@ export default function AuditLogs() {
 
   const isSecurity = view === '安全事件'
   const currentCount = isSecurity ? securityEvents.length : logs.length
-  const today = new Date().toDateString()
+  const today = beijingDateKey(new Date().toISOString())
   const todayCount = (isSecurity ? securityEvents : logs).filter(
-    (item) => new Date(item.created_at).toDateString() === today,
+    (item) => beijingDateKey(item.created_at) === today,
   ).length
   const sensitiveCount = isSecurity
     ? securityEvents.filter((event) => securityRisk(event.event_type).label !== '正常').length
@@ -135,14 +126,14 @@ export default function AuditLogs() {
   const resultCount = isSecurity ? filteredSecurityEvents.length : filteredLogs.length
 
   const exportCurrent = () => {
-    const date = new Date().toISOString().slice(0, 10)
+    const date = beijingDateKey(new Date().toISOString())
     if (isSecurity) {
       downloadCsv(
         `安全事件-${date}.csv`,
         ['事件编号', '发生时间', '事件类型', '用户编号', '用户名', '来源 IP', '说明'],
         filteredSecurityEvents.map((event) => [
           event.id,
-          event.created_at,
+          formatBeijingDateTime(event.created_at),
           event.event_type,
           event.user_id ?? '',
           event.username ?? '',
@@ -166,7 +157,7 @@ export default function AuditLogs() {
         ],
         filteredLogs.map((log) => [
           log.id,
-          log.created_at,
+          formatBeijingDateTime(log.created_at),
           log.operator_id,
           log.action,
           log.resource_type,
@@ -210,7 +201,7 @@ export default function AuditLogs() {
 
       <OperationsMetrics
         items={[
-          { label: '今日事件', value: todayCount, hint: '按浏览器本地日期统计', tone: 'blue' },
+          { label: '今日事件', value: todayCount, hint: '按北京时间统计', tone: 'blue' },
           {
             label: isSecurity ? '涉及账号 / IP' : '活跃操作人',
             value: actorCount,
@@ -321,7 +312,7 @@ export default function AuditLogs() {
                       </span>
                     </div>
                     <div className="operations-log__aside">
-                      <strong>{formatTime(event.created_at)}</strong>
+                      <strong>{formatBeijingDateTime(event.created_at)}</strong>
                       <small>服务端记录时间</small>
                     </div>
                   </article>
@@ -355,7 +346,7 @@ export default function AuditLogs() {
                     </span>
                   </div>
                   <div className="operations-log__aside">
-                    <strong>{formatTime(log.created_at)}</strong>
+                    <strong>{formatBeijingDateTime(log.created_at)}</strong>
                     <small>系统记录时间</small>
                   </div>
                 </article>

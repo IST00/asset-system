@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from marshmallow import Schema, fields, validate
 
+from app.schemas.fields import UTCDateTime
+
 
 class LoginRequestSchema(Schema):
     username = fields.String(required=True, validate=validate.Length(min=3, max=64))
@@ -38,15 +40,15 @@ class UserResponseSchema(Schema):
     role = fields.String(allow_none=True)
     enabled = fields.Boolean()
     must_change_password = fields.Boolean()
-    password_changed_at = fields.DateTime(allow_none=True)
-    last_login_at = fields.DateTime(allow_none=True)
-    created_at = fields.DateTime(attribute="created_at")
-    updated_at = fields.DateTime(attribute="updated_at")
+    password_changed_at = UTCDateTime(allow_none=True)
+    last_login_at = UTCDateTime(allow_none=True)
+    created_at = UTCDateTime(attribute="created_at")
+    updated_at = UTCDateTime(attribute="updated_at")
 
 
 class LoginResponseSchema(Schema):
     token = fields.String()
-    session_expires_at = fields.DateTime()
+    session_expires_at = UTCDateTime()
     idle_timeout_minutes = fields.Integer()
     user = fields.Nested(UserResponseSchema)
 

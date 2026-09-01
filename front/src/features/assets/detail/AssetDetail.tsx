@@ -41,7 +41,8 @@ import StatePanel from '@/components/ui/StatePanel'
 import { canViewAmount, getAssetStatusMeta } from '@/features/assets/assetModel'
 import type { AssetDetail as AssetDetailRecord } from '@/features/assets/types'
 import { useAuthStore } from '@/store/auth'
-import { formatAssetAmount, formatAssetDate, formatAssetDateTime } from './detailFormatters'
+import { formatBeijingDateTime } from '@/utils/dateTime'
+import { formatAssetAmount, formatAssetDate } from './detailFormatters'
 import {
   assetDetailTabs,
   getDetailFieldGroups,
@@ -170,7 +171,7 @@ function LifecycleTab({ records, isLoading, isError, onRetry }: LifecycleQueryPr
               <p>{record.remark || '该操作未填写补充说明'}</p>
               <small>
                 {record.operation_no} · 操作人 #{record.operator_id} ·{' '}
-                {formatAssetDateTime(record.created_at, 'zh-CN')}
+                {formatBeijingDateTime(record.created_at)}
               </small>
             </div>
           </article>
@@ -534,10 +535,7 @@ function LifecycleCategoryTab({
                   }
                   value={showAmount ? formatMoneyValue(amount) : '无金额查看权限'}
                 />
-                <RecordFact
-                  label="操作时间"
-                  value={formatAssetDateTime(record.created_at, 'zh-CN')}
-                />
+                <RecordFact label="操作时间" value={formatBeijingDateTime(record.created_at)} />
               </div>
               <p className="asset-detail__record-note">
                 {record.remark || (category === 'repairs' ? '未填写维修说明' : '未填写报废原因')}
@@ -635,10 +633,7 @@ function InventoryRecordsTab({
               </div>
             </header>
             <div className="asset-detail__record-grid">
-              <RecordFact
-                label="截止时间"
-                value={formatAssetDateTime(record.deadline_at, 'zh-CN')}
-              />
+              <RecordFact label="截止时间" value={formatBeijingDateTime(record.deadline_at)} />
               <RecordFact label="实物结果" value={inventoryLabel(record.physical_result)} />
               <RecordFact label="地点结果" value={inventoryLabel(record.location_result)} />
               <RecordFact label="账面地点" value={record.ledger_location_name} />
@@ -646,9 +641,7 @@ function InventoryRecordsTab({
               <RecordFact label="提交人" value={record.submitted_by_name} />
               <RecordFact
                 label="提交时间"
-                value={
-                  record.submitted_at ? formatAssetDateTime(record.submitted_at, 'zh-CN') : '—'
-                }
+                value={record.submitted_at ? formatBeijingDateTime(record.submitted_at) : '—'}
               />
               <RecordFact label="复核状态" value={inventoryLabel(record.review_status)} />
               <RecordFact label="处理结果" value={inventoryLabel(record.resolution)} />
@@ -759,17 +752,15 @@ function ApprovalRecordsTab({
               />
               <RecordFact
                 label="提交时间"
-                value={
-                  record.submitted_at ? formatAssetDateTime(record.submitted_at, 'zh-CN') : '—'
-                }
+                value={record.submitted_at ? formatBeijingDateTime(record.submitted_at) : '—'}
               />
               <RecordFact
                 label="审批时间"
-                value={record.approved_at ? formatAssetDateTime(record.approved_at, 'zh-CN') : '—'}
+                value={record.approved_at ? formatBeijingDateTime(record.approved_at) : '—'}
               />
               <RecordFact
                 label="执行时间"
-                value={record.executed_at ? formatAssetDateTime(record.executed_at, 'zh-CN') : '—'}
+                value={record.executed_at ? formatBeijingDateTime(record.executed_at) : '—'}
               />
               <RecordFact label="审批层级" value={`${record.approval_steps.length} 层`} />
             </div>
@@ -792,9 +783,7 @@ function ApprovalRecordsTab({
                         <strong>{approvalLabel(task.status)}</strong>
                         <small>{task.opinion || '未填写审批意见'}</small>
                         <small>
-                          {task.decided_at
-                            ? formatAssetDateTime(task.decided_at, 'zh-CN')
-                            : '等待处理'}
+                          {task.decided_at ? formatBeijingDateTime(task.decided_at) : '等待处理'}
                         </small>
                       </div>
                     ))}
@@ -975,7 +964,7 @@ function AttachmentsTab({ assetId }: { assetId: number }) {
                       {formatFileSize(attachment.size_bytes)}
                     </span>
                     <small>
-                      上传于 {formatAssetDateTime(attachment.created_at, 'zh-CN')}
+                      上传于 {formatBeijingDateTime(attachment.created_at)}
                       {attachment.void_reason ? ` · ${attachment.void_reason}` : ''}
                     </small>
                   </div>
@@ -1077,7 +1066,7 @@ function DetailField({ asset, field }: { asset: AssetDetailRecord; field: Detail
   } else if (field === 'purchase_date') {
     value = formatAssetDate(asset.purchase_date, locale)
   } else if ((field === 'created_at' || field === 'updated_at') && typeof rawValue === 'string') {
-    value = formatAssetDateTime(rawValue, locale)
+    value = formatBeijingDateTime(rawValue)
   } else if (typeof rawValue === 'string' && rawValue.length > 0) {
     value = rawValue
   }

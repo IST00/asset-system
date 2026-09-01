@@ -154,6 +154,41 @@ def cleanup_export_files() -> None:
     click.echo(f"Export cleanup complete: files={removed}")
 
 
+@app.cli.command("check-database-environment")
+def check_database_environment() -> None:
+    """Validate MySQL version, utf8mb4 charsets, and the UTC session."""
+    from sqlalchemy import text
+
+    from app.environment import validate_database_contract
+    from app.extensions import db
+
+    metadata = (
+        db.session.execute(
+            text(
+                """
+                SELECT VERSION() AS version,
+                       @@character_set_server AS character_set_server,
+                       @@character_set_database AS character_set_database,
+                       @@character_set_connection AS character_set_connection,
+                       @@session.time_zone AS session_time_zone,
+                       TIMESTAMPDIFF(SECOND, UTC_TIMESTAMP(), NOW())
+                           AS utc_offset_seconds
+                """
+            )
+        )
+        .mappings()
+        .one()
+    )
+    try:
+        validate_database_contract(
+            metadata,
+            required_series=str(app.config["MYSQL_REQUIRED_SERIES"]),
+        )
+    except RuntimeError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo("database environment contract passed")
+
+
 if __name__ == "__main__":  # pragma: no cover
     # Allow `python manage.py run` without `flask` on PATH.
     if len(sys.argv) > 1 and sys.argv[1] == "run":

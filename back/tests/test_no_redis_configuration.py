@@ -62,7 +62,7 @@ def test_compose_uses_external_database_configuration():
     assert "env_file:" in compose
     assert "${BACK_ENV_FILE:-./back/.env.deploy}" in compose
     assert "FLASK_ENV: ${APP_ENV:-prod}" in compose
-    assert "depends_on:\n      - back" in compose
+    assert "depends_on:\n      back:\n        condition: service_healthy" in compose
 
 
 def test_deployment_secrets_are_not_tracked_or_copied_into_image():
@@ -89,3 +89,40 @@ def test_deployment_secrets_are_not_tracked_or_copied_into_image():
         if key in sensitive_keys and "CHANGE_ME_IN_DEPLOYMENT" not in value:
             unsafe_keys.append(key)
     assert unsafe_keys == []
+
+
+def _active_env_values(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        values[key.strip()] = value.strip()
+    return values
+
+
+def test_committed_env_files_do_not_contain_remote_credentials() -> None:
+    development = _active_env_values(BACKEND_ROOT / ".env.dev")
+    assert "DB_HOST" not in development
+    assert "DB_USER" not in development
+    assert "DB_PASSWORD" not in development
+    assert "DB_NAME" not in development
+    assert "DB_URL" not in development
+
+    for filename in (".env.prod", ".env.pilot.example", ".env.deploy.example"):
+        values = _active_env_values(BACKEND_ROOT / filename)
+        for key in (
+            "SECRET_KEY",
+            "JWT_SECRET",
+            "DB_HOST",
+            "DB_USER",
+            "DB_PASSWORD",
+            "DB_NAME",
+        ):
+            assert "CHANGE_ME" in values[key]
+
+    legacy_test_template = _active_env_values(BACKEND_ROOT / ".env.test")
+    for key in ("SECRET_KEY", "JWT_SECRET", "DB_PASSWORD", "DB_URL"):
+        if key in legacy_test_template:
+            assert "CHANGE_ME" in legacy_test_template[key]

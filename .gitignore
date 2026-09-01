@@ -54,9 +54,13 @@ logs/
 .env.local
 .env.*.local
 back/.env.deploy
+back/.env.pilot
 
 # ----- Husky / lint-staged caches -----
 .eslintcache
+
+# ----- Local source bundles (never commit) -----
+asset-system-source-*.zip
 
 # ----- Local AI/agent tooling (never commit) -----
 .worktrees/

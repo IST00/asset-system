@@ -26,6 +26,9 @@ worker_class = os.getenv("GUNICORN_WORKER_CLASS", "sync")
 accesslog = os.getenv("GUNICORN_ACCESS_LOG", "-")
 errorlog = os.getenv("GUNICORN_ERROR_LOG", "-")
 loglevel = os.getenv("GUNICORN_LOG_LEVEL", "info")
+# Use URL path (U), never the full request line (r) or query string (q).
+# Request headers and bodies are intentionally excluded as well.
+access_log_format = "%(h)s %(m)s %(U)s %(s)s %(L)s"
 
 _log = logging.getLogger("gunicorn.scaffold")
 

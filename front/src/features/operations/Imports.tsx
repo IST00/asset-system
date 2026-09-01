@@ -29,6 +29,7 @@ import {
 import StatePanel from '@/components/ui/StatePanel'
 import { parseAssetCodes } from '@/features/assets/assetModel'
 import { useAuthStore } from '@/store/auth'
+import { formatBeijingDateTime } from '@/utils/dateTime'
 import type { Tone } from './data'
 import {
   GlassPanel,
@@ -116,14 +117,7 @@ function saveBlob(filename: string, blob: Blob) {
 
 function dateTime(value?: string | null): string {
   if (!value) return '—'
-  return new Intl.DateTimeFormat('zh-CN', {
-    timeZone: 'Asia/Shanghai',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(new Date(value))
+  return formatBeijingDateTime(value)
 }
 
 function rowPrimary(row: ImportPreviewRow, type: ImportType): { title: string; detail: string } {

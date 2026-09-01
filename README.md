@@ -64,8 +64,10 @@ cd back
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 FLASK_APP=manage.py flask db upgrade            # 首次执行，建表并写入 admin 种子
-python manage.py run [dev|prod]                            # 启动开发服务器
+python manage.py run dev                         # 启动本地开发服务器
 ```
+
+`back/.env.dev` 只包含本地模拟配置，数据库固定使用默认的 `back/instance/dev.db`，不需要 MySQL。开发用密钥不得复制到试运行或生产环境。
 
 环境里面如何操作
 
@@ -92,7 +94,38 @@ npm run docker:up
 
 - 前端：http://localhost
 - 后端：http://localhost:8080
-- MySQL：3306
+- 数据库：外部 MySQL（通过被忽略的部署 env 文件或部署环境提供）
+
+### 小范围试运行与生产配置
+
+仓库中的 `back/.env.prod`、`back/.env.pilot.example` 和 `back/.env.deploy.example` 只保留占位值。真实的 `SECRET_KEY`、`JWT_SECRET` 和数据库密码必须由部署环境或密钥管理器注入；进程环境变量始终覆盖 dotenv 文件。
+
+试运行环境可从模板准备一个已被 Git 忽略的文件：
+
+```bash
+cp back/.env.pilot.example back/.env.pilot
+# 由部署平台注入真实密钥和数据库密码，并补齐其余占位项后再启动
+cd back
+FLASK_ENV=prod ENV_FILE="$PWD/.env.pilot" python manage.py run
+```
+
+生产环境使用部署平台注入，或从 `back/.env.deploy.example` 准备被忽略的 `back/.env.deploy`。Gunicorn 启动方式：
+
+```bash
+cd back
+FLASK_ENV=prod gunicorn -c gunicorn.conf.py wsgi:app
+```
+
+部署要求：
+
+- `DEPLOYMENT_STAGE=pilot` 或 `production` 会启用启动时安全门禁；占位密钥、占位/非 MySQL 数据库配置、通配 CORS、非 HTTPS CORS 都会拒绝启动。
+- 生产 CORS 必须显式列出 HTTPS 来源，禁止使用 `*`。
+- 试运行与生产必须使用不同的 `DB_USER` 和 `DB_NAME`，并分别授予最小权限。
+- 部署前从仓库根运行 `back/.venv/bin/python scripts/check_environment_isolation.py back/.env.pilot back/.env.deploy`。
+- 应用访问日志不记录查询字符串、Authorization、请求体或附件内容，日志 formatter 还会脱敏常见密码、Token 和数据库连接串。
+- 仓库清除凭据不会自动轮换数据库账号；实际轮换和旧账号撤销必须由数据库/平台管理员执行。
+
+完整步骤见 [数据库凭据轮换与环境隔离操作手册](docs/runbooks/security-credential-rotation.md)。
 
 ## 后端接口
 

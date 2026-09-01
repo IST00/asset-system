@@ -12,6 +12,7 @@ import {
 } from 'lucide-react'
 import { systemApi } from '@/api/system'
 import StatePanel from '@/components/ui/StatePanel'
+import { formatBeijingDateTime } from '@/utils/dateTime'
 import {
   GlassPanel,
   OperationsHero,
@@ -75,7 +76,7 @@ export default function Settings() {
             <strong>{status?.application.healthy ? '正常' : '待确认'}</strong>
             <small>
               {status
-                ? `服务时间 ${new Date(status.application.server_time).toLocaleString('zh-CN')}`
+                ? `服务时间 ${formatBeijingDateTime(status.application.server_time)}`
                 : '正在读取后端'}
             </small>
           </div>

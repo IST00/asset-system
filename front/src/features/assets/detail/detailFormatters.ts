@@ -37,25 +37,6 @@ export function formatAssetDate(value: string, locale: string): string {
   }
 }
 
-export function formatAssetDateTime(value: string, locale: string): string {
-  const date = new Date(value)
-  if (date.getTime() !== date.getTime() || !canFormatDates()) return value
-
-  try {
-    return new Intl.DateTimeFormat(locale, {
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: false,
-    }).format(date)
-  } catch {
-    return value
-  }
-}
-
 export function formatAssetAmount(value: number, locale: string): string {
   if (canFormatNumbers()) {
     try {

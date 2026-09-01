@@ -7,6 +7,11 @@ from app.models.asset import (
     PublicUsageObject,
 )
 from app.models.attachment import AssetAttachment
+from app.models.asset_lifecycle_request import (
+    AssetScrapRequest,
+    AssetScrapRequestItem,
+    AssetTransferRequest,
+)
 from app.models.asset_usage_return import (
     AssetReturnItem,
     AssetReturnRequest,
@@ -87,6 +92,9 @@ __all__ = [
     "AssetCodeReservation",
     "AssetCodeSequence",
     "AssetLifecycleRecord",
+    "AssetScrapRequest",
+    "AssetScrapRequestItem",
+    "AssetTransferRequest",
     "AssetReturnItem",
     "AssetReturnRequest",
     "AssetUsageRequest",

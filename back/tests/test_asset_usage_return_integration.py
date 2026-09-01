@@ -38,7 +38,12 @@ class _DevelopmentIntegrationConfig(DevConfig):
 
 
 class _ProductionIntegrationConfig(ProdConfig):
-    SQLALCHEMY_DATABASE_URI = "sqlite:///:memory:"
+    SECRET_KEY = "production-integration-test-secret-key-value"
+    JWT_SECRET_KEY = "production-integration-test-jwt-secret-value"
+    SQLALCHEMY_DATABASE_URI = (
+        "mysql+pymysql://test_app:synthetic-password@db.invalid/" "asset_system_test"
+    )
+    CORS_ALLOWED_ORIGINS = "https://production.test.invalid"
     LOCAL_FEISHU_ENABLED = True
 
 

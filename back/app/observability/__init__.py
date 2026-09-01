@@ -87,6 +87,29 @@ _TEXT_FMT = (
 )
 _DATE_FMT = "%Y-%m-%d %H:%M:%S"
 
+_DATABASE_URI_CREDENTIALS = re.compile(
+    r"(?i)(\b(?:mysql(?:\+pymysql)?|postgres(?:ql)?)://[^:\s/@]+:)[^@\s]+(@)"
+)
+_BEARER_TOKEN = re.compile(r"(?i)(\bBearer\s+)[A-Za-z0-9._~+/=-]+")
+_SENSITIVE_ASSIGNMENT = re.compile(
+    r"(?i)([\"']?\b(?:password|passwd|pwd|(?:access_|refresh_)?token|"
+    r"authorization|jwt_secret|secret_key|db_password)\b[\"']?\s*[:=]\s*)"
+    r"([\"']?)([^,\s;}\]\"']+)"
+)
+
+
+def _redact_sensitive_text(text: str) -> str:
+    redacted = _DATABASE_URI_CREDENTIALS.sub(r"\1[REDACTED]\2", text)
+    redacted = _BEARER_TOKEN.sub(r"\1[REDACTED]", redacted)
+    return _SENSITIVE_ASSIGNMENT.sub(r"\1\2[REDACTED]", redacted)
+
+
+class SensitiveFormatter(logging.Formatter):
+    """Redact common credential forms from the final rendered log text."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        return _redact_sensitive_text(super().format(record))
+
 
 # -- Rotating file handler with gzip-on-rollover --------------------------
 def _parse_size(raw: str) -> int:
@@ -153,7 +176,7 @@ def _build_handlers(app: Flask) -> list[logging.Handler]:
     want_console = os.getenv("LOG_CONSOLE", "true").lower() in {"1", "true", "yes"}
     if want_console:
         ch = logging.StreamHandler(sys.stdout)
-        ch.setFormatter(logging.Formatter(_TEXT_FMT, _DATE_FMT))
+        ch.setFormatter(SensitiveFormatter(_TEXT_FMT, _DATE_FMT))
         ch.addFilter(MdcFilter())
         handlers.append(ch)
 
@@ -172,7 +195,7 @@ def _build_handlers(app: Flask) -> list[logging.Handler]:
             backup_count=backup,
             basename=basename,
         )
-        fh.setFormatter(logging.Formatter(_TEXT_FMT, _DATE_FMT))
+        fh.setFormatter(SensitiveFormatter(_TEXT_FMT, _DATE_FMT))
         fh.addFilter(MdcFilter())
         handlers.append(fh)
 
@@ -242,6 +265,7 @@ __all__: list[str] = [
     "set_trace_id",
     "REQUEST_ID_HEADER",
     "MdcFilter",
+    "SensitiveFormatter",
     "GzipRotatingFileHandler",
 ]
 
@@ -254,4 +278,4 @@ RequestContextFilter = MdcFilter
 
 def JsonFormatter(*_a: Any, **_kw: Any) -> logging.Formatter:  # noqa: N802 — legacy API
     """Deprecated: Java side uses text format. Returns the text formatter."""
-    return logging.Formatter(_TEXT_FMT, _DATE_FMT)
+    return SensitiveFormatter(_TEXT_FMT, _DATE_FMT)
