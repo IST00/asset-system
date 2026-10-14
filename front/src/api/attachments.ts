@@ -7,12 +7,35 @@ export type AssetAttachmentType =
   | 'ACCEPTANCE'
   | 'REPAIR'
   | 'SCRAP'
+  | 'USAGE_SIGN'
+  | 'RETURN_HANDOVER'
+  | 'RETURN_INSPECTION'
+  | 'TRANSFER_RECEIPT'
+  | 'OTHER'
+
+export type AssetAttachmentDocumentType =
+  | 'ASSET_PHOTO'
+  | 'CONTRACT'
+  | 'INVOICE'
+  | 'ACCEPTANCE'
+  | 'REPAIR_PHOTO'
+  | 'REPAIR_QUOTE'
+  | 'REPAIR_INVOICE'
+  | 'SCRAP_CERTIFICATE'
+  | 'DISPOSAL_VOUCHER'
+  | 'SIGN_PHOTO'
+  | 'RETURN_PHOTO'
+  | 'INSPECTION_PHOTO'
+  | 'TRANSFER_RECEIPT_PHOTO'
+  | 'ELECTRONIC_SIGNATURE'
   | 'OTHER'
 
 export interface AssetAttachment {
   id: number
   asset_id: number
   business_type: AssetAttachmentType
+  business_id?: number | null
+  document_type: AssetAttachmentDocumentType
   original_name: string
   mime_type: string
   size_bytes: number
@@ -28,15 +51,29 @@ export interface AssetAttachment {
   updated_at: string
 }
 
+export interface AttachmentListFilters {
+  business_type?: AssetAttachmentType
+  business_id?: number
+}
+
+export interface AttachmentUploadPayload {
+  businessType: AssetAttachmentType
+  businessId?: number | null
+  documentType: AssetAttachmentDocumentType
+  file: File
+}
+
 export const attachmentApi = {
-  list(assetId: number): Promise<AssetAttachment[]> {
-    return http.get(`/assets/${assetId}/attachments`)
+  list(assetId: number, filters?: AttachmentListFilters): Promise<AssetAttachment[]> {
+    return http.get(`/assets/${assetId}/attachments`, { params: filters })
   },
 
-  upload(assetId: number, businessType: AssetAttachmentType, file: File) {
+  upload(assetId: number, payload: AttachmentUploadPayload) {
     const data = new FormData()
-    data.append('business_type', businessType)
-    data.append('file', file)
+    data.append('business_type', payload.businessType)
+    data.append('document_type', payload.documentType)
+    if (payload.businessId != null) data.append('business_id', String(payload.businessId))
+    data.append('file', payload.file)
     return http.post<unknown, AssetAttachment, FormData>(`/assets/${assetId}/attachments`, data)
   },
 

@@ -91,14 +91,14 @@ class BaseConfig:
         "JWT_SECRET", "change-me-change-me-change-me-change-me"
     )
     JWT_ACCESS_TOKEN_EXPIRES: timedelta = timedelta(
-        seconds=int(os.getenv("JWT_EXPIRE_SECONDS", "28800"))
+        seconds=int(os.getenv("JWT_EXPIRE_SECONDS", "259200"))
     )
     JWT_TOKEN_LOCATION: list[str] = ["headers"]
     JWT_HEADER_NAME: str = "Authorization"
     JWT_HEADER_TYPE: str = "Bearer"
 
     # --- Local account security ---
-    SESSION_IDLE_MINUTES: int = int(os.getenv("SESSION_IDLE_MINUTES", "120"))
+    SESSION_IDLE_MINUTES: int = int(os.getenv("SESSION_IDLE_MINUTES", "720"))
     LOGIN_LOCK_THRESHOLD: int = int(os.getenv("LOGIN_LOCK_THRESHOLD", "5"))
     LOGIN_LOCK_MINUTES: int = int(os.getenv("LOGIN_LOCK_MINUTES", "15"))
     LOGIN_RATE_LIMIT_PER_MINUTE: int = int(
@@ -134,12 +134,36 @@ class BaseConfig:
     EXPORT_RETENTION_HOURS: int = int(os.getenv("EXPORT_RETENTION_HOURS", "24"))
     EXPORT_STORAGE_DIR: str | None = os.getenv("EXPORT_STORAGE_DIR")
     CORS_ALLOWED_ORIGINS: str = os.getenv("CORS_ALLOWED_ORIGINS", "*")
+    ASSET_QR_BASE_URL: str | None = os.getenv("ASSET_QR_BASE_URL")
+
+    # --- Feishu native integration ---
+    FEISHU_INTEGRATION_ENABLED: bool = os.getenv(
+        "FEISHU_INTEGRATION_ENABLED", "false"
+    ).lower() in {"1", "true", "yes", "on"}
+    FEISHU_APP_ID: str | None = os.getenv("FEISHU_APP_ID") or None
+    FEISHU_APP_SECRET: str | None = os.getenv("FEISHU_APP_SECRET") or None
+    FEISHU_VERIFICATION_TOKEN: str | None = (
+        os.getenv("FEISHU_VERIFICATION_TOKEN") or None
+    )
+    FEISHU_ENCRYPT_KEY: str | None = os.getenv("FEISHU_ENCRYPT_KEY") or None
+    FEISHU_REDIRECT_URI: str | None = os.getenv("FEISHU_REDIRECT_URI") or None
+    FEISHU_APPROVAL_CODE: str | None = os.getenv("FEISHU_APPROVAL_CODE") or None
+    FEISHU_NOTIFICATION_ENABLED: bool = os.getenv(
+        "FEISHU_NOTIFICATION_ENABLED", "true"
+    ).lower() in {"1", "true", "yes", "on"}
+    FEISHU_DIRECTORY_SYNC_ENABLED: bool = os.getenv(
+        "FEISHU_DIRECTORY_SYNC_ENABLED", "true"
+    ).lower() in {"1", "true", "yes", "on"}
 
 
 class DevConfig(BaseConfig):
     DEBUG: bool = True
     DEPLOYMENT_STAGE: str = "development"
-    SQLALCHEMY_DATABASE_URI: str = os.getenv("DB_URL", "sqlite:///instance/dev.db")
+    # Flask-SQLAlchemy resolves relative SQLite URLs from ``instance_path``.
+    # Keep the database in back/instance/dev.db without duplicating the
+    # ``instance`` segment (sqlite:///instance/dev.db would resolve to
+    # back/instance/instance/dev.db).
+    SQLALCHEMY_DATABASE_URI: str = os.getenv("DB_URL", "sqlite:///dev.db")
     # dev defaults: weaker secrets are OK, but keep the shape
     JWT_SECRET_KEY: str = os.getenv(
         "JWT_SECRET", "dev-jwt-secret-change-me-change-me-change-me"
@@ -168,6 +192,7 @@ class ProdConfig(BaseConfig):
 
 
 class TestConfig(BaseConfig):
+    FEISHU_INTEGRATION_ENABLED: bool = False
     TESTING: bool = True
     DEBUG: bool = False
     DEPLOYMENT_STAGE: str = "testing"

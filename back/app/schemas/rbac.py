@@ -20,7 +20,11 @@ class UpdateRolePermissionsRequestSchema(Schema):
 
 
 class UpdateUserRolesRequestSchema(Schema):
-    role_ids = fields.List(fields.Integer(strict=True), required=True)
+    role_ids = fields.List(
+        fields.Integer(strict=True),
+        required=True,
+        validate=validate.Length(min=1),
+    )
     reason = fields.String(
         load_default=None, allow_none=True, validate=validate.Length(min=2, max=500)
     )

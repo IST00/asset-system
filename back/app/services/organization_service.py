@@ -36,6 +36,19 @@ def get_descendant_ids(organization_id: int) -> set[int]:
     return result
 
 
+def get_ancestor_ids(organization_id: int) -> set[int]:
+    """Return an organization and all of its enabled/disabled ancestors."""
+    result: set[int] = set()
+    current = _require(organization_id)
+    while True:
+        if current.id in result:
+            raise BusinessException("组织层级存在循环")
+        result.add(current.id)
+        if current.parent_id is None:
+            return result
+        current = _require(current.parent_id)
+
+
 def get_top_level(organization_id: int) -> Organization:
     current = _require(organization_id)
     visited: set[int] = set()
@@ -158,6 +171,7 @@ def tree(actor_id: int) -> list[dict[str, Any]]:
 __all__ = [
     "create",
     "get",
+    "get_ancestor_ids",
     "get_descendant_ids",
     "get_top_level",
     "require_enabled",

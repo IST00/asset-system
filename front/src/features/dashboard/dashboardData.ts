@@ -15,6 +15,7 @@ const statusPresentation: Record<
   Pick<StatusDistribution, 'key' | 'tone'>
 > = {
   IDLE: { key: 'idle', tone: 'success' },
+  PENDING_RECEIPT: { key: 'pendingReceipt', tone: 'warning' },
   IN_USE: { key: 'inUse', tone: 'brand' },
   REPAIRING: { key: 'repairing', tone: 'danger' },
   SCRAPPED: { key: 'scrapped', tone: 'slate' },

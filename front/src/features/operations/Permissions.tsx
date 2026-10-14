@@ -1,4 +1,4 @@
-import { App, Button, Checkbox, Form, Input, Modal, Select, Spin, Switch } from 'antd'
+import { App, Button, Checkbox, Form, Input, Modal, Radio, Select, Spin, Switch } from 'antd'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlertTriangle,
@@ -23,6 +23,7 @@ import {
 import StatePanel from '@/components/ui/StatePanel'
 import { useAuthStore } from '@/store/auth'
 import type { User } from '@/types'
+import { dataScopeLabel } from '@/utils/displayLabels'
 import type { Tone } from './data'
 import {
   GlassPanel,
@@ -80,6 +81,15 @@ function permissionDisplayName(item: PermissionItem): string {
 
 const scopeOptions = Object.entries(scopeLabels).map(([value, label]) => ({ value, label }))
 const roleTones: Tone[] = ['violet', 'blue', 'cyan', 'amber', 'green', 'slate']
+const userDisplayRolePriority: Record<string, number> = {
+  SUPER_ADMIN: 0,
+  ASSET_ADMIN: 1,
+  USER: 2,
+}
+
+function roleDisplayPriority(code: string): number {
+  return userDisplayRolePriority[code] ?? Object.keys(userDisplayRolePriority).length
+}
 
 type RoleDialogMode = 'create' | 'basic' | 'permissions'
 
@@ -94,7 +104,7 @@ interface RoleFormValues {
 }
 
 interface UserRoleFormValues {
-  role_ids: number[]
+  role_id: number
   reason: string
 }
 
@@ -118,9 +128,21 @@ export default function Permissions() {
   const [roleForm] = Form.useForm<RoleFormValues>()
   const [userRoleForm] = Form.useForm<UserRoleFormValues>()
   const queryClient = useQueryClient()
-  const permissions = useAuthStore((state) => state.user?.permissions ?? [])
-  const canViewUsers = permissions.includes('system:user:view')
-  const canManage = permissions.includes('system:role:manage')
+  const currentUser = useAuthStore((state) => state.user)
+  const permissions = useMemo(
+    () => new Set(currentUser?.permissions ?? []),
+    [currentUser?.permissions],
+  )
+  const currentRoleCodes = useMemo(() => new Set(currentUser?.roles ?? []), [currentUser?.roles])
+  const canViewUsers = permissions.has('system:user:view')
+  const canManage = permissions.has('system:role:manage')
+
+  const isCurrentSuperAdmin = currentRoleCodes.has('SUPER_ADMIN')
+
+  const canConfigureRole = (role: RoleItem) => isCurrentSuperAdmin || role.code !== 'SUPER_ADMIN'
+
+  const canAssignUserRole = (user: User) =>
+    isCurrentSuperAdmin || !(user.roles ?? []).includes('SUPER_ADMIN')
 
   const accessQuery = useQuery({
     queryKey: ['administration', 'roles-permissions'],
@@ -154,19 +176,27 @@ export default function Permissions() {
     () => flattenOrganizations(accessQuery.data?.organizations ?? []),
     [accessQuery.data?.organizations],
   )
-  const roleNameByCode = useMemo(
-    () => new Map(roles.map((role) => [role.code, role.name])),
-    [roles],
-  )
   const roleIdByCode = useMemo(() => new Map(roles.map((role) => [role.code, role.id])), [roles])
   const normalizedKeyword = keyword.trim().toLowerCase()
-  const users = (usersQuery.data?.items ?? []).filter(
-    (user) =>
-      !normalizedKeyword ||
-      [user.username, user.nickname ?? '', ...(user.roles ?? [])].some((value) =>
-        value.toLowerCase().includes(normalizedKeyword),
-      ),
-  )
+  const users = (usersQuery.data?.items ?? [])
+    .filter(
+      (user) =>
+        !normalizedKeyword ||
+        [user.username, user.nickname ?? '', ...(user.roles ?? [])].some((value) =>
+          value.toLowerCase().includes(normalizedKeyword),
+        ),
+    )
+    .map((user) => ({
+      user,
+      rolePriority: Math.min(...(user.roles ?? []).map(roleDisplayPriority)),
+    }))
+    .sort((left, right) =>
+      left.rolePriority !== right.rolePriority
+        ? left.rolePriority - right.rolePriority
+        : left.user.username.localeCompare(right.user.username, 'zh-CN') ||
+          (left.user.nickname ?? '').localeCompare(right.user.nickname ?? '', 'zh-CN'),
+    )
+    .map(({ user }) => user)
   const builtInCount = roles.filter((role) => role.built_in).length
   const enabledPermissionCount = permissionItems.filter((item) => item.enabled).length
 
@@ -219,7 +249,7 @@ export default function Permissions() {
       if (!editingUser) throw new Error('请选择要授权的用户')
       return administrationApi.updateUserRoles(
         editingUser.id,
-        values.role_ids,
+        [values.role_id],
         values.reason.trim(),
       )
     },
@@ -296,10 +326,11 @@ export default function Permissions() {
 
   const openUserRoles = (user: User) => {
     setEditingUser(user)
+    const roleIds = (user.roles ?? [])
+      .map((code) => roleIdByCode.get(code))
+      .filter((id): id is number => id !== undefined)
     userRoleForm.setFieldsValue({
-      role_ids: (user.roles ?? [])
-        .map((code) => roleIdByCode.get(code))
-        .filter((id): id is number => id !== undefined),
+      role_id: roleIds[0],
       reason: '',
     })
   }
@@ -319,7 +350,7 @@ export default function Permissions() {
     const values = await userRoleForm.validateFields()
     modal.confirm({
       title: '确认更新用户角色？',
-      content: '新的角色集合会替换该用户当前全部角色，请确认后保存。',
+      content: '每个账号只能保留一个角色；新角色会替换该用户当前角色，请确认后保存。',
       okText: '确认授权',
       cancelText: '返回检查',
       onOk: () => userRoleMutation.mutateAsync(values),
@@ -421,7 +452,7 @@ export default function Permissions() {
                     </div>
                   </div>
                   <h3>{role.name}</h3>
-                  <p>{scopeLabels[role.data_scope] ?? '其他数据范围'}</p>
+                  <p>{dataScopeLabel(role.data_scope)}</p>
                   <div className="operations-role-card__counts">
                     <div>
                       <strong>{role.organization_ids.length || '—'}</strong>
@@ -438,18 +469,22 @@ export default function Permissions() {
                   </div>
                   {canManage ? (
                     <div className="operations-role-card__actions">
-                      <Button
-                        icon={<Pencil size={15} />}
-                        onClick={() => openRoleEditor(role, 'basic')}
-                      >
-                        编辑角色
-                      </Button>
-                      <Button
-                        icon={<ShieldCheck size={15} />}
-                        onClick={() => openRoleEditor(role, 'permissions')}
-                      >
-                        配置权限点
-                      </Button>
+                      {canConfigureRole(role) ? (
+                        <>
+                          <Button
+                            icon={<Pencil size={15} />}
+                            onClick={() => openRoleEditor(role, 'basic')}
+                          >
+                            编辑角色
+                          </Button>
+                          <Button
+                            icon={<ShieldCheck size={15} />}
+                            onClick={() => openRoleEditor(role, 'permissions')}
+                          >
+                            配置权限点
+                          </Button>
+                        </>
+                      ) : null}
                       {!role.built_in ? (
                         <Button
                           danger
@@ -470,130 +505,165 @@ export default function Permissions() {
         )}
       </GlassPanel>
 
-      <div className="operations-split">
-        <GlassPanel>
-          <SectionHeading
-            eyebrow="权限矩阵"
-            title="权限覆盖矩阵"
-            description="根据角色拥有的权限码，按后端模块实时汇总。"
-          />
-          {roles.length && modules.length ? (
-            <div className="operations-permission-matrix">
-              <table>
-                <thead>
-                  <tr>
-                    <th>权限模块</th>
-                    {roles.map((role) => (
-                      <th key={role.id}>{role.name}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {modules.map((module) => {
-                    const moduleCodes = permissionItems
-                      .filter((item) => item.module === module && item.enabled)
-                      .map((item) => item.code)
-                    return (
-                      <tr key={module}>
-                        <td>{permissionModuleLabel(module)}</td>
-                        {roles.map((role) => (
-                          <td key={`${module}-${role.id}`}>
-                            {moduleCodes.some((code) => role.permissions.includes(code)) ? (
-                              <span className="operations-permission-dot">
-                                <Check size={13} />
-                              </span>
-                            ) : (
-                              '—'
-                            )}
-                          </td>
-                        ))}
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <StatePanel mode="empty" message="暂无权限矩阵数据" />
-          )}
-        </GlassPanel>
-
-        <GlassPanel>
-          <SectionHeading
-            eyebrow="用户授权"
-            title="授权用户"
-            description={
-              canViewUsers
-                ? '显示后端返回的前 100 名用户，可整组替换用户角色。'
-                : '当前账号没有用户查看权限。'
-            }
-          />
-          {canViewUsers ? (
-            <>
-              <div className="operations-toolbar">
-                <Input
-                  value={keyword}
-                  prefix={<Search size={15} />}
-                  allowClear
-                  placeholder="搜索用户、账号或角色"
-                  onChange={(event) => setKeyword(event.target.value)}
-                />
-              </div>
-              {usersQuery.isLoading ? (
-                <div className="operations-loading">
-                  <Spin />
-                </div>
-              ) : usersQuery.isError ? (
-                <StatePanel
-                  mode="error"
-                  message="用户列表加载失败"
-                  retryLabel="重新加载"
-                  onRetry={() => void usersQuery.refetch()}
-                />
-              ) : users.length ? (
-                <div className="operations-task-list">
-                  {users.map((user, index) => (
-                    <div
-                      key={user.id}
-                      className={`operations-user-row operations-tone--${index % 2 ? 'cyan' : 'violet'}`}
-                    >
-                      <span className="operations-user-row__avatar">
-                        {(user.nickname || user.username).slice(0, 1)}
-                      </span>
-                      <div className="operations-user-row__content">
-                        <strong>{user.nickname || user.username}</strong>
-                        <span>
-                          {user.username} · 组织 #{user.organization_id ?? '未设置'}
-                        </span>
-                      </div>
-                      <StatusPill
-                        label={
-                          (user.roles ?? [])
-                            .map((code) => roleNameByCode.get(code) ?? code)
-                            .join('、') || '未授权角色'
-                        }
-                        tone={user.enabled === false ? 'slate' : 'blue'}
-                      />
-                      {canManage ? (
-                        <Button icon={<UserCog size={15} />} onClick={() => openUserRoles(user)}>
-                          分配角色
-                        </Button>
-                      ) : null}
-                    </div>
+      <GlassPanel>
+        <SectionHeading
+          eyebrow="权限矩阵"
+          title="权限覆盖矩阵"
+          description="根据角色拥有的权限码，按后端模块实时汇总。"
+        />
+        {roles.length && modules.length ? (
+          <div className="operations-permission-matrix">
+            <table>
+              <thead>
+                <tr>
+                  <th>权限模块</th>
+                  {roles.map((role) => (
+                    <th key={role.id}>{role.name}</th>
                   ))}
-                </div>
-              ) : (
-                <StatePanel mode="empty" message="没有匹配的用户" />
-              )}
-              <div className="operations-form-note">
-                <UsersRound size={15} /> 当前展示前 100 名用户；更多用户需接入服务端搜索和分页。
+                </tr>
+              </thead>
+              <tbody>
+                {modules.map((module) => {
+                  const moduleCodes = permissionItems
+                    .filter((item) => item.module === module && item.enabled)
+                    .map((item) => item.code)
+                  return (
+                    <tr key={module}>
+                      <td>{permissionModuleLabel(module)}</td>
+                      {roles.map((role) => (
+                        <td key={`${module}-${role.id}`}>
+                          {moduleCodes.some((code) => role.permissions.includes(code)) ? (
+                            <span className="operations-permission-dot">
+                              <Check size={13} />
+                            </span>
+                          ) : (
+                            '—'
+                          )}
+                        </td>
+                      ))}
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <StatePanel mode="empty" message="暂无权限矩阵数据" />
+        )}
+      </GlassPanel>
+
+      <GlassPanel>
+        <SectionHeading
+          eyebrow="用户授权"
+          title="授权用户"
+          description={
+            canViewUsers
+              ? '按超级管理员、资产管理员、普通员工优先展示用户角色与数据范围。'
+              : '当前账号没有用户查看权限。'
+          }
+        />
+        {canViewUsers ? (
+          <>
+            <div className="operations-toolbar">
+              <Input
+                value={keyword}
+                prefix={<Search size={15} />}
+                allowClear
+                placeholder="搜索用户、账号或角色"
+                onChange={(event) => setKeyword(event.target.value)}
+              />
+            </div>
+            {usersQuery.isLoading ? (
+              <div className="operations-loading">
+                <Spin />
               </div>
-            </>
-          ) : (
-            <StatePanel mode="empty" message="当前账号无权查看用户列表" />
-          )}
-        </GlassPanel>
-      </div>
+            ) : usersQuery.isError ? (
+              <StatePanel
+                mode="error"
+                message="用户列表加载失败"
+                retryLabel="重新加载"
+                onRetry={() => void usersQuery.refetch()}
+              />
+            ) : users.length ? (
+              <div className="operations-user-list">
+                {users.map((user, index) => {
+                  const userRoles = [...(user.roles ?? [])].sort(
+                    (left, right) => roleDisplayPriority(left) - roleDisplayPriority(right),
+                  )
+
+                  return (
+                    <article
+                      key={user.id}
+                      className={`operations-user-card operations-tone--${index % 2 ? 'cyan' : 'violet'}`}
+                    >
+                      <div className="operations-user-card__main">
+                        <span className="operations-user-row__avatar">
+                          {(user.nickname || user.username).slice(0, 1)}
+                        </span>
+                        <div className="operations-user-row__content">
+                          <strong>{user.nickname || user.username}</strong>
+                          <span>
+                            {user.username} · 组织 #{user.organization_id ?? '未设置'}
+                          </span>
+                        </div>
+                        {user.enabled === false ? (
+                          <StatusPill label="账号已停用" tone="slate" />
+                        ) : null}
+                        {canManage && canAssignUserRole(user) ? (
+                          <Button icon={<UserCog size={15} />} onClick={() => openUserRoles(user)}>
+                            分配角色
+                          </Button>
+                        ) : null}
+                        {canManage && !canAssignUserRole(user) ? (
+                          <StatusPill label="仅超级管理员可调整" tone="slate" />
+                        ) : null}
+                      </div>
+
+                      <div className="operations-user-card__access">
+                        <div className="operations-user-card__roles">
+                          <small>角色</small>
+                          <div className="operations-user-card__tags">
+                            {userRoles.length ? (
+                              <>
+                                {userRoles.map((code) => {
+                                  const role = roles.find((item) => item.code === code)
+                                  return (
+                                    <StatusPill
+                                      key={code}
+                                      label={
+                                        role
+                                          ? `${role.name} · ${dataScopeLabel(role.data_scope)}`
+                                          : code
+                                      }
+                                      tone="blue"
+                                    />
+                                  )
+                                })}
+                                {user.enabled === false ? (
+                                  <StatusPill label="权限不生效" tone="slate" />
+                                ) : null}
+                              </>
+                            ) : (
+                              <StatusPill label="未授权角色" tone="slate" />
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </article>
+                  )
+                })}
+              </div>
+            ) : (
+              <StatePanel mode="empty" message="没有匹配的用户" />
+            )}
+            <div className="operations-form-note">
+              <UsersRound size={15} /> 当前展示前 100 名用户；更多用户需接入服务端搜索和分页。
+            </div>
+          </>
+        ) : (
+          <StatePanel mode="empty" message="当前账号无权查看用户列表" />
+        )}
+      </GlassPanel>
 
       <Modal
         className="operations-glass-modal"
@@ -737,17 +807,27 @@ export default function Permissions() {
         }}
       >
         <Form<UserRoleFormValues> form={userRoleForm} layout="vertical" requiredMark={false}>
-          <Form.Item name="role_ids" label="角色集合">
-            <Checkbox.Group className="operations-role-picker">
+          <Form.Item
+            name="role_id"
+            label="账号角色（单选）"
+            rules={[{ required: true, message: '请选择一个角色' }]}
+            extra="权限向下包含：超级管理员包含资产管理员和普通员工，资产管理员包含普通员工。"
+          >
+            <Radio.Group className="operations-role-picker">
               {roles
-                .filter((role) => role.enabled)
+                .filter(
+                  (role) => role.enabled && (isCurrentSuperAdmin || role.code !== 'SUPER_ADMIN'),
+                )
+                .sort(
+                  (left, right) => roleDisplayPriority(left.code) - roleDisplayPriority(right.code),
+                )
                 .map((role) => (
-                  <Checkbox key={role.id} value={role.id}>
+                  <Radio key={role.id} value={role.id}>
                     <strong>{role.name}</strong>
-                    <small>{scopeLabels[role.data_scope] ?? '其他数据范围'}</small>
-                  </Checkbox>
+                    <small>{dataScopeLabel(role.data_scope)}</small>
+                  </Radio>
                 ))}
-            </Checkbox.Group>
+            </Radio.Group>
           </Form.Item>
           <Form.Item
             name="reason"

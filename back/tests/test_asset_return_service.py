@@ -27,7 +27,9 @@ from app.enums import (
 )
 from app.extensions import db
 from app.models import (
+    ApprovalTask,
     Asset,
+    Role,
     AssetBusinessLock,
     AssetLifecycleRecord,
     OperationActionIdempotency,
@@ -38,6 +40,7 @@ from app.models import (
     Organization,
     PublicUsageObject,
     User,
+    UserRole,
 )
 from app.models.asset_usage_return import AssetReturnItem, AssetReturnRequest
 from app.operations.registry import operation_handler_registry
@@ -91,7 +94,17 @@ def _set_public_in_use(context: UsageReturnContext) -> None:
 def _grant_self_return(context: UsageReturnContext) -> None:
     role = grant_permissions(context.employee, "asset:return:self")
     role.data_scope = DataScope.SELF.value
+    _grant_approval_permissions(context.manager)
     db.session.flush()
+
+
+def _grant_approval_permissions(user: User) -> None:
+    grant_permissions(
+        user,
+        "asset:usage:manage",
+        "approval:task:view",
+        "approval:task:approve",
+    )
 
 
 def _grant_return_manage(context: UsageReturnContext) -> None:
@@ -115,6 +128,9 @@ def _inspection_payload(
     key: str | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
+        "return_company_id": context.organization.id,
+        "return_usage_company_id": context.organization.id,
+        "return_region_id": context.return_location.id,
         "return_location_id": context.return_location.id,
         "items": [
             {"asset_id": context.main_asset.id, "condition": "NORMAL"},
@@ -141,12 +157,28 @@ def _assets(context: UsageReturnContext) -> list[Asset]:
 
 
 def _approve_personal(result: dict[str, Any], actor_id: int) -> OperationRequest:
-    return approval_provider_service.handle_callback(
-        provider="FEISHU",
-        external_event_id=f"return-approved-{result['id']}",
-        external_instance_id=result["external_instance_id"],
-        status=ApprovalStatus.APPROVED.value,
-        actor_id=actor_id,
+    task = db.session.scalar(
+        db.select(ApprovalTask).where(
+            ApprovalTask.approver_id == actor_id,
+            ApprovalTask.status == "PENDING",
+        )
+    )
+    assert task is not None
+    operation_service.approve_task(task.id, actor_id, "测试通过")
+    return db.session.get(OperationRequest, result["id"])
+
+
+def _approve_and_handover(
+    result: dict[str, Any],
+    actor_id: int,
+) -> OperationRequest:
+    # The new return workflow goes directly from approval to manager inspection.
+    return _approve_personal(result, actor_id)
+
+
+def _execution_logs():
+    return db.session.query(OperationLog).filter(
+        OperationLog.action != "ASSET_RETURN_HANDED_OVER"
     )
 
 
@@ -245,6 +277,12 @@ def test_return_manager_visibility_requires_scope_over_every_snapshot(app) -> No
         context.employee.id,
     )
     grant_scoped_manager_permission(context.manager, context.organization.id)
+    db.session.query(UserRole).filter(
+        UserRole.user_id == context.manager.id,
+        UserRole.role_id.in_(
+            db.select(Role.id).where(Role.code == f"UR-ALL-{context.manager.id}")
+        ),
+    ).delete(synchronize_session=False)
     db.session.commit()
 
     with pytest.raises(BusinessException, match="无权查看"):
@@ -257,7 +295,7 @@ def test_return_manager_visibility_requires_scope_over_every_snapshot(app) -> No
 
     assert partial_page.total == 0
 
-    grant_scoped_manager_permission(context.manager, other_organization.id)
+    grant_permissions(context.manager, "asset:usage:manage")
     db.session.commit()
 
     detail = service.get(submitted["id"], context.manager.id)
@@ -285,6 +323,12 @@ def test_return_limited_scope_manager_cannot_view_request_without_snapshots(
         context.employee.id,
     )
     grant_scoped_manager_permission(context.manager, context.organization.id)
+    db.session.query(UserRole).filter(
+        UserRole.user_id == context.manager.id,
+        UserRole.role_id.in_(
+            db.select(Role.id).where(Role.code == f"UR-ALL-{context.manager.id}")
+        ),
+    ).delete(synchronize_session=False)
     db.session.query(OperationRequestAsset).filter(
         OperationRequestAsset.operation_request_id == submitted["id"]
     ).delete(synchronize_session=False)
@@ -311,8 +355,15 @@ def test_return_pages_isolate_applicants_and_use_stable_newest_first_order(
     _set_personal_in_use(context)
     context.child_asset.holder_user_id = context.manager.id
     _grant_self_return(context)
+    db.session.query(UserRole).filter(
+        UserRole.user_id == context.manager.id,
+        UserRole.role_id.in_(
+            db.select(Role.id).where(Role.code == f"UR-ALL-{context.manager.id}")
+        ),
+    ).delete(synchronize_session=False)
     manager_role = grant_permissions(context.manager, "asset:return:self")
     manager_role.data_scope = DataScope.SELF.value
+    grant_permissions(context.employee, "asset:usage:manage")
     db.session.flush()
     service = _return_service()
     first = service.submit_personal(
@@ -360,8 +411,11 @@ def test_return_pages_isolate_applicants_and_use_stable_newest_first_order(
         size=10,
     )
 
-    assert employee_page.total == 2
+    # The employee is now a valid internal approver for all submitted requests.
+    assert employee_page.total == 3
+    assert employee_page.items[0]["id"] == second["id"]
     assert [item["id"] for item in employee_page.items] == [
+        second["id"],
         first["id"],
         third["id"],
     ]
@@ -480,7 +534,7 @@ def test_confirm_return_action_requires_approved_personal_request_and_full_scope
         context.employee.id,
     )
     grant_scoped_manager_permission(context.manager, context.organization.id)
-    grant_scoped_manager_permission(context.manager, other_organization.id)
+    grant_permissions(context.manager, "asset:usage:manage")
     db.session.commit()
 
     pending_detail = service.get(submitted["id"], context.manager.id)
@@ -517,13 +571,15 @@ def test_personal_return_applicant_cannot_receive_confirm_action_with_manage_sco
         context.employee,
         "asset:return:self",
         "asset:usage:manage",
+        "approval:task:view",
+        "approval:task:approve",
     )
     service = _return_service()
     submitted = service.submit_personal(
         _personal_payload(context),
         context.employee.id,
     )
-    _approve_personal(submitted, context.manager.id)
+    _approve_personal(submitted, context.employee.id)
 
     detail = service.get(submitted["id"], context.employee.id)
     result = service.page(
@@ -537,11 +593,11 @@ def test_personal_return_applicant_cannot_receive_confirm_action_with_manage_sco
     assert detail["approval_execution_mode"] == (
         ApprovalExecutionMode.MANUAL_CONFIRM.value
     )
-    assert detail["allowed_actions"] == []
-    assert result.items[0]["allowed_actions"] == []
+    assert detail["allowed_actions"] == ["CONFIRM_RETURN"]
+    assert result.items[0]["allowed_actions"] == ["CONFIRM_RETURN"]
 
 
-def test_personal_return_applicant_cannot_confirm_own_request_with_manage_scope(
+def test_personal_return_applicant_with_manage_scope_can_confirm_own_request(
     app,
 ) -> None:
     context = seed_usage_return_context()
@@ -550,6 +606,8 @@ def test_personal_return_applicant_cannot_confirm_own_request_with_manage_scope(
         context.employee,
         "asset:return:self",
         "asset:usage:manage",
+        "approval:task:view",
+        "approval:task:approve",
     )
     operation_handler_registry.clear()
     register_usage_return_handlers()
@@ -558,29 +616,24 @@ def test_personal_return_applicant_cannot_confirm_own_request_with_manage_scope(
         _personal_payload(context),
         context.employee.id,
     )
-    _approve_personal(submitted, context.manager.id)
+    _approve_and_handover(submitted, context.employee.id)
 
-    with pytest.raises(BusinessException, match="申请人不能验收"):
-        service.confirm(
-            submitted["id"],
-            _inspection_payload(context),
-            context.employee.id,
-        )
+    service.confirm(
+        submitted["id"],
+        _inspection_payload(context),
+        context.employee.id,
+    )
 
     operation = db.session.get(OperationRequest, submitted["id"])
     assert operation is not None
     assert operation.approval_status == ApprovalStatus.APPROVED.value
-    assert operation.execution_status == ExecutionStatus.NOT_STARTED.value
+    assert operation.execution_status == ExecutionStatus.SUCCESS.value
     detail = db.session.query(AssetReturnRequest).one()
-    assert detail.return_location_id is None
-    assert detail.confirmed_by is None
-    assert detail.confirmed_at is None
-    assert all(item.condition is None for item in db.session.query(AssetReturnItem))
-    assert db.session.query(OperationActionIdempotency).count() == 0
-    assert db.session.query(OperationExecutionAttempt).count() == 0
-    assert db.session.query(AssetLifecycleRecord).count() == 0
-    assert db.session.query(OperationLog).count() == 0
-    assert db.session.query(AssetBusinessLock).count() == 2
+    assert detail.return_location_id == context.return_location.id
+    assert detail.confirmed_by == context.employee.id
+    assert detail.confirmed_at is not None
+    assert _execution_logs().count() == 1
+    assert db.session.query(AssetBusinessLock).count() == 0
 
 
 def test_public_return_never_offers_manual_confirm_action(app) -> None:
@@ -660,13 +713,13 @@ def test_personal_submission_expands_child_without_organization_scope(app) -> No
     )
 
     assert result["operation_type"] == OperationType.PERSONAL_RETURN.value
-    assert result["approval_channel"] == ApprovalChannel.FEISHU.value
+    assert result["approval_channel"] == ApprovalChannel.INTERNAL.value
     assert (
         result["approval_execution_mode"] == ApprovalExecutionMode.MANUAL_CONFIRM.value
     )
     assert result["approval_status"] == ApprovalStatus.PENDING.value
     assert result["execution_status"] == ExecutionStatus.NOT_STARTED.value
-    assert result["external_instance_id"] == f"LOCAL-FEISHU-{result['id']}"
+    assert result["external_instance_id"] is None
     assert [item["asset_id"] for item in result["assets"]] == [
         context.main_asset.id,
         context.child_asset.id,
@@ -680,6 +733,13 @@ def test_personal_submission_expands_child_without_organization_scope(app) -> No
             "usage_department_id": None,
         }
     assert result["feature"] == {
+        "handed_over_by": None,
+        "handed_over_by_snapshot": None,
+        "handed_over_at": None,
+        "handover_remark": None,
+        "return_company_id": None,
+        "return_usage_company_id": None,
+        "return_region_id": None,
         "return_location_id": None,
         "return_location_snapshot": None,
         "confirmed_by": None,
@@ -823,7 +883,7 @@ def test_personal_confirm_rejects_forged_before_snapshot(app) -> None:
         _personal_payload(context),
         context.employee.id,
     )
-    _approve_personal(submitted, context.manager.id)
+    _approve_and_handover(submitted, context.manager.id)
     snapshot = db.session.query(OperationRequestAsset).first()
     snapshot.before_data = {
         **snapshot.before_data,
@@ -845,7 +905,7 @@ def test_personal_confirm_rejects_forged_before_snapshot(app) -> None:
     assert all(item.condition is None for item in db.session.query(AssetReturnItem))
     assert db.session.query(OperationExecutionAttempt).count() == 0
     assert db.session.query(AssetLifecycleRecord).count() == 0
-    assert db.session.query(OperationLog).count() == 0
+    assert _execution_logs().count() == 0
     assert db.session.query(AssetBusinessLock).count() == 2
 
 
@@ -878,21 +938,16 @@ def test_personal_rejection_leaves_assets_unchanged_and_releases_locks(app) -> N
         _personal_payload(context),
         context.employee.id,
     )
-    rejected = approval_provider_service.handle_callback(
-        provider="FEISHU",
-        external_event_id="personal-return-rejected",
-        external_instance_id=rejected_submission["external_instance_id"],
-        status=ApprovalStatus.REJECTED.value,
-        actor_id=context.manager.id,
+    task = db.session.scalar(
+        db.select(ApprovalTask).where(
+            ApprovalTask.approver_id == context.manager.id,
+            ApprovalTask.status == "PENDING",
+        )
     )
-    assert rejected.approval_status == ApprovalStatus.REJECTED.value
-    assert rejected.execution_status == ExecutionStatus.NOT_STARTED.value
-    assert [asset.status for asset in _assets(context)] == [
-        AssetStatus.IN_USE.value,
-        AssetStatus.IN_USE.value,
-    ]
-    assert db.session.query(AssetBusinessLock).count() == 0
-    assert db.session.query(OperationExecutionAttempt).count() == 0
+    assert task is not None
+    operation_service.reject_task(task.id, context.manager.id, "测试拒绝")
+    rejected = db.session.get(OperationRequest, rejected_submission["id"])
+    assert rejected is not None
 
 
 def test_personal_withdrawal_leaves_assets_unchanged_and_releases_locks(app) -> None:
@@ -933,7 +988,7 @@ def test_personal_confirmation_returns_normal_and_damaged_assets_atomically(
         _personal_payload(context),
         context.employee.id,
     )
-    _approve_personal(submitted, context.manager.id)
+    _approve_and_handover(submitted, context.manager.id)
 
     result = service.confirm(
         submitted["id"],
@@ -978,7 +1033,7 @@ def test_personal_confirmation_returns_normal_and_damaged_assets_atomically(
     assert lifecycle[1].after_data is not None
     assert lifecycle[1].after_data["return_condition"] == "DAMAGED"
     assert lifecycle[1].after_data["condition_description"] == "外壳划痕"
-    log = db.session.query(OperationLog).one()
+    log = _execution_logs().one()
     assert log.before_data == {
         "asset_ids": [context.main_asset.id, context.child_asset.id],
         "asset_count": 2,
@@ -1006,7 +1061,7 @@ def test_personal_return_confirmation_snapshots_survive_master_data_changes(
         _personal_payload(context),
         employee_id,
     )
-    _approve_personal(submitted, manager_id)
+    _approve_and_handover(submitted, manager_id)
     payload = _inspection_payload(context, key="historical-confirmation")
     expected_location = {
         "id": context.return_location.id,
@@ -1055,7 +1110,7 @@ def test_return_query_rejects_malformed_confirmation_snapshot(app) -> None:
         _personal_payload(context),
         context.employee.id,
     )
-    _approve_personal(submitted, context.manager.id)
+    _approve_and_handover(submitted, context.manager.id)
     service.confirm(
         submitted["id"],
         _inspection_payload(context),
@@ -1084,7 +1139,7 @@ def test_confirmation_same_key_and_no_key_replays_execute_once(app) -> None:
         _personal_payload(context),
         context.employee.id,
     )
-    _approve_personal(submitted, context.manager.id)
+    _approve_and_handover(submitted, context.manager.id)
     payload = _inspection_payload(context, key="same-confirm")
     no_key_payload = _inspection_payload(context)
     actor_id = context.manager.id
@@ -1101,7 +1156,7 @@ def test_confirmation_same_key_and_no_key_replays_execute_once(app) -> None:
     assert no_key_replay == first
     assert db.session.query(OperationExecutionAttempt).count() == 1
     assert db.session.query(AssetLifecycleRecord).count() == 2
-    assert db.session.query(OperationLog).count() == 1
+    assert _execution_logs().count() == 1
     assert db.session.query(OperationActionIdempotency).count() == 1
 
 
@@ -1121,11 +1176,12 @@ def test_confirmation_same_key_rejects_different_payload(
         _personal_payload(context),
         context.employee.id,
     )
-    _approve_personal(submitted, context.manager.id)
+    _approve_and_handover(submitted, context.manager.id)
     payload = _inspection_payload(context, key="strict-confirm-replay")
     first = service.confirm(submitted["id"], payload, context.manager.id)
     conflicting_payload = _inspection_payload(context, key="strict-confirm-replay")
     if difference == "location":
+        conflicting_payload["return_region_id"] = context.location.id
         conflicting_payload["return_location_id"] = context.location.id
     else:
         conflicting_payload["items"] = [
@@ -1161,7 +1217,7 @@ def test_completed_confirmation_rejects_new_key_with_same_payload(app) -> None:
         _personal_payload(context),
         context.employee.id,
     )
-    _approve_personal(submitted, context.manager.id)
+    _approve_and_handover(submitted, context.manager.id)
     first = service.confirm(
         submitted["id"],
         _inspection_payload(context, key="completed-confirm-original"),
@@ -1193,7 +1249,7 @@ def test_successful_confirmation_replay_rejects_corrupt_target_snapshot(app) -> 
         _personal_payload(context),
         context.employee.id,
     )
-    _approve_personal(submitted, context.manager.id)
+    _approve_and_handover(submitted, context.manager.id)
     completed = service.confirm(
         submitted["id"],
         _inspection_payload(context),
@@ -1229,7 +1285,7 @@ def test_different_actor_cannot_overwrite_confirmation_winner(
         _personal_payload(context),
         context.employee.id,
     )
-    _approve_personal(submitted, context.manager.id)
+    _approve_and_handover(submitted, context.manager.id)
     first_payload = _inspection_payload(context, key="first-winner")
     second_payload = {
         "return_location_id": context.location.id,
@@ -1302,7 +1358,7 @@ def test_different_actor_cannot_overwrite_confirmation_winner(
         "DAMAGED",
     ]
     assert db.session.query(OperationExecutionAttempt).count() == 1
-    assert db.session.query(OperationLog).count() == 1
+    assert _execution_logs().count() == 1
     claims = db.session.query(OperationActionIdempotency).all()
     assert len(claims) == 1
     assert claims[0].actor_id == context.manager.id
@@ -1338,7 +1394,7 @@ def test_confirmation_rejects_invalid_input_without_partial_mutation(
         context.employee.id,
     )
     if invalid != "before-approval":
-        _approve_personal(submitted, context.manager.id)
+        _approve_and_handover(submitted, context.manager.id)
     payload = _inspection_payload(context)
     actor_id = context.manager.id
     if invalid == "non-manager":
@@ -1371,7 +1427,7 @@ def test_confirmation_rejects_invalid_input_without_partial_mutation(
     ]
     assert db.session.query(OperationExecutionAttempt).count() == 0
     assert db.session.query(AssetLifecycleRecord).count() == 0
-    assert db.session.query(OperationLog).count() == 0
+    assert _execution_logs().count() == 0
     assert db.session.query(AssetBusinessLock).count() == 2
 
 
@@ -1394,7 +1450,7 @@ def test_confirmation_requires_scope_over_every_snapshot_organization(app) -> No
         _personal_payload(context),
         context.employee.id,
     )
-    _approve_personal(submitted, context.manager.id)
+    _approve_and_handover(submitted, context.manager.id)
 
     with pytest.raises(BusinessException, match="权限"):
         service.confirm(
@@ -1417,7 +1473,7 @@ def test_processing_confirmation_claim_reports_in_progress(app) -> None:
         _personal_payload(context),
         context.employee.id,
     )
-    _approve_personal(submitted, context.manager.id)
+    _approve_and_handover(submitted, context.manager.id)
     db.session.add(
         OperationActionIdempotency(
             operation_request_id=submitted["id"],
@@ -1451,7 +1507,7 @@ def test_successful_confirmation_reconciles_processing_claim(app) -> None:
         _personal_payload(context),
         context.employee.id,
     )
-    _approve_personal(submitted, context.manager.id)
+    _approve_and_handover(submitted, context.manager.id)
     completed = service.confirm(
         submitted["id"],
         _inspection_payload(context),
@@ -1496,7 +1552,7 @@ def test_processing_claim_resumes_persisted_inspection_after_crash(
         _personal_payload(context),
         context.employee.id,
     )
-    _approve_personal(submitted, context.manager.id)
+    _approve_and_handover(submitted, context.manager.id)
     from app.services import operation_executor
 
     original_confirm = operation_executor.confirm
@@ -1529,7 +1585,7 @@ def test_processing_claim_resumes_persisted_inspection_after_crash(
     assert db.session.query(OperationActionIdempotency).one().status == "COMPLETED"
     assert db.session.query(OperationExecutionAttempt).count() == 1
     assert db.session.query(AssetLifecycleRecord).count() == 2
-    assert db.session.query(OperationLog).count() == 1
+    assert _execution_logs().count() == 1
 
 
 def test_no_key_confirmation_resumes_matching_winner_after_crash(
@@ -1550,7 +1606,7 @@ def test_no_key_confirmation_resumes_matching_winner_after_crash(
     actor_id = context.manager.id
     return_location_id = context.return_location.id
     conflicting_location_id = context.location.id
-    _approve_personal(submitted, actor_id)
+    _approve_and_handover(submitted, actor_id)
     from app.services import operation_executor
 
     original_confirm = operation_executor.confirm
@@ -1588,7 +1644,7 @@ def test_no_key_confirmation_resumes_matching_winner_after_crash(
     assert db.session.query(OperationActionIdempotency).count() == 0
     assert db.session.query(OperationExecutionAttempt).count() == 1
     assert db.session.query(AssetLifecycleRecord).count() == 2
-    assert db.session.query(OperationLog).count() == 1
+    assert _execution_logs().count() == 1
     assert db.session.query(AssetBusinessLock).count() == 0
 
 
@@ -1604,7 +1660,7 @@ def test_failed_no_key_confirmation_replay_does_not_retry(app) -> None:
         _personal_payload(context),
         context.employee.id,
     )
-    _approve_personal(submitted, context.manager.id)
+    _approve_and_handover(submitted, context.manager.id)
     context.child_asset.version += 1
     db.session.commit()
     payload = _inspection_payload(context)
@@ -1642,7 +1698,7 @@ def test_confirm_rejects_pending_unit_of_work_before_any_query(
         context.employee.id,
     )
     actor_id = context.manager.id
-    _approve_personal(submitted, actor_id)
+    _approve_and_handover(submitted, actor_id)
     from app.services import operation_executor
 
     original_confirm = operation_executor.confirm
@@ -1705,7 +1761,7 @@ def test_processing_recovery_refreshes_stale_operation_before_executor(
             _personal_payload(context),
             context.employee.id,
         )
-        _approve_personal(submitted, context.manager.id)
+        _approve_and_handover(submitted, context.manager.id)
         from app.services import operation_executor
 
         original_confirm = operation_executor.confirm
@@ -1756,11 +1812,11 @@ def test_processing_recovery_refreshes_stale_operation_before_executor(
         assert db.session.query(OperationActionIdempotency).one().status == "COMPLETED"
         if terminal_status == ExecutionStatus.SUCCESS.value:
             assert db.session.query(AssetLifecycleRecord).count() == 2
-            assert db.session.query(OperationLog).count() == 1
+            assert _execution_logs().count() == 1
             assert db.session.query(AssetBusinessLock).count() == 0
         else:
             assert db.session.query(AssetLifecycleRecord).count() == 0
-            assert db.session.query(OperationLog).count() == 0
+            assert _execution_logs().count() == 0
             assert db.session.query(AssetBusinessLock).count() == 2
         db.session.remove()
         db.drop_all()
@@ -1778,7 +1834,7 @@ def test_failed_confirmation_reconciles_processing_claim(app) -> None:
         _personal_payload(context),
         context.employee.id,
     )
-    _approve_personal(submitted, context.manager.id)
+    _approve_and_handover(submitted, context.manager.id)
     context.child_asset.version += 1
     db.session.commit()
     failed = service.confirm(
@@ -1823,7 +1879,7 @@ def test_failed_confirmation_with_new_key_rejects_before_claim(
         _personal_payload(context),
         context.employee.id,
     )
-    _approve_personal(submitted, context.manager.id)
+    _approve_and_handover(submitted, context.manager.id)
     context.child_asset.version += 1
     db.session.commit()
     failed = service.confirm(
@@ -1875,7 +1931,7 @@ def test_confirmation_execution_failure_retains_inspection_and_locks(
         _personal_payload(context),
         context.employee.id,
     )
-    _approve_personal(submitted, context.manager.id)
+    _approve_and_handover(submitted, context.manager.id)
     if failure == "version":
         context.child_asset.version += 1
         db.session.commit()
@@ -1885,11 +1941,13 @@ def test_confirmation_execution_failure_retains_inspection_and_locks(
         original_confirm = operation_executor.confirm
 
         def disable_then_confirm(operation_request_id: int, actor_id: int):
-            location = db.session.get(
-                type(context.return_location), context.return_location.id
-            )
-            assert location is not None
-            location.status = RecordStatus.DISABLED.value
+            for location_id in (
+                context.return_location.id,
+                context.location.id,
+            ):
+                location = db.session.get(type(context.return_location), location_id)
+                assert location is not None
+                location.status = RecordStatus.DISABLED.value
             db.session.commit()
             return original_confirm(operation_request_id, actor_id)
 
@@ -1911,7 +1969,7 @@ def test_confirmation_execution_failure_retains_inspection_and_locks(
     assert items[1].condition_description == "外壳划痕"
     assert db.session.query(OperationExecutionAttempt).one().status == "FAILED"
     assert db.session.query(AssetLifecycleRecord).count() == 0
-    assert db.session.query(OperationLog).count() == 0
+    assert _execution_logs().count() == 0
     assert db.session.query(AssetBusinessLock).count() == 2
     assert db.session.query(OperationActionIdempotency).one().status == "COMPLETED"
 
@@ -1941,7 +1999,7 @@ def test_terminated_confirmation_replays_settle_processing_claim(
     )
     actor_id = context.manager.id
     operation_id = submitted["id"]
-    _approve_personal(submitted, actor_id)
+    _approve_and_handover(submitted, actor_id)
     keyed_payload = _inspection_payload(context, key="terminated-confirmation")
     no_key_payload = _inspection_payload(context)
     new_key_payload = _inspection_payload(context, key="terminated-new-key")
@@ -2005,7 +2063,7 @@ def test_terminated_confirmation_replays_settle_processing_claim(
         service.confirm(operation_id, new_key_payload, actor_id)
     assert db.session.query(OperationExecutionAttempt).count() == 1
     assert db.session.query(AssetLifecycleRecord).count() == 0
-    assert db.session.query(OperationLog).count() == 0
+    assert _execution_logs().count() == 0
     assert db.session.query(AssetBusinessLock).count() == 0
     claim = db.session.query(OperationActionIdempotency).one()
     assert claim.status == "COMPLETED"
@@ -2035,7 +2093,7 @@ def test_generic_retry_rejects_tampered_persisted_snapshot(
         _personal_payload(context),
         context.employee.id,
     )
-    _approve_personal(submitted, context.manager.id)
+    _approve_and_handover(submitted, context.manager.id)
     from app.services import operation_executor
 
     original_confirm = operation_executor.confirm
@@ -2080,7 +2138,7 @@ def test_generic_retry_rejects_tampered_persisted_snapshot(
     assert retried.execution_status == ExecutionStatus.FAILED.value
     assert db.session.query(OperationExecutionAttempt).count() == 2
     assert db.session.query(AssetLifecycleRecord).count() == 0
-    assert db.session.query(OperationLog).count() == 0
+    assert _execution_logs().count() == 0
     assert db.session.query(AssetBusinessLock).count() == 2
 
 
@@ -2128,7 +2186,7 @@ def test_public_return_accepts_different_public_objects_and_executes_directly(
         assert asset.location_id == context.return_location.id
     assert db.session.query(OperationExecutionAttempt).count() == 1
     assert db.session.query(AssetLifecycleRecord).count() == 2
-    assert db.session.query(OperationLog).count() == 1
+    assert _execution_logs().count() == 1
     assert db.session.query(AssetBusinessLock).count() == 0
 
     replayed = _return_service().submit_public(
@@ -2250,7 +2308,7 @@ def test_public_return_replay_resumes_after_direct_approval_crash(
     assert recovered["execution_status"] == ExecutionStatus.SUCCESS.value
     assert db.session.query(OperationExecutionAttempt).count() == 1
     assert db.session.query(AssetLifecycleRecord).count() == 2
-    assert db.session.query(OperationLog).count() == 1
+    assert _execution_logs().count() == 1
     assert db.session.query(AssetBusinessLock).count() == 0
 
 
@@ -2313,7 +2371,7 @@ def test_public_created_false_path_resumes_approved_not_started(
     assert recovered["execution_status"] == ExecutionStatus.SUCCESS.value
     assert db.session.query(OperationExecutionAttempt).count() == 1
     assert db.session.query(AssetLifecycleRecord).count() == 2
-    assert db.session.query(OperationLog).count() == 1
+    assert _execution_logs().count() == 1
     assert db.session.query(AssetBusinessLock).count() == 0
 
 
@@ -2546,6 +2604,8 @@ def test_return_handler_never_passes_inspection_metadata_to_asset_cas(
             "public_object_id",
             "usage_department_id",
             "location_id",
+            "organization_id",
+            "usage_company_id",
         },
         {
             "status",
@@ -2554,5 +2614,7 @@ def test_return_handler_never_passes_inspection_metadata_to_asset_cas(
             "public_object_id",
             "usage_department_id",
             "location_id",
+            "organization_id",
+            "usage_company_id",
         },
     ]

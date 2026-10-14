@@ -10,5 +10,6 @@ bp = Blueprint("hello", __name__, url_prefix="/api")
 
 
 @bp.get("/hello")
+@bp.get("/v1/hello")
 def hello() -> dict:
     return Result.success("Hello from Flask!").to_dict()

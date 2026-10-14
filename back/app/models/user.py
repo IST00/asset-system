@@ -41,6 +41,21 @@ class User(TimestampMixin, db.Model):  # type: ignore[misc,name-defined]
     last_login_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    feishu_open_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, unique=True, index=True
+    )
+    feishu_user_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, unique=True, index=True
+    )
+    feishu_union_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, unique=True, index=True
+    )
+    feishu_synced_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    feishu_sync_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="UNSYNCED", server_default="UNSYNCED"
+    )
 
     def __repr__(self) -> str:
         return f"<User id={self.id} username={self.username!r}>"

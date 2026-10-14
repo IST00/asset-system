@@ -667,6 +667,8 @@ def _asset_snapshot(asset: Asset) -> dict[str, Any]:
         "asset_name": asset.asset_name,
         "status": asset.status,
         "organization_id": asset.organization_id,
+        "usage_company_id": asset.usage_company_id,
+        "usage_department_id": asset.usage_department_id,
         "category_id": asset.category_id,
         "unit_id": asset.unit_id,
         "supplier_id": asset.supplier_id,

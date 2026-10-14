@@ -8,6 +8,7 @@ from flask_jwt_extended import jwt_required
 from app.common import BusinessException, Result, ResultCode
 from app.schemas.attachment import (
     AttachmentCoverSchema,
+    AttachmentQuerySchema,
     AttachmentUploadSchema,
     AttachmentVoidSchema,
 )
@@ -16,6 +17,7 @@ from app.services import attachment_service
 
 bp = Blueprint("attachments", __name__, url_prefix="/api/v1")
 _upload_schema = AttachmentUploadSchema()
+_query_schema = AttachmentQuerySchema()
 _void_schema = AttachmentVoidSchema()
 _cover_schema = AttachmentCoverSchema()
 
@@ -23,8 +25,14 @@ _cover_schema = AttachmentCoverSchema()
 @bp.get("/assets/<int:asset_id>/attachments")
 @jwt_required()
 def list_attachments(asset_id: int) -> dict:
+    query = _query_schema.load(request.args.to_dict())
     return Result.success(
-        attachment_service.list_for_asset(asset_id, current_user_id())
+        attachment_service.list_for_asset(
+            asset_id,
+            current_user_id(),
+            business_type=query.get("business_type"),
+            business_id=query.get("business_id"),
+        )
     ).to_dict()
 
 
@@ -40,6 +48,8 @@ def upload_attachment(asset_id: int) -> dict:
             asset_id=asset_id,
             actor_id=current_user_id(),
             business_type=payload["business_type"],
+            business_id=payload.get("business_id"),
+            document_type=payload["document_type"],
             original_name=uploaded.filename or "file",
             mime_type=uploaded.mimetype or "application/octet-stream",
             content=uploaded.read(),

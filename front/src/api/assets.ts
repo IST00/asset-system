@@ -5,6 +5,7 @@ import {
   type ReferenceItem,
   type TreeItem,
 } from '@/api/administration'
+import type { AssetScanIntent } from '@/features/assets/scan/scanIntentModel'
 import type { PageResult } from '@/types'
 import type {
   AssetDetail,
@@ -25,9 +26,11 @@ export interface AssetLifecycleRecord {
   operation_type: string
   operation_no: string
   operator_id: number
+  operator_name?: string | null
   before_data: Record<string, unknown> | null
   after_data: Record<string, unknown> | null
   remark?: string | null
+  change_summary?: string | null
   created_at: string
 }
 
@@ -162,6 +165,19 @@ export function getAssetRelatedRecords(assetId: number): Promise<AssetRelatedRec
   return http.get<unknown, AssetRelatedRecords>(`/assets/${assetId}/related-records`)
 }
 
+export interface AssetUsageCandidate {
+  id: number
+  asset_code: string
+  asset_name: string
+  status: 'IDLE'
+  category_id: number
+  category_name: string
+  organization_id: number
+  organization_name: string
+  location_id?: number | null
+  location_name: string
+}
+
 export interface AssetReferenceData {
   organizations: TreeItem[]
   categories: TreeItem[]
@@ -170,6 +186,12 @@ export interface AssetReferenceData {
   locations: TreeItem[]
   suppliers: ReferenceItem[]
   managers: Array<{ id: number; name: string; enabled: boolean }>
+  holders: Array<{
+    id: number
+    name: string
+    enabled: boolean
+    organization_id?: number | null
+  }>
 }
 
 export interface StockInSubmitResult {
@@ -193,6 +215,9 @@ export interface StockInRequestItem {
   manager_id: number
   source_id: number
   location_id: number
+  usage_company_id: number
+  usage_department_id?: number | null
+  holder_user_id?: number | null
   specification_model?: string | null
   serial_number?: string | null
   receipt_no?: string | null
@@ -223,6 +248,23 @@ const requireNamed = <T extends { id: number; name: string }>(
   return item
 }
 
+const USER_PAGE_SIZE = 200
+
+async function loadAllUsers() {
+  const firstPage = await administrationApi.users(0, USER_PAGE_SIZE)
+  const remainingPages = Math.ceil(firstPage.total / USER_PAGE_SIZE) - 1
+  if (remainingPages <= 0) return firstPage.items
+
+  const pages = await Promise.all(
+    Array.from({ length: remainingPages }, (_, index) =>
+      administrationApi.users((index + 1) * USER_PAGE_SIZE, USER_PAGE_SIZE),
+    ),
+  )
+  return [...firstPage.items, ...pages.flatMap((page) => page.items)].filter(
+    (user, index, users) => users.findIndex((candidate) => candidate.id === user.id) === index,
+  )
+}
+
 export async function loadAssetReferences(): Promise<AssetReferenceData> {
   const [organizations, categories, units, sources, locations, suppliers, users] =
     await Promise.all([
@@ -232,7 +274,7 @@ export async function loadAssetReferences(): Promise<AssetReferenceData> {
       masterDataApi.sources(),
       masterDataApi.locations(),
       masterDataApi.suppliers(),
-      administrationApi.users(),
+      loadAllUsers(),
     ])
   return {
     organizations,
@@ -241,11 +283,19 @@ export async function loadAssetReferences(): Promise<AssetReferenceData> {
     sources,
     locations,
     suppliers,
-    managers: users.items.map((user) => ({
+    managers: users.map((user) => ({
       id: user.id,
       name: user.nickname || user.username,
       enabled: user.enabled !== false,
     })),
+    holders: users
+      .filter((user) => user.enabled !== false && user.organization_id)
+      .map((user) => ({
+        id: user.id,
+        name: user.nickname || user.username,
+        enabled: user.enabled !== false,
+        organization_id: user.organization_id ?? null,
+      })),
   }
 }
 
@@ -254,11 +304,18 @@ function buildStockInRequestPayload(payload: AssetPayload, references: AssetRefe
   const categories = flattenTree(references.categories)
   const locations = flattenTree(references.locations)
   const organization = requireNamed(organizations, payload.company_name, '所属公司')
+  const usageCompany = requireNamed(organizations, payload.usage_company_name, '使用公司')
+  const usageDepartment = payload.usage_department_name
+    ? requireNamed(organizations, payload.usage_department_name, '使用部门')
+    : undefined
   const category = requireNamed(categories, payload.category_name, '资产分类')
   const unit = requireNamed(references.units, payload.unit_name, '计量单位')
   const source = requireNamed(references.sources, payload.source_name, '资产来源')
   const location = requireNamed(locations, payload.location_name, '存放地点')
   const manager = requireNamed(references.managers, payload.manager_name, '责任管理员')
+  const holder = payload.holder_user_name
+    ? requireNamed(references.holders, payload.holder_user_name, '使用人')
+    : undefined
   const supplier = payload.supplier_name
     ? requireNamed(references.suppliers, payload.supplier_name, '供应商')
     : undefined
@@ -279,6 +336,9 @@ function buildStockInRequestPayload(payload: AssetPayload, references: AssetRefe
         manager_id: manager.id,
         source_id: source.id,
         location_id: location.id,
+        usage_company_id: usageCompany.id,
+        usage_department_id: usageDepartment?.id ?? null,
+        holder_user_id: holder?.id ?? null,
         specification_model: payload.model,
         serial_number: payload.serial_number,
         rfid_tag: payload.rfid_tag || undefined,
@@ -336,6 +396,14 @@ export async function updateAsset(
   const unit = requireNamed(references.units, payload.unit_name, '计量单位')
   const source = requireNamed(references.sources, payload.source_name, '资产来源')
   const location = requireNamed(locations, payload.location_name, '存放地点')
+  const usageCompany = requireNamed(
+    flattenTree(references.organizations),
+    payload.usage_company_name,
+    '使用公司',
+  )
+  const usageDepartment = payload.usage_department_name
+    ? requireNamed(flattenTree(references.organizations), payload.usage_department_name, '使用部门')
+    : undefined
   const manager = requireNamed(references.managers, payload.manager_name, '责任管理员')
   const supplier = payload.supplier_name
     ? requireNamed(references.suppliers, payload.supplier_name, '供应商')
@@ -353,6 +421,8 @@ export async function updateAsset(
     manager_id: manager.id,
     source_id: source.id,
     location_id: location.id,
+    usage_company_id: usageCompany.id,
+    usage_department_id: usageDepartment?.id ?? null,
     specification_model: payload.model ?? null,
     serial_number: payload.serial_number ?? null,
     rfid_tag: payload.rfid_tag ?? null,
@@ -363,6 +433,8 @@ export async function updateAsset(
 
 export interface CsvAssetImportRow {
   organization_name: string
+  usage_company_name: string
+  usage_department_name?: string
   asset_name: string
   category_name: string
   unit_name: string
@@ -390,6 +462,7 @@ export function createAssetsBatch(
   const categories = flattenTree(references.categories)
   const locations = flattenTree(references.locations)
   const organization = requireNamed(organizations, rows[0].organization_name, '所属公司')
+  const usageCompany = requireNamed(organizations, rows[0].usage_company_name, '使用公司')
   if (rows.some((row) => row.organization_name.trim() !== organization.name)) {
     throw new Error('同一个导入文件只能包含一个所属公司')
   }
@@ -418,6 +491,10 @@ export function createAssetsBatch(
         manager_id: manager.id,
         source_id: source.id,
         location_id: location.id,
+        usage_company_id: usageCompany.id,
+        usage_department_id: row.usage_department_name
+          ? requireNamed(organizations, row.usage_department_name, '使用部门').id
+          : null,
         specification_model: row.specification_model || undefined,
         serial_number: row.serial_number || undefined,
         rfid_tag: row.rfid_tag || undefined,
@@ -427,3 +504,12 @@ export function createAssetsBatch(
     }),
   })
 }
+
+export const scanLookup = (params: { asset_code?: string; rfid_tag?: string }) =>
+  http.get<unknown, AssetSummary>('/assets/scan-lookup', { params })
+
+export const lookupUsageCandidate = (params: { asset_code?: string; rfid_tag?: string }) =>
+  http.get<unknown, AssetUsageCandidate>('/assets/usage-candidate', { params })
+
+export const lookupScanIntent = (params: { asset_code?: string; rfid_tag?: string }) =>
+  http.get<unknown, AssetScanIntent>('/assets/scan-intent', { params })

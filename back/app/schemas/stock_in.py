@@ -24,6 +24,9 @@ class StockInItemRequestSchema(Schema):
     manager_id = fields.Integer(required=True, strict=True)
     source_id = fields.Integer(required=True, strict=True)
     location_id = fields.Integer(required=True, strict=True)
+    usage_company_id = fields.Integer(required=True, strict=True)
+    usage_department_id = fields.Integer(required=False, allow_none=True, strict=True)
+    holder_user_id = fields.Integer(required=False, allow_none=True, strict=True)
     specification_model = fields.String(
         required=False, allow_none=True, validate=validate.Length(max=255)
     )

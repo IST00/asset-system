@@ -24,6 +24,10 @@ celery==5.4.0
 # --- WSGI server ---
 gunicorn==22.0.0
 
+# --- PDF / label generation ---
+qrcode==7.4.2
+reportlab==4.2.2
+
 # --- Utilities ---
 python-dotenv==1.0.1
 click==8.1.7

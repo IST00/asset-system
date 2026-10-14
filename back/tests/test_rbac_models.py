@@ -15,23 +15,17 @@ from app.models import (
 )
 
 
-def test_user_can_have_multiple_roles(app) -> None:
+def test_user_role_is_a_single_authorization_row(app) -> None:
     with app.app_context():
         user = User(username="rbac-user", password="x", enabled=True)
         admin = Role(code="SUPER_ADMIN", name="超级管理员", data_scope="ALL")
-        viewer = Role(code="ASSET_VIEWER", name="资产查看", data_scope="SELF")
-        db.session.add_all([user, admin, viewer])
+        db.session.add_all([user, admin])
         db.session.flush()
-        db.session.add_all(
-            [
-                UserRole(user_id=user.id, role_id=admin.id),
-                UserRole(user_id=user.id, role_id=viewer.id),
-            ]
-        )
+        db.session.add(UserRole(user_id=user.id, role_id=admin.id))
         db.session.flush()
 
         rows = db.session.query(UserRole).filter_by(user_id=user.id).all()
-        assert {row.role_id for row in rows} == {admin.id, viewer.id}
+        assert [row.role_id for row in rows] == [admin.id]
 
 
 def test_role_permission_and_custom_scope_are_explicit_rows(app) -> None:
@@ -73,3 +67,62 @@ def test_role_code_is_unique(app) -> None:
         )
         with pytest.raises(IntegrityError):
             db.session.flush()
+
+
+def test_builtin_role_permissions_are_hierarchical(app) -> None:
+    with app.app_context():
+        employee = Role(code="USER", name="普通员工", data_scope="SELF")
+        administrator = Role(code="ASSET_ADMIN", name="资产管理员", data_scope="ALL")
+        super_admin = Role(code="SUPER_ADMIN", name="超级管理员", data_scope="ALL")
+        employee_permission = Permission(
+            code="asset:view", name="查看资产", module="asset"
+        )
+        admin_permission = Permission(
+            code="inventory:manage", name="管理盘点", module="inventory"
+        )
+        db.session.add_all(
+            [
+                employee,
+                administrator,
+                super_admin,
+                employee_permission,
+                admin_permission,
+            ]
+        )
+        db.session.flush()
+        db.session.add(
+            RolePermission(role_id=employee.id, permission_id=employee_permission.id)
+        )
+        db.session.add(
+            RolePermission(role_id=administrator.id, permission_id=admin_permission.id)
+        )
+        db.session.flush()
+
+        from app.services import rbac_service
+
+        rbac_service._synchronize_builtin_role_hierarchy()
+
+        employee_ids = {
+            item.id
+            for item in db.session.query(Permission)
+            .join(RolePermission, RolePermission.permission_id == Permission.id)
+            .filter(RolePermission.role_id == employee.id)
+            .all()
+        }
+        administrator_ids = {
+            item.id
+            for item in db.session.query(Permission)
+            .join(RolePermission, RolePermission.permission_id == Permission.id)
+            .filter(RolePermission.role_id == administrator.id)
+            .all()
+        }
+        super_admin_ids = {
+            item.id
+            for item in db.session.query(Permission)
+            .join(RolePermission, RolePermission.permission_id == Permission.id)
+            .filter(RolePermission.role_id == super_admin.id)
+            .all()
+        }
+
+        assert employee_ids <= administrator_ids
+        assert administrator_ids <= super_admin_ids

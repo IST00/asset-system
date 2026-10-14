@@ -26,6 +26,12 @@ USAGE_RETURN_MIGRATION = (
 ASSET_DATA_MIGRATION = (
     BACK_DIR / "migrations" / "versions" / "006_asset_data_foundation.py"
 )
+SELF_USAGE_PERMISSION_REMOVAL_MIGRATION = (
+    BACK_DIR / "migrations" / "versions" / "023_remove_self_asset_usage_permission.py"
+)
+ASSET_CORE_GAP_MIGRATION = (
+    BACK_DIR / "migrations" / "versions" / "029_asset_core_gap_completion.py"
+)
 
 
 def test_backend_foundation_migration_follows_initial_revision() -> None:
@@ -78,6 +84,30 @@ def test_asset_data_migration_follows_asset_usage_return() -> None:
     spec.loader.exec_module(module)
     assert module.revision == "006"
     assert module.down_revision == "005"
+
+
+def test_self_usage_permission_removal_migration_follows_requested_quantity() -> None:
+    assert SELF_USAGE_PERMISSION_REMOVAL_MIGRATION.is_file()
+    spec = importlib.util.spec_from_file_location(
+        "migration_023", SELF_USAGE_PERMISSION_REMOVAL_MIGRATION
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.revision == "023"
+    assert module.down_revision == "022"
+
+
+def test_asset_core_gap_migration_follows_scrap_records() -> None:
+    assert ASSET_CORE_GAP_MIGRATION.is_file()
+    spec = importlib.util.spec_from_file_location(
+        "migration_029", ASSET_CORE_GAP_MIGRATION
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.revision == "029"
+    assert module.down_revision == "028"
 
 
 def test_asset_usage_return_downgrade_keeps_fk_backing_indexes_until_table_drop() -> (
@@ -460,6 +490,24 @@ def test_migrations_upgrade_clean_sqlite_database(tmp_path) -> None:
                 "PRAGMA table_info(operation_requests)"
             ).fetchall()
         }
+        attachment_columns = {
+            row[1]
+            for row in connection.execute(
+                "PRAGMA table_info(asset_attachments)"
+            ).fetchall()
+        }
+        scrap_columns = {
+            row[1]
+            for row in connection.execute(
+                "PRAGMA table_info(asset_scrap_records)"
+            ).fetchall()
+        }
+        information_change_columns = {
+            row[1]
+            for row in connection.execute(
+                "PRAGMA table_info(asset_information_change_requests)"
+            ).fetchall()
+        }
         stock_in_flow = connection.execute(
             "SELECT d.operation_type, v.version_no, l.level_no, r.assignee_type "
             "FROM approval_flow_definitions d "
@@ -474,6 +522,11 @@ def test_migrations_upgrade_clean_sqlite_database(tmp_path) -> None:
         "public_object_id",
         "usage_department_id",
         "parent_asset_id",
+        "warranty_supplier_id",
+        "warranty_contact",
+        "warranty_phone",
+        "warranty_expiry_date",
+        "warranty_description",
     } <= asset_columns
     assert {
         "parent_request_id",
@@ -486,6 +539,13 @@ def test_migrations_upgrade_clean_sqlite_database(tmp_path) -> None:
         "terminated_by",
         "termination_reason",
     } <= operation_columns
+    assert {"business_id", "document_type"} <= attachment_columns
+    assert {"disposition_remark", "disposal_date"} <= scrap_columns
+    assert {
+        "operation_request_id",
+        "change_type",
+        "reason",
+    } <= information_change_columns
     assert stock_in_flow == ("STOCK_IN", 1, 1, "ROLE")
 
     with sqlite3.connect(database) as connection:

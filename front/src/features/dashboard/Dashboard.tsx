@@ -9,6 +9,7 @@ import {
   FileUp,
   HandCoins,
   PackageCheck,
+  PackageMinus,
   PackagePlus,
   PieChart,
   Printer,
@@ -20,6 +21,7 @@ import {
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { useQuery } from '@tanstack/react-query'
 import { dashboardApi } from '@/api/dashboard'
@@ -44,21 +46,63 @@ const metricPresentation: Record<
   repairing: { icon: Wrench, tone: 'danger', labelKey: 'dashboard.metrics.repairing' },
 }
 
+interface DashboardQuickActionState {
+  mode?: 'IMPORT' | 'EXPORT'
+  createTask?: boolean
+  printLabels?: boolean
+  openUsageReturn?: boolean
+  usageReturnAction?: 'PERSONAL_USE' | 'PERSONAL_RETURN'
+  scanInventory?: boolean
+}
+
 const quickActions: Array<{
   key: string
   labelKey: string
   hintKey: string
   icon: LucideIcon
   tone: DistributionTone
-  permission: string
+  permissions: readonly string[]
+  path: string
+  state?: DashboardQuickActionState
 }> = [
+  {
+    key: 'assetUse',
+    labelKey: 'dashboard.actions.assetUse',
+    hintKey: 'dashboard.actions.assetUseHint',
+    icon: PackageCheck,
+    tone: 'brand',
+    permissions: ['asset:usage:self'],
+    path: '/workflows',
+    state: { openUsageReturn: true, usageReturnAction: 'PERSONAL_USE' },
+  },
+  {
+    key: 'assetReturn',
+    labelKey: 'dashboard.actions.assetReturn',
+    hintKey: 'dashboard.actions.assetReturnHint',
+    icon: PackageMinus,
+    tone: 'danger',
+    permissions: ['asset:return:self'],
+    path: '/workflows',
+    state: { openUsageReturn: true, usageReturnAction: 'PERSONAL_RETURN' },
+  },
+  {
+    key: 'scanInventory',
+    labelKey: 'dashboard.actions.scanInventory',
+    hintKey: 'dashboard.actions.scanInventoryHint',
+    icon: ScanLine,
+    tone: 'warning',
+    permissions: ['inventory:view'],
+    path: '/inventory',
+    state: { scanInventory: true },
+  },
   {
     key: 'intake',
     labelKey: 'dashboard.actions.assetIntake',
     hintKey: 'dashboard.actions.assetIntakeHint',
     icon: PackagePlus,
     tone: 'brand',
-    permission: 'asset:create',
+    permissions: ['asset:create', 'stock-in:create'],
+    path: '/assets/new',
   },
   {
     key: 'import',
@@ -66,7 +110,9 @@ const quickActions: Array<{
     hintKey: 'dashboard.actions.excelImportHint',
     icon: FileUp,
     tone: 'success',
-    permission: 'asset:import',
+    permissions: ['asset:import'],
+    path: '/imports',
+    state: { mode: 'IMPORT' },
   },
   {
     key: 'inventory',
@@ -74,7 +120,9 @@ const quickActions: Array<{
     hintKey: 'dashboard.actions.createInventoryHint',
     icon: ScanLine,
     tone: 'warning',
-    permission: 'inventory:create',
+    permissions: ['inventory:create'],
+    path: '/inventory',
+    state: { createTask: true },
   },
   {
     key: 'labels',
@@ -82,7 +130,9 @@ const quickActions: Array<{
     hintKey: 'dashboard.actions.printLabelsHint',
     icon: Printer,
     tone: 'purple',
-    permission: 'asset:label:print',
+    permissions: ['asset:label:print'],
+    path: '/imports',
+    state: { mode: 'EXPORT', printLabels: true },
   },
 ]
 
@@ -171,12 +221,15 @@ function DistributionList({
 
 function DashboardContent({ overview }: { overview: DashboardOverview }) {
   const { t } = useTranslation()
+  const navigate = useNavigate()
   const user = useAuthStore((state) => state.user)
   const [feedback, setFeedback] = useState<string | null>(null)
   const hasExplicitPermissions = Array.isArray(user?.permissions)
   const permissions = useMemo(() => new Set(user?.permissions ?? []), [user?.permissions])
   const visibleActions = quickActions.filter(
-    (action) => !hasExplicitPermissions || permissions.has(action.permission),
+    (action) =>
+      !hasExplicitPermissions ||
+      action.permissions.some((permission) => permissions.has(permission)),
   )
   const metrics = selectPrimaryMetrics(overview.metrics)
   const progress = calculateProgress(overview.inventory)
@@ -245,7 +298,7 @@ function DashboardContent({ overview }: { overview: DashboardOverview }) {
                     key={action.key}
                     type="button"
                     className={`asset-dashboard__quick-action is-${action.tone}`}
-                    onClick={() => showFeedback(label)}
+                    onClick={() => navigate(action.path, { state: action.state })}
                   >
                     <span className="asset-dashboard__quick-action-icon">
                       <Icon aria-hidden="true" size={21} strokeWidth={1.8} />

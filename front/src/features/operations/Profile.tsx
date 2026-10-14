@@ -6,6 +6,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { authApi } from '@/api'
 import StatePanel from '@/components/ui/StatePanel'
 import { useAuthStore } from '@/store/auth'
+import { roleCodeLabel } from '@/utils/displayLabels'
 import { formatBeijingDateTime } from '@/utils/dateTime'
 import { GlassPanel, OperationsHero, SectionHeading, StatusPill } from './OperationsUI'
 
@@ -151,7 +152,10 @@ export default function Profile() {
               <h2>{displayName}</h2>
               <p>@{currentUser?.username ?? '—'}</p>
               <div className="operations-profile-card__tags">
-                <StatusPill label={roles[0] ?? '未分配角色'} tone="violet" />
+                <StatusPill
+                  label={roles[0] ? roleCodeLabel(roles[0]) : '未分配角色'}
+                  tone="violet"
+                />
                 <StatusPill
                   label={currentUser?.enabled === false ? '账号停用' : '账号正常'}
                   tone={currentUser?.enabled === false ? 'slate' : 'green'}
@@ -223,7 +227,9 @@ export default function Profile() {
                   </span>
                   <div className="operations-setting__content">
                     <strong>系统角色</strong>
-                    <span>{roles.join('、') || '未分配角色'}</span>
+                    <span>
+                      {roles.map((role) => roleCodeLabel(role)).join('、') || '未分配角色'}
+                    </span>
                   </div>
                 </div>
                 <div className="operations-setting">

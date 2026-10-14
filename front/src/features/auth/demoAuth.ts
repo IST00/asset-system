@@ -11,6 +11,8 @@ export const demoPermissions = Object.freeze([
   'asset:amount:view',
   'asset:import',
   'asset:label:print',
+  'repair:export',
+  'scrap:export',
   'inventory:create',
   'role:view',
   'log:view',

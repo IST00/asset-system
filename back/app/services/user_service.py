@@ -19,7 +19,7 @@ def _user_to_dict(u: User) -> dict[str, Any]:
         "nickname": u.nickname,
         "organization_id": u.organization_id,
         "roles": rbac_repository.role_codes_for_user(u.id),
-        "permissions": sorted(permission_service.get_user_permissions(u.id)),
+        "permissions": sorted(permission_service.effective_permissions(u.id)),
         "enabled": u.enabled,
         "must_change_password": u.must_change_password,
         "password_changed_at": u.password_changed_at,

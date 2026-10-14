@@ -1111,3 +1111,36 @@
     background: #f8fbff;
   }
 }
+
+.asset-list__return-preview {
+  display: grid;
+  gap: 8px;
+  max-height: 260px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow-y: auto;
+}
+
+.asset-list__return-preview li {
+  display: flex;
+  min-width: 0;
+  gap: 10px;
+  justify-content: space-between;
+  padding: 9px 11px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 10px;
+  background: rgba(248, 250, 252, 0.9);
+}
+
+.asset-list__return-preview strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.asset-list__return-preview span {
+  flex-shrink: 0;
+  color: var(--asset-color-text-muted);
+}

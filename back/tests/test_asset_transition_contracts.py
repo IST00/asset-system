@@ -115,7 +115,7 @@ def test_asset_repository_rejects_empty_or_unsafe_cas_changes(app) -> None:
         asset_repository.cas_update(
             asset.id,
             asset.version,
-            {"organization_id": 999},
+            {"custom_attributes": {"unsafe": True}},
         )
 
 

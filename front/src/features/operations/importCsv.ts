@@ -2,6 +2,8 @@ import type { CsvAssetImportRow } from '@/api/assets'
 
 export const csvHeaders = [
   '所属公司',
+  '使用公司',
+  '使用部门',
   '资产名称',
   '资产分类',
   '计量单位',
@@ -59,6 +61,7 @@ export function parseCsv(text: string): string[][] {
 
 const requiredHeaders = [
   '所属公司',
+  '使用公司',
   '资产名称',
   '资产分类',
   '计量单位',
@@ -114,6 +117,8 @@ export function validateImportCsv(text: string): ParsedImportRow[] {
         ? undefined
         : {
             organization_name: values['所属公司'],
+            usage_company_name: values['使用公司'],
+            usage_department_name: values['使用部门'] || undefined,
             asset_name: values['资产名称'],
             category_name: values['资产分类'],
             unit_name: values['计量单位'],

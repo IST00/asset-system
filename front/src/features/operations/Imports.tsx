@@ -14,8 +14,10 @@ import {
   History,
   Printer,
   RefreshCw,
+  Wrench,
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { listAssets } from '@/api/assets'
 import { exportsApi, type ExportJob, type ExportJobStatus } from '@/api/exports'
 import {
@@ -144,6 +146,8 @@ function rowPrimary(row: ImportPreviewRow, type: ImportType): { title: string; d
 export default function Imports() {
   const { message } = App.useApp()
   const inputRef = useRef<HTMLInputElement>(null)
+  const location = useLocation()
+  const navigate = useNavigate()
   const queryClient = useQueryClient()
   const permissions = useAuthStore((state) => state.user?.permissions ?? [])
   const availableTypes = useMemo(
@@ -155,15 +159,32 @@ export default function Imports() {
   )
   const canExportAssets = permissions.includes('asset:export')
   const canPrintLabels = permissions.includes('asset:label:print')
+  const canExportRepairs = permissions.includes('repair:export')
+  const canExportScrap = permissions.includes('scrap:export')
   const canExportOrganizations = permissions.includes('organization:export')
   const canExportCategories = permissions.includes('asset-category:export')
   const hasExportCapability =
-    canExportAssets || canPrintLabels || canExportOrganizations || canExportCategories
+    canExportAssets ||
+    canExportRepairs ||
+    canExportScrap ||
+    canPrintLabels ||
+    canExportOrganizations ||
+    canExportCategories
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>(
     availableTypes.length ? 'IMPORT' : 'EXPORT',
   )
   const [activeType, setActiveType] = useState<ImportType>(availableTypes[0] ?? 'ASSET')
   const [currentJob, setCurrentJob] = useState<ImportJob | null>(null)
+  const quickAction = location.state as { mode?: WorkspaceMode; printLabels?: boolean } | null
+
+  useEffect(() => {
+    if (quickAction?.mode === 'EXPORT' && hasExportCapability) setWorkspaceMode('EXPORT')
+    if (quickAction?.mode === 'IMPORT' && availableTypes.length) setWorkspaceMode('IMPORT')
+    if (quickAction?.mode) {
+      navigate(location.pathname, { replace: true, state: null })
+    }
+  }, [availableTypes.length, hasExportCapability, location.pathname, navigate, quickAction?.mode])
+
   const [labelCodesText, setLabelCodesText] = useState('')
 
   useEffect(() => {
@@ -245,6 +266,24 @@ export default function Imports() {
       await queryClient.invalidateQueries({ queryKey: ['export-jobs'] })
       void message.success(`资产台账已生成，共 ${job.item_count} 件，可在下方任务记录下载`)
     },
+  })
+  const repairExportMutation = useMutation({
+    mutationFn: () => exportsApi.create({ job_type: 'REPAIR_CSV' }),
+    onSuccess: async (job) => {
+      await queryClient.invalidateQueries({ queryKey: ['export-jobs'] })
+      void message.success(`维修记录已生成，共 ${job.item_count} 条，可在下方任务记录下载`)
+    },
+    onError: (error) =>
+      void message.error(error instanceof Error ? error.message : '维修记录导出失败'),
+  })
+  const scrapExportMutation = useMutation({
+    mutationFn: () => exportsApi.create({ job_type: 'SCRAP_CSV' }),
+    onSuccess: async (job) => {
+      await queryClient.invalidateQueries({ queryKey: ['export-jobs'] })
+      void message.success(`报废资产台账已生成，共 ${job.item_count} 件，可在下方任务记录下载`)
+    },
+    onError: (error) =>
+      void message.error(error instanceof Error ? error.message : '报废资产导出失败'),
   })
   const labelExportMutation = useMutation({
     mutationFn: async (rawCodes: string) => {
@@ -366,7 +405,7 @@ export default function Imports() {
         description={
           workspaceMode === 'IMPORT'
             ? 'CSV 与 XLSX 都交给后端统一校验。资产、公司编码和分类编码使用独立模板；任何错误都会阻止整批写入，不会出现部分成功。'
-            : '资产台账由服务端按当前账号的数据范围和金额权限生成；公司、分类导出完整层级，资产标签生成 80 × 30 mm PDF。'
+            : '资产台账由服务端按当前账号的数据范围和金额权限生成；公司、分类导出完整层级，资产标签生成 65 × 30 mm PDF。'
         }
         icon={workspaceMode === 'IMPORT' ? FileUp : FileDown}
         tone={workspaceMode === 'IMPORT' ? typeMeta[activeType].tone : 'blue'}
@@ -706,13 +745,70 @@ export default function Imports() {
               </GlassPanel>
             ) : null}
 
+            {canExportRepairs ? (
+              <GlassPanel className="operations-export-card operations-export-card--ledger">
+                <span className="operations-export-card__icon">
+                  <Wrench size={24} />
+                </span>
+                <div className="operations-export-card__copy">
+                  <span>REPAIR HISTORY</span>
+                  <h2>维修记录</h2>
+                  <p>导出当前账号数据范围内的结构化维修记录，费用字段继续按金额权限控制。</p>
+                </div>
+                <div className="operations-export-card__facts">
+                  <span>CSV · UTF-8 BOM</span>
+                  <span>按送修时间倒序</span>
+                  <span>操作留痕</span>
+                </div>
+                <Button
+                  type="primary"
+                  size="large"
+                  icon={<FileDown size={17} />}
+                  loading={repairExportMutation.isPending}
+                  onClick={() => repairExportMutation.mutate()}
+                >
+                  导出维修记录
+                </Button>
+              </GlassPanel>
+            ) : null}
+
+            {canExportScrap ? (
+              <GlassPanel className="operations-export-card operations-export-card--ledger">
+                <span className="operations-export-card__icon">
+                  <FileSpreadsheet size={24} />
+                </span>
+                <div className="operations-export-card__copy">
+                  <span>SCRAPPED ASSETS</span>
+                  <h2>报废资产</h2>
+                  <p>仅导出已报废资产，遵循当前账号数据范围与金额字段权限。</p>
+                </div>
+                <div className="operations-export-card__facts">
+                  <span>CSV · UTF-8 BOM</span>
+                  <span>仅已报废状态</span>
+                  <span>操作留痕</span>
+                </div>
+                <Button
+                  type="primary"
+                  size="large"
+                  icon={<FileDown size={17} />}
+                  loading={scrapExportMutation.isPending}
+                  onClick={() => scrapExportMutation.mutate()}
+                >
+                  导出报废资产
+                </Button>
+              </GlassPanel>
+            ) : null}
+
             {canPrintLabels ? (
-              <GlassPanel className="operations-export-card operations-export-card--label">
+              <GlassPanel
+                className="operations-export-card operations-export-card--label"
+                data-print-labels={quickAction?.printLabels ? 'true' : undefined}
+              >
                 <span className="operations-export-card__icon">
                   <Printer size={24} />
                 </span>
                 <div className="operations-export-card__copy">
-                  <span>80 × 30 MM LABELS</span>
+                  <span>65 × 30 MM LABELS</span>
                   <h2>资产条码标签</h2>
                   <p>
                     粘贴资产编码，支持空格、逗号或换行分隔。系统会精确核对权限，单次最多 100 件。
@@ -781,7 +877,7 @@ export default function Imports() {
             ) : null}
           </div>
 
-          {(canExportAssets || canPrintLabels) && (
+          {(canExportAssets || canExportRepairs || canExportScrap || canPrintLabels) && (
             <GlassPanel>
               <SectionHeading
                 eyebrow="EXPORT HISTORY"
@@ -828,7 +924,15 @@ export default function Imports() {
                           </small>
                           {job.error_message ? <em>{job.error_message}</em> : null}
                         </div>
-                        <span>{job.job_type === 'ASSET_CSV' ? '资产台账' : '条码标签'}</span>
+                        <span>
+                          {job.job_type === 'ASSET_CSV'
+                            ? '资产台账'
+                            : job.job_type === 'REPAIR_CSV'
+                              ? '维修记录'
+                              : job.job_type === 'SCRAP_CSV'
+                                ? '报废资产'
+                                : '条码标签'}
+                        </span>
                         <span>{job.item_count} 件</span>
                         <div className="operations-export-status">
                           <StatusPill label={status.label} tone={status.tone} />
@@ -856,7 +960,7 @@ export default function Imports() {
                 </div>
               ) : (
                 <div className="operations-empty-note">
-                  还没有导出任务，可以从上方生成资产台账或标签
+                  还没有导出任务，可以从上方生成资产台账、维修记录、报废资产或标签
                 </div>
               )}
             </GlassPanel>

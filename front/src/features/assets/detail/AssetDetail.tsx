@@ -1,4 +1,16 @@
-import { Button, Form, Input, Modal, Select, Skeleton, Spin, Tabs, Upload, message } from 'antd'
+import {
+  Button,
+  Form,
+  Input,
+  Modal,
+  Select,
+  Skeleton,
+  Spin,
+  Table,
+  Tabs,
+  Upload,
+  message,
+} from 'antd'
 import {
   ArrowLeft,
   BadgeInfo,
@@ -22,10 +34,20 @@ import {
 import type { LucideIcon } from 'lucide-react'
 import { useMemo, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
+import type { ColumnsType } from 'antd/es/table'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link, useParams } from 'react-router-dom'
-import { assetManagementApi } from '@/api/assetManagement'
-import { attachmentApi, type AssetAttachment, type AssetAttachmentType } from '@/api/attachments'
+import { Link, Navigate, useParams } from 'react-router-dom'
+import {
+  assetManagementApi,
+  type AssetRepairRecord,
+  type AssetScrapRecord,
+} from '@/api/assetManagement'
+import {
+  attachmentApi,
+  type AssetAttachment,
+  type AssetAttachmentDocumentType,
+  type AssetAttachmentType,
+} from '@/api/attachments'
 import {
   getAsset,
   getAssetLifecycle,
@@ -42,6 +64,11 @@ import { canViewAmount, getAssetStatusMeta } from '@/features/assets/assetModel'
 import type { AssetDetail as AssetDetailRecord } from '@/features/assets/types'
 import { useAuthStore } from '@/store/auth'
 import { formatBeijingDateTime } from '@/utils/dateTime'
+import {
+  assetStatusLabel,
+  executionStatusLabel,
+  scrapDispositionLabel,
+} from '@/utils/displayLabels'
 import { formatAssetAmount, formatAssetDate } from './detailFormatters'
 import {
   assetDetailTabs,
@@ -116,19 +143,28 @@ function DetailPageState({ message, onRetry }: { message: string; onRetry?: () =
 }
 
 const lifecycleTypeLabels: Record<string, string> = {
-  STOCK_IN: '资产入库',
-  PERSONAL_USE: '个人领用',
+  STOCK_IN: '资产入账',
+  PERSONAL_USE: '领用',
   PUBLIC_USE: '公共领用',
-  PERSONAL_RETURN: '个人退库',
+  PERSONAL_RETURN: '退库',
   PUBLIC_RETURN: '公共退库',
   TRANSFER: '资产调拨',
   REPAIR_START: '发起维修',
   REPAIR_COMPLETE: '维修完成',
   DATA_COMPLETION: '资料补录',
+  ASSET_DATA_COMPLETE: '资料补录',
   ASSET_EDIT: '资料修改',
+  PHYSICAL_INFO_CHANGE: '实物信息变更',
+  FINANCIAL_INFO_CHANGE: '财务信息变更',
+  WARRANTY_INFO_CHANGE: '保修信息变更',
   ASSET_RELATION_ATTACH: '挂接附属资产',
   ASSET_RELATION_DETACH: '解除主附关系',
+  ASSET_ATTACHMENT_UPLOAD: '附件上传',
+  ASSET_ATTACHMENT_VOID: '附件作废',
+  ASSET_EXPORT: '资产导出',
+  ASSET_LABEL_PRINT: '打印标签',
   SCRAP: '资产报废',
+  INVENTORY_PROCESS: '盘点处理',
 }
 
 interface LifecycleQueryProps {
@@ -139,44 +175,59 @@ interface LifecycleQueryProps {
 }
 
 function LifecycleTab({ records, isLoading, isError, onRetry }: LifecycleQueryProps) {
+  const columns: ColumnsType<AssetLifecycleRecord> = [
+    {
+      title: '处理日期',
+      dataIndex: 'created_at',
+      width: 180,
+      render: (value: string) => formatBeijingDateTime(value),
+    },
+    {
+      title: '处理方式',
+      dataIndex: 'operation_type',
+      width: 130,
+      render: (value: string, record) =>
+        value === 'PERSONAL_USE' &&
+        (record.remark === '员工签收' || record.change_summary === '签字')
+          ? '签字'
+          : (lifecycleTypeLabels[value] ?? value),
+    },
+    {
+      title: '处理人',
+      dataIndex: 'operator_name',
+      width: 130,
+      render: (value: string | null | undefined, record) => value || `用户 #${record.operator_id}`,
+    },
+    {
+      title: '处理内容',
+      dataIndex: 'change_summary',
+      render: (value: string | null | undefined, record) =>
+        value || record.remark || '该操作未记录变更明细',
+    },
+  ]
+
   if (isLoading) {
-    return (
-      <div className="asset-detail__timeline-loading">
-        <Spin />
-      </div>
-    )
+    return <RecordsLoading />
   }
   if (isError) {
     return (
-      <StatePanel
-        mode="error"
-        message="资产生命周期加载失败"
-        retryLabel="重新加载"
-        onRetry={onRetry}
-      />
+      <StatePanel mode="error" message="资产履历加载失败" retryLabel="重新加载" onRetry={onRetry} />
     )
   }
   if (!records?.length) {
-    return <StatePanel mode="empty" message="当前资产暂无生命周期记录" />
+    return <StatePanel mode="empty" message="当前资产暂无履历记录" />
   }
 
   return (
-    <SectionPanel title="生命周期轨迹" icon={<FileClock aria-hidden="true" size={18} />}>
-      <div className="asset-detail__timeline">
-        {records.map((record) => (
-          <article key={record.id} className="asset-detail__timeline-item">
-            <span className="asset-detail__timeline-dot" aria-hidden="true" />
-            <div>
-              <strong>{lifecycleTypeLabels[record.operation_type] ?? record.operation_type}</strong>
-              <p>{record.remark || '该操作未填写补充说明'}</p>
-              <small>
-                {record.operation_no} · 操作人 #{record.operator_id} ·{' '}
-                {formatBeijingDateTime(record.created_at)}
-              </small>
-            </div>
-          </article>
-        ))}
-      </div>
+    <SectionPanel title="资产履历" icon={<FileClock aria-hidden="true" size={18} />}>
+      <Table<AssetLifecycleRecord>
+        className="asset-detail__history-table"
+        rowKey="id"
+        columns={columns}
+        dataSource={records}
+        pagination={false}
+        scroll={{ x: 860 }}
+      />
     </SectionPanel>
   )
 }
@@ -349,28 +400,6 @@ function RelationsTab({ asset }: { asset: AssetDetailRecord }) {
 
 type RecordTone = 'blue' | 'green' | 'amber' | 'red' | 'slate'
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
-  return value as Record<string, unknown>
-}
-
-function nestedRecord(
-  source: Record<string, unknown> | null,
-  key: string,
-): Record<string, unknown> | null {
-  return asRecord(source?.[key])
-}
-
-function textValue(value: unknown): string | null {
-  if (typeof value === 'string') return value.trim() || null
-  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
-  return null
-}
-
-function fieldText(source: Record<string, unknown> | null, key: string): string | null {
-  return textValue(source?.[key])
-}
-
 function formatMoneyValue(value: string | null): string {
   if (value === null) return '—'
   const amount = Number(value)
@@ -427,123 +456,126 @@ function RecordsLoading() {
   )
 }
 
-function LifecycleCategoryTab({
-  records,
-  isLoading,
-  isError,
-  onRetry,
-  category,
-  showAmount,
-}: LifecycleQueryProps & {
-  category: 'repairs' | 'scrap'
-  showAmount: boolean
-}) {
-  if (isLoading) return <RecordsLoading />
-  if (isError) {
+function RepairRecordsTab({ assetId, showAmount }: { assetId: number; showAmount: boolean }) {
+  const query = useQuery({
+    queryKey: ['assets', 'repair-records', assetId],
+    queryFn: () => assetManagementApi.repairRecords(assetId),
+  })
+
+  if (query.isLoading) return <RecordsLoading />
+  if (query.isError) {
     return (
       <StatePanel
         mode="error"
-        message={category === 'repairs' ? '维修记录加载失败' : '报废记录加载失败'}
+        message="维修记录加载失败"
         retryLabel="重新加载"
-        onRetry={onRetry}
+        onRetry={() => void query.refetch()}
       />
     )
   }
+  if (!query.data?.length) return <StatePanel mode="empty" message="当前资产暂无维修记录" />
 
-  const allowed = category === 'repairs' ? ['REPAIR_START', 'REPAIR_COMPLETE'] : ['SCRAP']
-  const filtered = (records ?? []).filter((record) => allowed.includes(record.operation_type))
-  if (!filtered.length) {
+  return (
+    <SectionPanel title="维修记录" icon={<Wrench aria-hidden="true" size={18} />}>
+      <div className="asset-detail__record-list">
+        {query.data.map((record: AssetRepairRecord) => (
+          <article key={record.id} className="asset-detail__record-card">
+            <header className="asset-detail__record-card-header">
+              <div className="asset-detail__record-title">
+                <span className="asset-detail__record-icon">
+                  <Wrench aria-hidden="true" size={18} />
+                </span>
+                <div>
+                  <strong>{record.completed_at ? '维修完成' : '维修中'}</strong>
+                  <small>{record.repair_no}</small>
+                </div>
+              </div>
+              <StatusLabel
+                status={record.completed_at ? 'COMPLETED' : 'REPAIRING'}
+                label={record.completed_at ? '已完成' : '维修中'}
+              />
+            </header>
+            <div className="asset-detail__record-grid">
+              <RecordFact label="故障原因" value={record.fault_description} />
+              <RecordFact label="维修前状态" value={assetStatusLabel(record.before_status)} />
+              <RecordFact label="维修供应商" value={record.repair_supplier_name} />
+              <RecordFact
+                label="维修费用"
+                value={showAmount ? formatMoneyValue(record.repair_cost ?? null) : '无金额查看权限'}
+              />
+              <RecordFact label="送修时间" value={formatBeijingDateTime(record.sent_at)} />
+              <RecordFact
+                label="完成时间"
+                value={
+                  record.completed_at ? formatBeijingDateTime(record.completed_at) : '尚未完成'
+                }
+              />
+              <RecordFact label="维修结果" value={record.repair_result} />
+              <RecordFact
+                label="确认人"
+                value={record.confirmed_by ? `用户 #${record.confirmed_by}` : '尚未确认'}
+              />
+            </div>
+          </article>
+        ))}
+      </div>
+    </SectionPanel>
+  )
+}
+
+function ScrapRecordsTab({ assetId, showAmount }: { assetId: number; showAmount: boolean }) {
+  const query = useQuery({
+    queryKey: ['assets', 'scrap-records', assetId],
+    queryFn: () => assetManagementApi.scrapRecords(assetId),
+  })
+
+  if (query.isLoading) return <RecordsLoading />
+  if (query.isError) {
     return (
       <StatePanel
-        mode="empty"
-        message={category === 'repairs' ? '当前资产暂无维修记录' : '当前资产暂无报废记录'}
+        mode="error"
+        message="报废记录加载失败"
+        retryLabel="重新加载"
+        onRetry={() => void query.refetch()}
       />
     )
   }
+  if (!query.data?.length) return <StatePanel mode="empty" message="当前资产暂无报废记录" />
 
-  const Icon = category === 'repairs' ? Wrench : Trash2
   return (
-    <SectionPanel
-      title={category === 'repairs' ? '维修记录' : '报废记录'}
-      icon={<Icon aria-hidden="true" size={18} />}
-    >
+    <SectionPanel title="报废记录" icon={<Trash2 aria-hidden="true" size={18} />}>
       <div className="asset-detail__record-list">
-        {filtered.map((record) => {
-          const before = record.before_data
-          const after = record.after_data
-          const custom = nestedRecord(after, 'custom_attributes')
-          const repair =
-            nestedRecord(
-              custom,
-              record.operation_type === 'REPAIR_START' ? 'repair_context' : 'last_repair',
-            ) ?? {}
-          const scrap = nestedRecord(custom, 'scrap') ?? {}
-          const amount =
-            category === 'repairs'
-              ? fieldText(
-                  repair,
-                  record.operation_type === 'REPAIR_START' ? 'estimated_cost' : 'actual_cost',
-                )
-              : fieldText(scrap, 'scrap_amount')
-          return (
-            <article key={record.id} className="asset-detail__record-card">
-              <header className="asset-detail__record-card-header">
-                <div className="asset-detail__record-title">
-                  <span className="asset-detail__record-icon">
-                    <Icon aria-hidden="true" size={18} />
-                  </span>
-                  <div>
-                    <strong>
-                      {lifecycleTypeLabels[record.operation_type] ?? record.operation_type}
-                    </strong>
-                    <small>{record.operation_no}</small>
-                  </div>
+        {query.data.map((record: AssetScrapRecord) => (
+          <article key={record.id} className="asset-detail__record-card">
+            <header className="asset-detail__record-card-header">
+              <div className="asset-detail__record-title">
+                <span className="asset-detail__record-icon">
+                  <Trash2 aria-hidden="true" size={18} />
+                </span>
+                <div>
+                  <strong>资产报废</strong>
+                  <small>{record.scrap_no}</small>
                 </div>
-                <StatusLabel
-                  status={fieldText(after, 'status')}
-                  label={fieldText(after, 'status') ?? '已记录'}
-                />
-              </header>
-              <div className="asset-detail__record-grid">
-                <RecordFact
-                  label={category === 'repairs' ? '状态变化' : '报废后状态'}
-                  value={
-                    category === 'repairs'
-                      ? `${fieldText(before, 'status') ?? '—'} → ${fieldText(after, 'status') ?? '—'}`
-                      : fieldText(after, 'status')
-                  }
-                />
-                {category === 'repairs' ? (
-                  <RecordFact
-                    label={record.operation_type === 'REPAIR_START' ? '维修供应商' : '维修结果'}
-                    value={
-                      record.operation_type === 'REPAIR_START'
-                        ? fieldText(repair, 'vendor')
-                        : fieldText(repair, 'result')
-                    }
-                  />
-                ) : (
-                  <RecordFact label="报废日期" value={fieldText(scrap, 'scrap_date')} />
-                )}
-                <RecordFact
-                  label={
-                    category === 'repairs'
-                      ? record.operation_type === 'REPAIR_START'
-                        ? '预计费用'
-                        : '实际费用'
-                      : '回收金额'
-                  }
-                  value={showAmount ? formatMoneyValue(amount) : '无金额查看权限'}
-                />
-                <RecordFact label="操作时间" value={formatBeijingDateTime(record.created_at)} />
               </div>
-              <p className="asset-detail__record-note">
-                {record.remark || (category === 'repairs' ? '未填写维修说明' : '未填写报废原因')}
-              </p>
-              <footer>操作人 #{record.operator_id}</footer>
-            </article>
-          )
-        })}
+              <StatusLabel status="SCRAPPED" label="已报废" />
+            </header>
+            <div className="asset-detail__record-grid">
+              <RecordFact label="实际处置日期" value={record.disposal_date ?? record.scrap_date} />
+              <RecordFact label="报废原因" value={record.reason} />
+              <RecordFact label="处置方式" value={scrapDispositionLabel(record.disposition)} />
+              <RecordFact label="处置备注" value={record.disposition_remark} />
+              <RecordFact
+                label="回收金额"
+                value={
+                  showAmount ? formatMoneyValue(record.scrap_amount ?? null) : '无金额查看权限'
+                }
+              />
+              <RecordFact label="确认时间" value={formatBeijingDateTime(record.confirmed_at)} />
+              <RecordFact label="确认人" value={`用户 #${record.confirmed_by}`} />
+            </div>
+            <footer>记录创建于 {formatBeijingDateTime(record.created_at)}</footer>
+          </article>
+        ))}
       </div>
     </SectionPanel>
   )
@@ -737,7 +769,7 @@ function ApprovalRecordsTab({
                 />
                 <StatusLabel
                   status={record.execution_status}
-                  label={approvalLabel(record.execution_status)}
+                  label={executionStatusLabel(record.execution_status)}
                 />
               </div>
             </header>
@@ -807,6 +839,10 @@ const attachmentTypeLabels: Record<AssetAttachmentType, string> = {
   ACCEPTANCE: '验收资料',
   REPAIR: '维修资料',
   SCRAP: '报废资料',
+  USAGE_SIGN: '领用签收证据',
+  RETURN_HANDOVER: '退库交还证据',
+  RETURN_INSPECTION: '退库验收证据',
+  TRANSFER_RECEIPT: '交接签收证据',
   OTHER: '其他附件',
 }
 
@@ -814,6 +850,42 @@ const attachmentTypeOptions = Object.entries(attachmentTypeLabels).map(([value, 
   value: value as AssetAttachmentType,
   label,
 }))
+
+const attachmentDocumentTypeLabels: Record<AssetAttachmentDocumentType, string> = {
+  ASSET_PHOTO: '资产照片',
+  CONTRACT: '合同',
+  INVOICE: '发票',
+  ACCEPTANCE: '验收资料',
+  REPAIR_PHOTO: '维修照片',
+  REPAIR_QUOTE: '维修报价单',
+  REPAIR_INVOICE: '维修发票',
+  SCRAP_CERTIFICATE: '报废证明',
+  DISPOSAL_VOUCHER: '残值处置凭证',
+  SIGN_PHOTO: '签收照片',
+  RETURN_PHOTO: '交还照片',
+  INSPECTION_PHOTO: '验收照片',
+  TRANSFER_RECEIPT_PHOTO: '交接签收照片',
+  ELECTRONIC_SIGNATURE: '电子签名',
+  OTHER: '其他附件',
+}
+
+const documentTypesByBusinessType: Record<AssetAttachmentType, AssetAttachmentDocumentType[]> = {
+  PHOTO: ['ASSET_PHOTO'],
+  CONTRACT: ['CONTRACT'],
+  INVOICE: ['INVOICE'],
+  ACCEPTANCE: ['ACCEPTANCE'],
+  REPAIR: ['REPAIR_PHOTO', 'REPAIR_QUOTE', 'REPAIR_INVOICE', 'OTHER'],
+  SCRAP: ['SCRAP_CERTIFICATE', 'DISPOSAL_VOUCHER', 'OTHER'],
+  USAGE_SIGN: ['SIGN_PHOTO', 'ELECTRONIC_SIGNATURE'],
+  RETURN_HANDOVER: ['RETURN_PHOTO', 'ELECTRONIC_SIGNATURE'],
+  RETURN_INSPECTION: ['INSPECTION_PHOTO', 'ELECTRONIC_SIGNATURE'],
+  TRANSFER_RECEIPT: ['TRANSFER_RECEIPT_PHOTO', 'ELECTRONIC_SIGNATURE'],
+  OTHER: ['OTHER'],
+}
+
+function defaultDocumentType(businessType: AssetAttachmentType): AssetAttachmentDocumentType {
+  return documentTypesByBusinessType[businessType][0]
+}
 
 function formatFileSize(size: number): string {
   if (size < 1024) return `${size} B`
@@ -835,6 +907,8 @@ function AttachmentsTab({ assetId }: { assetId: number }) {
   const canManage = permissions.includes('asset:attachment:manage')
   const queryClient = useQueryClient()
   const [businessType, setBusinessType] = useState<AssetAttachmentType>('PHOTO')
+  const [businessId, setBusinessId] = useState<number | null>(null)
+  const [documentType, setDocumentType] = useState<AssetAttachmentDocumentType>('ASSET_PHOTO')
   const [voidTarget, setVoidTarget] = useState<AssetAttachment | null>(null)
   const [voidReason, setVoidReason] = useState('')
 
@@ -842,10 +916,26 @@ function AttachmentsTab({ assetId }: { assetId: number }) {
     queryKey: ['assets', 'attachments', assetId],
     queryFn: () => attachmentApi.list(assetId),
   })
+  const repairQuery = useQuery({
+    queryKey: ['assets', 'repair-records', assetId],
+    queryFn: () => assetManagementApi.repairRecords(assetId),
+    enabled: canManage && businessType === 'REPAIR',
+  })
+  const scrapQuery = useQuery({
+    queryKey: ['assets', 'scrap-records', assetId],
+    queryFn: () => assetManagementApi.scrapRecords(assetId),
+    enabled: canManage && businessType === 'SCRAP',
+  })
   const refresh = () =>
     queryClient.invalidateQueries({ queryKey: ['assets', 'attachments', assetId] })
   const uploadMutation = useMutation({
-    mutationFn: (file: File) => attachmentApi.upload(assetId, businessType, file),
+    mutationFn: (file: File) =>
+      attachmentApi.upload(assetId, {
+        businessType,
+        businessId,
+        documentType,
+        file,
+      }),
     onSuccess: async () => {
       await refresh()
       void message.success('附件已上传并写入资产履历')
@@ -873,6 +963,7 @@ function AttachmentsTab({ assetId }: { assetId: number }) {
   const downloadMutation = useMutation({
     mutationFn: (attachment: AssetAttachment) => attachmentApi.download(attachment.id),
     onSuccess: (blob, attachment) => downloadBlob(attachment.original_name, blob),
+    onError: (error) => void message.error(error instanceof Error ? error.message : '附件下载失败'),
   })
 
   if (query.isLoading) {
@@ -898,6 +989,26 @@ function AttachmentsTab({ assetId }: { assetId: number }) {
   const photos = attachments.filter(
     (item) => item.business_type === 'PHOTO' && item.status === 'ACTIVE',
   )
+  const requiresBusinessRecord = businessType === 'REPAIR' || businessType === 'SCRAP'
+  const businessRecordOptions =
+    businessType === 'REPAIR'
+      ? (repairQuery.data ?? []).map((record) => ({
+          value: record.id,
+          label: `${record.repair_no} · ${record.fault_description}`,
+        }))
+      : (scrapQuery.data ?? []).map((record) => ({
+          value: record.id,
+          label: `${record.scrap_no} · ${record.disposal_date ?? record.scrap_date}`,
+        }))
+  const documentTypeOptions = documentTypesByBusinessType[businessType].map((value) => ({
+    value,
+    label: attachmentDocumentTypeLabels[value],
+  }))
+  const uploadDisabled =
+    uploadMutation.isPending ||
+    (requiresBusinessRecord && businessId == null) ||
+    (businessType === 'REPAIR' && repairQuery.isLoading) ||
+    (businessType === 'SCRAP' && scrapQuery.isLoading)
 
   return (
     <div className="asset-attachments">
@@ -910,13 +1021,34 @@ function AttachmentsTab({ assetId }: { assetId: number }) {
               <Select
                 value={businessType}
                 options={attachmentTypeOptions}
-                onChange={setBusinessType}
-                aria-label="附件类型"
+                onChange={(value) => {
+                  setBusinessType(value)
+                  setBusinessId(null)
+                  setDocumentType(defaultDocumentType(value))
+                }}
+                aria-label="附件业务类型"
+              />
+              {requiresBusinessRecord ? (
+                <Select
+                  value={businessId}
+                  options={businessRecordOptions}
+                  loading={businessType === 'REPAIR' ? repairQuery.isLoading : scrapQuery.isLoading}
+                  placeholder={businessType === 'REPAIR' ? '选择维修记录' : '选择报废记录'}
+                  notFoundContent={businessType === 'REPAIR' ? '暂无维修记录' : '暂无报废记录'}
+                  onChange={setBusinessId}
+                  aria-label="关联业务记录"
+                />
+              ) : null}
+              <Select
+                value={documentType}
+                options={documentTypeOptions}
+                onChange={setDocumentType}
+                aria-label="附件用途"
               />
               <Upload
                 accept={businessType === 'PHOTO' ? 'image/jpeg,image/png,image/webp' : undefined}
                 showUploadList={false}
-                disabled={uploadMutation.isPending}
+                disabled={uploadDisabled}
                 beforeUpload={(file) => {
                   uploadMutation.mutate(file)
                   return Upload.LIST_IGNORE
@@ -926,6 +1058,7 @@ function AttachmentsTab({ assetId }: { assetId: number }) {
                   type="primary"
                   icon={<UploadCloud aria-hidden="true" size={16} />}
                   loading={uploadMutation.isPending}
+                  disabled={uploadDisabled}
                 >
                   上传附件
                 </Button>
@@ -937,7 +1070,7 @@ function AttachmentsTab({ assetId }: { assetId: number }) {
         <div className="asset-attachments__summary">
           <span>有效附件 {activeCount} 个</span>
           <span>资产照片 {photos.length}/5 张</span>
-          <span>文件不存数据库，下载继续校验资产权限</span>
+          <span>报价单、维修发票和残值凭证下载需要金额查看权限</span>
         </div>
         {attachments.length ? (
           <div className="asset-attachments__grid">
@@ -960,10 +1093,12 @@ function AttachmentsTab({ assetId }: { assetId: number }) {
                       {attachment.status === 'VOIDED' ? <span>已作废</span> : null}
                     </div>
                     <span>
+                      {attachmentDocumentTypeLabels[attachment.document_type]} ·{' '}
                       {attachmentTypeLabels[attachment.business_type]} ·{' '}
                       {formatFileSize(attachment.size_bytes)}
                     </span>
                     <small>
+                      {attachment.business_id ? `关联记录 #${attachment.business_id} · ` : ''}
                       上传于 {formatBeijingDateTime(attachment.created_at)}
                       {attachment.void_reason ? ` · ${attachment.void_reason}` : ''}
                     </small>
@@ -1079,6 +1214,116 @@ function DetailField({ asset, field }: { asset: AssetDetailRecord; field: Detail
   )
 }
 
+function FinancialSummaryTab({
+  asset,
+  showAmount,
+}: {
+  asset: AssetDetailRecord
+  showAmount: boolean
+}) {
+  const { i18n } = useTranslation()
+  const locale = i18n.resolvedLanguage || 'zh-CN'
+  const query = useQuery({
+    queryKey: ['assets', 'financial-summary', asset.id],
+    queryFn: () => assetManagementApi.financialSummary(asset.id),
+    enabled: showAmount,
+  })
+
+  if (!showAmount) {
+    return <StatePanel mode="empty" message="当前账号无权查看资产金额及折旧信息" />
+  }
+  if (query.isLoading) {
+    return (
+      <div className="asset-detail__timeline-loading">
+        <Spin />
+      </div>
+    )
+  }
+  if (query.isError || !query.data) {
+    return (
+      <StatePanel
+        mode="error"
+        message="资产财务折旧信息加载失败"
+        retryLabel="重新加载"
+        onRetry={() => void query.refetch()}
+      />
+    )
+  }
+
+  const summary = query.data
+  const money = (value: string) => formatMoneyValue(value)
+  const date = (value: string) => formatAssetDate(value, locale)
+
+  return (
+    <div className="asset-detail__groups">
+      <SectionPanel
+        title="财务折旧摘要"
+        icon={<ReceiptText aria-hidden="true" size={18} />}
+        extra={<span>查询日期：{date(summary.as_of)}</span>}
+      >
+        <dl className="asset-detail__fields">
+          <div className="asset-detail__field">
+            <dt>资产原值</dt>
+            <dd>{money(summary.original_amount)}</dd>
+          </div>
+          <div className="asset-detail__field">
+            <dt>残值</dt>
+            <dd>{money(summary.residual_value)}</dd>
+          </div>
+          <div className="asset-detail__field">
+            <dt>可折旧金额</dt>
+            <dd>{money(summary.depreciable_amount)}</dd>
+          </div>
+          <div className="asset-detail__field">
+            <dt>月折旧额</dt>
+            <dd>{money(summary.monthly_depreciation)}</dd>
+          </div>
+          <div className="asset-detail__field">
+            <dt>累计折旧</dt>
+            <dd>{money(summary.accumulated_depreciation)}</dd>
+          </div>
+          <div className="asset-detail__field">
+            <dt>资产净值</dt>
+            <dd>{money(summary.net_book_value)}</dd>
+          </div>
+        </dl>
+      </SectionPanel>
+      <SectionPanel title="折旧口径" icon={<FileClock aria-hidden="true" size={18} />}>
+        <dl className="asset-detail__fields">
+          <div className="asset-detail__field">
+            <dt>折旧方法</dt>
+            <dd>{summary.method_name}</dd>
+          </div>
+          <div className="asset-detail__field">
+            <dt>购入日期</dt>
+            <dd>{date(summary.purchase_date)}</dd>
+          </div>
+          <div className="asset-detail__field">
+            <dt>预计到期日</dt>
+            <dd>{date(summary.expected_expiry_date)}</dd>
+          </div>
+          <div className="asset-detail__field">
+            <dt>使用年限</dt>
+            <dd>{summary.service_life_months} 个月</dd>
+          </div>
+          <div className="asset-detail__field">
+            <dt>已折旧月数</dt>
+            <dd>{summary.elapsed_months} 个月</dd>
+          </div>
+          <div className="asset-detail__field">
+            <dt>剩余月数</dt>
+            <dd>{summary.remaining_months} 个月</dd>
+          </div>
+        </dl>
+        <p className="asset-detail__record-note">
+          当前结果为直线法折旧试算，不会修改资产原值，也不会生成会计凭证。
+          {summary.is_fully_depreciated ? '该资产已完成预计折旧。' : ''}
+        </p>
+      </SectionPanel>
+    </div>
+  )
+}
+
 function BasicInformation({
   asset,
   showAmount,
@@ -1141,6 +1386,8 @@ function AssetDetailContent({ asset }: { asset: AssetDetailRecord }) {
     children:
       tab.key === 'basic' ? (
         <BasicInformation asset={asset} showAmount={showAmount} />
+      ) : tab.key === 'finance' ? (
+        <FinancialSummaryTab asset={asset} showAmount={showAmount} />
       ) : tab.key === 'attachments' ? (
         <AttachmentsTab assetId={asset.id} />
       ) : tab.key === 'relations' ? (
@@ -1148,9 +1395,9 @@ function AssetDetailContent({ asset }: { asset: AssetDetailRecord }) {
       ) : tab.key === 'history' ? (
         <LifecycleTab {...lifecycleProps} />
       ) : tab.key === 'repairs' ? (
-        <LifecycleCategoryTab {...lifecycleProps} category="repairs" showAmount={showAmount} />
+        <RepairRecordsTab assetId={asset.id} showAmount={showAmount} />
       ) : tab.key === 'scrap' ? (
-        <LifecycleCategoryTab {...lifecycleProps} category="scrap" showAmount={showAmount} />
+        <ScrapRecordsTab assetId={asset.id} showAmount={showAmount} />
       ) : tab.key === 'inventory' ? (
         <InventoryRecordsTab {...relatedProps} records={relatedQuery.data?.inventory_records} />
       ) : (
@@ -1200,6 +1447,7 @@ export default function AssetDetail() {
   const { t } = useTranslation()
   const { assetId: assetIdParam } = useParams()
   const assetId = parseAssetId(assetIdParam)
+  const isScannedCode = assetId === null
   const query = useQuery({
     queryKey: ['assets', 'detail', assetId],
     queryFn: () =>
@@ -1208,7 +1456,11 @@ export default function AssetDetail() {
     retry: false,
   })
 
-  if (assetId === null) return <DetailPageState message={t('assets.detail.notFound')} />
+  if (isScannedCode) {
+    return (
+      <Navigate replace to={`/scan-use?asset_code=${encodeURIComponent(assetIdParam ?? '')}`} />
+    )
+  }
   if (query.isLoading) return <AssetDetailSkeleton />
   if (query.isError) {
     if (isAssetNotFoundError(query.error)) {

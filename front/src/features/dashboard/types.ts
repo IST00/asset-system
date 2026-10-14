@@ -29,7 +29,7 @@ export interface CategoryDistribution {
 export type DistributionTone = 'brand' | 'success' | 'warning' | 'danger' | 'purple' | 'slate'
 
 export interface StatusDistribution {
-  key: 'idle' | 'inUse' | 'repairing' | 'pendingScrap' | 'scrapped'
+  key: 'idle' | 'pendingReceipt' | 'inUse' | 'repairing' | 'pendingScrap' | 'scrapped'
   value: number
   tone: DistributionTone
 }

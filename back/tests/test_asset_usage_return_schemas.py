@@ -41,8 +41,10 @@ from app.models.mixins import utc_now
 from app.operations.registry import OperationHandlerRegistry
 from app.schemas.asset_usage_return import (
     MockFeishuActionSchema,
+    PersonalBorrowCreateSchema,
     PersonalReturnCreateSchema,
     PersonalUsageCreateSchema,
+    PublicBorrowCreateSchema,
     PublicReturnCreateSchema,
     PublicUsageCreateSchema,
     ReturnConfirmSchema,
@@ -137,6 +139,42 @@ def test_strict_integer_fields_reject_strings_and_booleans(
         schema.load(payload)
 
 
+def test_borrow_schemas_require_concrete_assets_and_return_time() -> None:
+    with pytest.raises(ValidationError):
+        PersonalBorrowCreateSchema().load(
+            {"target_user_id": 1, "expected_return_at": "2026-09-10T09:00:00Z"}
+        )
+    with pytest.raises(ValidationError):
+        PublicBorrowCreateSchema().load(
+            {
+                "asset_ids": [1],
+                "public_object_id": 2,
+                "location_id": 3,
+            }
+        )
+
+
+def test_borrow_schemas_parse_utc_return_time() -> None:
+    personal = PersonalBorrowCreateSchema().load(
+        {
+            "asset_ids": [1],
+            "target_user_id": 2,
+            "expected_return_at": "2026-09-10T09:00:00+08:00",
+        }
+    )
+    public = PublicBorrowCreateSchema().load(
+        {
+            "asset_ids": [1],
+            "public_object_id": 2,
+            "location_id": 3,
+            "expected_return_at": "2026-09-10T01:00:00Z",
+        }
+    )
+
+    assert personal["expected_return_at"].isoformat() == "2026-09-10T01:00:00+00:00"
+    assert public["expected_return_at"].isoformat() == "2026-09-10T01:00:00+00:00"
+
+
 def test_asset_ids_reject_more_than_one_hundred_items() -> None:
     with pytest.raises(ValidationError) as error:
         PersonalReturnCreateSchema().load({"asset_ids": list(range(101))})
@@ -186,7 +224,7 @@ def test_all_create_schemas_reject_duplicate_asset_ids(schema: Schema) -> None:
         payload.update(public_object_id=1, location_id=1)
     elif isinstance(schema, PublicReturnCreateSchema):
         payload.update(
-            return_location_id=1,
+            **_return_destination_fields(),
             items=[{"asset_id": 7, "condition": "NORMAL"}],
         )
 
@@ -204,7 +242,7 @@ def test_personal_return_rejects_holder_override() -> None:
 @pytest.mark.parametrize("schema", [PublicReturnCreateSchema(), ReturnConfirmSchema()])
 def test_return_schemas_reject_duplicate_inspection_asset_ids(schema: Schema) -> None:
     payload = {
-        "return_location_id": 1,
+        **_return_destination_fields(),
         "items": [
             {"asset_id": 7, "condition": "NORMAL"},
             {
@@ -233,7 +271,10 @@ def test_return_items_require_between_one_and_one_hundred_entries(
     schema: Schema,
     items: list[dict[str, Any]],
 ) -> None:
-    payload: dict[str, Any] = {"return_location_id": 1, "items": items}
+    payload: dict[str, Any] = {
+        **_return_destination_fields(),
+        "items": items,
+    }
     if isinstance(schema, PublicReturnCreateSchema):
         payload["asset_ids"] = [1]
 
@@ -249,13 +290,21 @@ def test_return_items_require_between_one_and_one_hundred_entries(
         (
             PublicReturnCreateSchema(),
             {
+                "return_company_id": 1,
+                "return_usage_company_id": 1,
+                "return_region_id": 1,
                 "asset_ids": [1],
                 "items": [{"asset_id": 1, "condition": "NORMAL"}],
             },
         ),
         (
             ReturnConfirmSchema(),
-            {"items": [{"asset_id": 1, "condition": "NORMAL"}]},
+            {
+                "return_company_id": 1,
+                "return_usage_company_id": 1,
+                "return_region_id": 1,
+                "items": [{"asset_id": 1, "condition": "NORMAL"}],
+            },
         ),
     ],
 )
@@ -274,7 +323,7 @@ def test_return_confirm_accepts_idempotency_key_boundaries(
 ) -> None:
     loaded = ReturnConfirmSchema().load(
         {
-            "return_location_id": 1,
+            **_return_destination_fields(),
             "items": [{"asset_id": 1, "condition": "NORMAL"}],
             "idempotency_key": idempotency_key,
         }
@@ -290,7 +339,7 @@ def test_return_confirm_rejects_invalid_idempotency_key_lengths(
     with pytest.raises(ValidationError) as error:
         ReturnConfirmSchema().load(
             {
-                "return_location_id": 1,
+                **_return_destination_fields(),
                 "items": [{"asset_id": 1, "condition": "NORMAL"}],
                 "idempotency_key": idempotency_key,
             }
@@ -299,11 +348,20 @@ def test_return_confirm_rejects_invalid_idempotency_key_lengths(
     assert "idempotency_key" in error.value.messages
 
 
+def _return_destination_fields(location_id: int = 1) -> dict[str, int]:
+    return {
+        "return_company_id": location_id,
+        "return_usage_company_id": location_id,
+        "return_region_id": location_id,
+        "return_location_id": location_id,
+    }
+
+
 def _payload_with_idempotency_key(schema: Schema, key: str) -> dict[str, Any]:
     if isinstance(schema, PersonalReturnCreateSchema):
         return {"asset_ids": [1], "idempotency_key": key}
     return {
-        "return_location_id": 1,
+        **_return_destination_fields(),
         "items": [{"asset_id": 1, "condition": "NORMAL"}],
         "idempotency_key": key,
     }
@@ -354,7 +412,7 @@ def test_create_schema_accepts_one_hundred_assets_and_191_char_key() -> None:
 def test_return_confirm_accepts_one_hundred_inspection_items() -> None:
     loaded = ReturnConfirmSchema().load(
         {
-            "return_location_id": 1,
+            **_return_destination_fields(),
             "items": [
                 {"asset_id": asset_id, "condition": "NORMAL"}
                 for asset_id in range(1, 101)
@@ -508,7 +566,7 @@ def test_usage_return_page_query_rejects_invalid_lower_bounds(
         (
             ReturnConfirmSchema(),
             {
-                "return_location_id": 1,
+                **_return_destination_fields(),
                 "items": [{"asset_id": 1, "condition": "NORMAL", "unexpected": True}],
             },
             "items",
@@ -572,7 +630,7 @@ def test_nested_inspection_rejects_non_mapping_values_without_raw_errors(
     item: object,
 ) -> None:
     with pytest.raises(ValidationError):
-        ReturnConfirmSchema().load({"return_location_id": 1, "items": [item]})
+        ReturnConfirmSchema().load({**_return_destination_fields(), "items": [item]})
 
 
 def test_expand_assets_adds_direct_child_and_rejects_child_only(app) -> None:
@@ -836,24 +894,28 @@ def test_public_asset_validation_isolates_each_required_predicate(
 
 
 @pytest.mark.parametrize(
-    "mutate",
+    ("mutate", "message"),
     [
-        lambda context: setattr(context.employee, "enabled", False),
-        lambda context: setattr(context.employee, "organization_id", None),
-        lambda context: setattr(
-            context.organization, "status", RecordStatus.DISABLED.value
+        (lambda context: setattr(context.employee, "enabled", False), "用户已停用"),
+        (
+            lambda context: setattr(
+                context.organization, "status", RecordStatus.DISABLED.value
+            ),
+            "所属组织已停用",
         ),
     ],
 )
-def test_personal_target_requires_enabled_user_and_department(
-    app, mutate: Callable[[Any], None]
+def test_personal_target_reports_each_validation_failure(
+    app, mutate: Callable[[Any], None], message: str
 ) -> None:
     context = seed_usage_return_context()
     mutate(context)
     db.session.flush()
 
-    with pytest.raises(BusinessException):
+    with pytest.raises(BusinessException) as error:
         require_personal_target(context.employee.id)
+
+    assert error.value.message == message
 
 
 def test_personal_target_accepts_enabled_user_with_enabled_department(app) -> None:
@@ -865,8 +927,10 @@ def test_personal_target_accepts_enabled_user_with_enabled_department(app) -> No
 def test_personal_target_rejects_missing_user(app) -> None:
     context = seed_usage_return_context()
 
-    with pytest.raises(BusinessException):
+    with pytest.raises(BusinessException) as error:
         require_personal_target(context.employee.id + 1000)
+
+    assert error.value.message == "用户不存在"
 
 
 def test_public_target_rejects_missing_and_disabled_object(app) -> None:

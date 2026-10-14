@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import importlib
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import ModuleType
 from typing import Any
 
@@ -26,6 +26,7 @@ from app.enums import (
 )
 from app.extensions import db
 from app.models import (
+    ApprovalTask,
     Asset,
     AssetBusinessLock,
     AssetLifecycleRecord,
@@ -79,7 +80,42 @@ def _register_usage_handlers() -> ModuleType:
 
 
 def _grant_usage(context: UsageReturnContext) -> None:
-    grant_permissions(context.manager, "asset:usage:manage")
+    grant_permissions(
+        context.manager,
+        "asset:usage:manage",
+        "approval:task:view",
+        "approval:task:approve",
+    )
+
+
+def _submit_personal_auto_for_handler_test(
+    payload: dict[str, Any],
+    actor_id: int,
+) -> dict[str, Any]:
+    """Build a legacy auto-execution request only for isolated handler tests."""
+    result = _usage_service().submit_personal(payload, actor_id)
+    operation = db.session.get(OperationRequest, result["id"])
+    detail = (
+        db.session.query(AssetUsageRequest)
+        .filter_by(operation_request_id=result["id"])
+        .one()
+    )
+    assert operation is not None
+    task = db.session.scalar(
+        db.select(ApprovalTask).where(
+            ApprovalTask.approver_id == actor_id,
+            ApprovalTask.status == "PENDING",
+        )
+    )
+    assert task is not None
+    operation.approval_channel = ApprovalChannel.FEISHU.value
+    operation.external_instance_id = f"LOCAL-FEISHU-{operation.id}"
+    operation.approval_execution_mode = ApprovalExecutionMode.AUTO_ON_APPROVAL.value
+    detail.fulfillment_status = "COMPLETED"
+    db.session.commit()
+    result["approval_execution_mode"] = ApprovalExecutionMode.AUTO_ON_APPROVAL.value
+    result["external_instance_id"] = f"LOCAL-FEISHU-{operation.id}"
+    return result
 
 
 def _personal_payload(
@@ -577,6 +613,16 @@ def test_usage_query_recursively_filters_amount_keys_present_in_snapshot_json(
         "assets",
         "feature",
         "allowed_actions",
+        "fulfillment_status",
+        "issued_by",
+        "issued_at",
+        "issue_remark",
+        "signed_by",
+        "signed_at",
+        "sign_remark",
+        "return_requested_by",
+        "return_requested_at",
+        "return_request_reason",
     }
     assert result.items == [detail]
     asset_detail = next(
@@ -640,6 +686,45 @@ def test_usage_handlers_expose_exact_safe_failure_messages() -> None:
     )
 
 
+def test_personal_borrow_tracks_return_deadline_and_uses_utc_serialization(app) -> None:
+    context = seed_usage_return_context()
+    _grant_usage(context)
+    expected_return_at = datetime.now(timezone.utc) + timedelta(days=7)
+
+    result = _usage_service().submit_personal_borrow(
+        {
+            **_personal_payload(context),
+            "expected_return_at": expected_return_at,
+        },
+        context.manager.id,
+    )
+
+    assert result["operation_type"] == OperationType.PERSONAL_USE.value
+    assert result["feature"]["usage_mode"] == "BORROW"
+    assert result["feature"]["expected_return_at"].endswith("Z")
+    assert result["feature"]["is_overdue"] is False
+    detail = db.session.query(AssetUsageRequest).one()
+    assert detail.usage_mode == "BORROW"
+    assert detail.expected_return_at is not None
+
+
+def test_borrow_rejects_past_deadline_without_creating_request(app) -> None:
+    context = seed_usage_return_context()
+    _grant_usage(context)
+
+    with pytest.raises(BusinessException, match="晚于当前时间"):
+        _usage_service().submit_personal_borrow(
+            {
+                **_personal_payload(context),
+                "expected_return_at": datetime.now(timezone.utc) - timedelta(minutes=1),
+            },
+            context.manager.id,
+        )
+
+    assert db.session.query(OperationRequest).count() == 0
+    assert db.session.query(AssetUsageRequest).count() == 0
+
+
 def test_personal_usage_submit_expands_child_and_retains_each_location(app) -> None:
     context = seed_usage_return_context()
     context.child_asset.location_id = context.return_location.id
@@ -651,14 +736,13 @@ def test_personal_usage_submit_expands_child_and_retains_each_location(app) -> N
     )
 
     assert result["operation_type"] == OperationType.PERSONAL_USE.value
-    assert result["approval_channel"] == ApprovalChannel.FEISHU.value
+    assert result["approval_channel"] == ApprovalChannel.INTERNAL.value
     assert (
-        result["approval_execution_mode"]
-        == ApprovalExecutionMode.AUTO_ON_APPROVAL.value
+        result["approval_execution_mode"] == ApprovalExecutionMode.MANUAL_CONFIRM.value
     )
     assert result["approval_status"] == ApprovalStatus.PENDING.value
     assert result["execution_status"] == ExecutionStatus.NOT_STARTED.value
-    assert result["external_instance_id"] == f"LOCAL-FEISHU-{result['id']}"
+    assert result["external_instance_id"] is None
     assert result["feature"] == {
         "target_user_id": context.employee.id,
         "target_user_snapshot": {
@@ -863,7 +947,7 @@ def test_personal_usage_replays_trimmed_key_before_mutable_validation(app) -> No
     assert replayed == created
     operation = db.session.query(OperationRequest).one()
     assert operation.idempotency_key == "personal-replay"
-    assert operation.external_instance_id == f"LOCAL-FEISHU-{operation.id}"
+    assert operation.external_instance_id is None
     assert db.session.query(OperationRequest).count() == 1
     assert db.session.query(AssetUsageRequest).count() == 1
     assert db.session.query(OperationRequestAsset).count() == 2
@@ -988,7 +1072,7 @@ def test_personal_approval_executes_batch_once_and_releases_locks(app) -> None:
     context.child_asset.location_id = context.return_location.id
     _grant_usage(context)
     _register_usage_handlers()
-    submitted = _usage_service().submit_personal(
+    submitted = _submit_personal_auto_for_handler_test(
         _personal_payload(context),
         context.manager.id,
     )
@@ -1061,8 +1145,7 @@ def test_personal_callback_replay_resumes_after_approval_commit_crash(
     context = seed_usage_return_context()
     _grant_usage(context)
     _register_usage_handlers()
-    service = _usage_service()
-    submitted = service.submit_personal(
+    submitted = _submit_personal_auto_for_handler_test(
         _personal_payload(context),
         context.manager.id,
     )
@@ -1155,7 +1238,7 @@ def test_callback_event_cannot_resume_another_operation(
     context = seed_usage_return_context()
     _grant_usage(context)
     _register_usage_handlers()
-    submitted_a = _usage_service().submit_personal(
+    submitted_a = _submit_personal_auto_for_handler_test(
         _personal_payload(context),
         context.manager.id,
     )
@@ -1236,7 +1319,7 @@ def test_personal_rejection_releases_locks_without_execution(app) -> None:
     context.child_asset.location_id = context.return_location.id
     _grant_usage(context)
     _register_usage_handlers()
-    submitted = _usage_service().submit_personal(
+    submitted = _submit_personal_auto_for_handler_test(
         _personal_payload(context),
         context.manager.id,
     )
@@ -1282,7 +1365,7 @@ def test_personal_execution_revalidates_current_target_state(
         context.child_asset.location_id = context.return_location.id
     _grant_usage(context)
     _register_usage_handlers()
-    submitted = _usage_service().submit_personal(
+    submitted = _submit_personal_auto_for_handler_test(
         _personal_payload(context),
         context.manager.id,
     )
@@ -1640,7 +1723,7 @@ def test_personal_handler_validation_failure_preserves_batch_and_locks(
     context = seed_usage_return_context()
     _grant_usage(context)
     _register_usage_handlers()
-    submitted = _usage_service().submit_personal(
+    submitted = _submit_personal_auto_for_handler_test(
         _personal_payload(context),
         context.manager.id,
     )
@@ -1701,7 +1784,7 @@ def test_usage_handler_rejects_corrupt_snapshot_and_audit_data(
     context = seed_usage_return_context()
     _grant_usage(context)
     _register_usage_handlers()
-    submitted = _usage_service().submit_personal(
+    submitted = _submit_personal_auto_for_handler_test(
         _personal_payload(context),
         context.manager.id,
     )
@@ -1757,7 +1840,7 @@ def test_usage_handler_rejects_boolean_value_for_integer_target_id(app) -> None:
     assert context.manager.id == 1
     _grant_usage(context)
     _register_usage_handlers()
-    submitted = _usage_service().submit_personal(
+    submitted = _submit_personal_auto_for_handler_test(
         {
             "asset_ids": [context.main_asset.id],
             "target_user_id": context.manager.id,
@@ -1814,7 +1897,7 @@ def test_usage_generic_retry_rejects_tampered_feature_snapshot(
     context = seed_usage_return_context()
     _grant_usage(context)
     _register_usage_handlers()
-    submitted = _usage_service().submit_personal(
+    submitted = _submit_personal_auto_for_handler_test(
         _personal_payload(context),
         context.manager.id,
     )
@@ -1879,7 +1962,7 @@ def test_usage_handler_cas_conflict_rolls_back_whole_batch(
     context = seed_usage_return_context()
     _grant_usage(context)
     _register_usage_handlers()
-    submitted = _usage_service().submit_personal(
+    submitted = _submit_personal_auto_for_handler_test(
         _personal_payload(context),
         context.manager.id,
     )

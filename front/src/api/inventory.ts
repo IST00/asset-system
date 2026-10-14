@@ -134,7 +134,7 @@ export interface CreateInventoryTaskPayload {
   category_ids: number[]
   holder_user_ids: number[]
   manager_user_ids: number[]
-  asset_statuses: Array<'IDLE' | 'IN_USE' | 'REPAIRING'>
+  asset_statuses: Array<'IDLE' | 'PENDING_RECEIPT' | 'IN_USE' | 'REPAIRING'>
   public_responsible_user_id?: number
   photo_source_mode: 'CAMERA_ONLY' | 'CAMERA_OR_ALBUM'
   min_photo_count: 1 | 2 | 3
@@ -214,6 +214,7 @@ export const inventoryApi = {
     http.get<unknown, InventoryItemPage>(`/inventory/tasks/${taskId}/items`, {
       params: { page: 0, size: 500, status },
     }),
+  myPendingItems: () => http.get<unknown, InventoryItem[]>('/inventory/my-pending-items'),
   scan: (taskId: number, scannedValue: string) =>
     http.post<unknown, InventoryScanResult>(`/inventory/tasks/${taskId}/scan`, {
       scanned_value: scannedValue,

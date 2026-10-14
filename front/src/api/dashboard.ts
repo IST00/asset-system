@@ -28,7 +28,7 @@ export interface DashboardCategoryResponse {
 }
 
 export interface DashboardStatusResponse {
-  status: 'IDLE' | 'IN_USE' | 'REPAIRING' | 'SCRAPPED'
+  status: 'IDLE' | 'PENDING_RECEIPT' | 'IN_USE' | 'REPAIRING' | 'SCRAPPED'
   value: number
 }
 

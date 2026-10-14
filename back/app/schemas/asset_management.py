@@ -1,6 +1,14 @@
 """Asset maintenance, relation and lifecycle command schemas."""
 
-from marshmallow import Schema, ValidationError, fields, validate, validates_schema
+from app.enums import AssetStatus, UsageType
+from marshmallow import (
+    Schema,
+    ValidationError,
+    fields,
+    pre_load,
+    validate,
+    validates_schema,
+)
 
 
 class AssetChangeFieldsSchema(Schema):
@@ -17,6 +25,23 @@ class AssetChangeFieldsSchema(Schema):
         required=False, strict=True, validate=validate.Range(min=1, max=1200)
     )
     manager_id = fields.Integer(required=False, strict=True)
+    status = fields.String(
+        required=False,
+        validate=validate.OneOf([item.value for item in AssetStatus]),
+    )
+    usage_type = fields.String(
+        required=False,
+        allow_none=True,
+        validate=validate.OneOf([item.value for item in UsageType]),
+    )
+    holder_user_id = fields.Integer(required=False, allow_none=True, strict=True)
+    public_object_id = fields.Integer(required=False, allow_none=True, strict=True)
+    usage_company_id = fields.Integer(required=False, strict=True)
+    usage_department_id = fields.Integer(
+        required=False,
+        allow_none=True,
+        strict=True,
+    )
     source_id = fields.Integer(required=False, allow_none=True, strict=True)
     location_id = fields.Integer(required=False, allow_none=True, strict=True)
     specification_model = fields.String(
@@ -91,6 +116,10 @@ class UpdatePublicUsageObjectSchema(Schema):
             raise ValidationError("至少修改一个字段")
 
 
+class FinancialSummaryQuerySchema(Schema):
+    as_of = fields.Date(required=False)
+
+
 class LifecycleAssetTargetSchema(Schema):
     asset_id = fields.Integer(required=True, strict=True)
     version = fields.Integer(required=True, strict=True, validate=validate.Range(min=1))
@@ -103,6 +132,12 @@ class TransferAssetsSchema(Schema):
         validate=validate.Length(min=1, max=100),
     )
     organization_id = fields.Integer(required=False, strict=True)
+    usage_company_id = fields.Integer(required=False, strict=True)
+    usage_department_id = fields.Integer(
+        required=False,
+        allow_none=True,
+        strict=True,
+    )
     location_id = fields.Integer(required=False, strict=True)
     manager_id = fields.Integer(required=False, strict=True)
     holder_user_id = fields.Integer(required=False, allow_none=True, strict=True)
@@ -113,6 +148,8 @@ class TransferAssetsSchema(Schema):
     def require_target(self, data: dict, **_kwargs) -> None:
         target_fields = {
             "organization_id",
+            "usage_company_id",
+            "usage_department_id",
             "location_id",
             "manager_id",
             "holder_user_id",
@@ -162,33 +199,119 @@ class RepairCompleteSchema(Schema):
     result = fields.String(required=True, validate=validate.Length(min=2, max=500))
 
 
-class ScrapAssetsSchema(Schema):
-    items = fields.List(
-        fields.Nested(LifecycleAssetTargetSchema),
-        required=True,
-        validate=validate.Length(min=1, max=100),
-    )
-    scrap_date = fields.Date(required=True)
+class ScrapAssetItemSchema(LifecycleAssetTargetSchema):
     scrap_amount = fields.Decimal(
         required=True,
         as_string=True,
         places=2,
         validate=validate.Range(min=0),
     )
+    disposition = fields.String(
+        required=False,
+        allow_none=True,
+        load_default=None,
+        validate=validate.Length(max=255),
+    )
+    disposition_remark = fields.String(
+        required=False,
+        allow_none=True,
+        load_default=None,
+        validate=validate.Length(max=1000),
+    )
+    disposal_date = fields.Date(required=True)
+
+
+class ScrapAssetsSchema(Schema):
+    items = fields.List(
+        fields.Nested(ScrapAssetItemSchema),
+        required=True,
+        validate=validate.Length(min=1, max=100),
+    )
     child_action = fields.String(
         load_default="BLOCK", validate=validate.OneOf(["BLOCK", "DETACH", "SCRAP"])
     )
     reason = fields.String(required=True, validate=validate.Length(min=2, max=500))
+    # Legacy batch-wide fields remain load-only for one compatibility cycle.
+    scrap_date = fields.Date(required=False, load_only=True)
+    scrap_amount = fields.Decimal(
+        required=False,
+        as_string=True,
+        places=2,
+        validate=validate.Range(min=0),
+        load_only=True,
+    )
+    disposition = fields.String(
+        required=False,
+        allow_none=True,
+        validate=validate.Length(max=255),
+        load_only=True,
+    )
+
+    @pre_load
+    def distribute_legacy_values(self, data: dict, **_kwargs) -> dict:
+        normalized = dict(data)
+        items = normalized.get("items")
+        if not isinstance(items, list):
+            return normalized
+        legacy_date = normalized.get("scrap_date")
+        legacy_amount = normalized.get("scrap_amount")
+        legacy_disposition = normalized.get("disposition")
+        normalized["items"] = [
+            {
+                **item,
+                **(
+                    {"disposal_date": legacy_date}
+                    if isinstance(item, dict)
+                    and "disposal_date" not in item
+                    and legacy_date is not None
+                    else {}
+                ),
+                **(
+                    {"scrap_amount": legacy_amount}
+                    if isinstance(item, dict)
+                    and "scrap_amount" not in item
+                    and legacy_amount is not None
+                    else {}
+                ),
+                **(
+                    {"disposition": legacy_disposition}
+                    if isinstance(item, dict)
+                    and "disposition" not in item
+                    and legacy_disposition is not None
+                    else {}
+                ),
+            }
+            if isinstance(item, dict)
+            else item
+            for item in items
+        ]
+        return normalized
 
 
 __all__ = [
     "BatchUpdateAssetRequestSchema",
     "CreatePublicUsageObjectSchema",
+    "FinancialSummaryQuerySchema",
     "RelationRequestSchema",
     "RepairCompleteSchema",
     "RepairStartSchema",
+    "ScrapAssetItemSchema",
     "ScrapAssetsSchema",
     "TransferAssetsSchema",
     "UpdateAssetRequestSchema",
     "UpdatePublicUsageObjectSchema",
 ]
+
+
+class TransferHandoverSchema(Schema):
+    items = fields.List(
+        fields.Nested(LifecycleAssetTargetSchema),
+        required=True,
+        validate=validate.Length(min=1, max=100),
+    )
+    receiver_user_id = fields.Integer(required=True, strict=True)
+    outgoing_user_id = fields.Integer(required=False, allow_none=True, strict=True)
+    organization_id = fields.Integer(required=False, strict=True)
+    location_id = fields.Integer(required=False, strict=True)
+    manager_id = fields.Integer(required=False, strict=True)
+    reason = fields.String(required=True, validate=validate.Length(min=2, max=500))

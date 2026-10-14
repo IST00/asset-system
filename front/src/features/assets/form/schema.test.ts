@@ -5,6 +5,8 @@ import { assetFormSchema, getAssetFormMode } from './schema.ts'
 const valid = {
   asset_name: 'MacBook Pro',
   company_name: '总部',
+  usage_company_name: '上海公司',
+  usage_department_name: '研发部',
   category_name: '电脑设备',
   source_name: '采购',
   unit_name: '台',

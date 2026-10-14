@@ -28,6 +28,7 @@ import { navigationEntries } from '@/config/navigation'
 import { filterNavigation } from '@/config/navigationModel'
 import type { NavigationEntry } from '@/config/navigationModel'
 import { useAuthStore } from '@/store/auth'
+import { roleCodeLabel } from '@/utils/displayLabels'
 import './AppShell.css'
 
 const iconMap: Record<string, LucideIcon> = {
@@ -69,6 +70,7 @@ export default function AppShell() {
   })
 
   const permissions = useMemo(() => new Set(user?.permissions ?? []), [user?.permissions])
+  const canViewSettings = permissions.has('system:user:view')
   const visibleEntries = useMemo(
     () => filterNavigation(navigationEntries, permissions),
     [permissions],
@@ -166,28 +168,30 @@ export default function AppShell() {
         </nav>
 
         <div className="asset-shell__rail-footer">
-          <Tooltip
-            title={t('nav.settings')}
-            placement="right"
-            mouseEnterDelay={0.35}
-            mouseLeaveDelay={0}
-            arrow={false}
-            classNames={{ root: 'asset-shell__rail-tooltip' }}
-          >
-            <button
-              type="button"
-              className={
-                location.pathname.startsWith('/settings')
-                  ? 'asset-shell__rail-button asset-shell__rail-button--active'
-                  : 'asset-shell__rail-button'
-              }
-              aria-label={t('nav.settings')}
-              aria-current={location.pathname.startsWith('/settings') ? 'page' : undefined}
-              onClick={() => navigate('/settings')}
+          {canViewSettings ? (
+            <Tooltip
+              title={t('nav.settings')}
+              placement="right"
+              mouseEnterDelay={0.35}
+              mouseLeaveDelay={0}
+              arrow={false}
+              classNames={{ root: 'asset-shell__rail-tooltip' }}
             >
-              <Settings aria-hidden="true" size={20} strokeWidth={1.8} />
-            </button>
-          </Tooltip>
+              <button
+                type="button"
+                className={
+                  location.pathname.startsWith('/settings')
+                    ? 'asset-shell__rail-button asset-shell__rail-button--active'
+                    : 'asset-shell__rail-button'
+                }
+                aria-label={t('nav.settings')}
+                aria-current={location.pathname.startsWith('/settings') ? 'page' : undefined}
+                onClick={() => navigate('/settings')}
+              >
+                <Settings aria-hidden="true" size={20} strokeWidth={1.8} />
+              </button>
+            </Tooltip>
+          ) : null}
           <Dropdown menu={accountMenu} placement="topLeft" trigger={['click']}>
             <button
               type="button"
@@ -272,7 +276,11 @@ export default function AppShell() {
           <Avatar size={44}>{(user?.nickname || user?.username || 'A').slice(0, 1)}</Avatar>
           <div>
             <strong>{user?.nickname || user?.username || 'admin'}</strong>
-            <span>{user?.role || t('nav.profile')}</span>
+            <span>
+              {user?.role || user?.roles?.[0]
+                ? roleCodeLabel(user.role ?? user.roles?.[0])
+                : t('nav.profile')}
+            </span>
           </div>
         </div>
         <div className="asset-shell__drawer-nav">
@@ -288,16 +296,18 @@ export default function AppShell() {
               {entry.disabled ? <small>{t('common.comingSoon')}</small> : null}
             </button>
           ))}
-          <button
-            type="button"
-            onClick={() => {
-              navigate('/settings')
-              setDrawerOpen(false)
-            }}
-          >
-            <Settings aria-hidden="true" size={18} />
-            <span>{t('nav.settings')}</span>
-          </button>
+          {canViewSettings ? (
+            <button
+              type="button"
+              onClick={() => {
+                navigate('/settings')
+                setDrawerOpen(false)
+              }}
+            >
+              <Settings aria-hidden="true" size={18} />
+              <span>{t('nav.settings')}</span>
+            </button>
+          ) : null}
         </div>
         <button type="button" className="asset-shell__drawer-logout" onClick={handleLogout}>
           <LogOut aria-hidden="true" size={18} />

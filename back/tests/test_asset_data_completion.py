@@ -281,6 +281,8 @@ def test_repository_completion_cas_is_narrow_and_null_guarded(app) -> None:
         "holder_user_id",
         "public_object_id",
         "usage_department_id",
+        "organization_id",
+        "usage_company_id",
         "location_id",
     }
 

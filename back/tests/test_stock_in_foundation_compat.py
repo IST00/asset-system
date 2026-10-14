@@ -128,6 +128,7 @@ def test_stock_in_http_contract_survives_operation_foundation(client) -> None:
             "remark": "底座兼容性测试",
             "items": [
                 {
+                    "usage_company_id": context["organization"].id,
                     "asset_name": "兼容性资产",
                     "category_id": context["category"].id,
                     "unit_id": context["unit"].id,

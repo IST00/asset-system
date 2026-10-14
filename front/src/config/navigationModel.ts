@@ -4,6 +4,8 @@ export interface NavigationEntry {
   path: string
   icon: string
   mobile?: boolean
+  mobilePermission?: string
+  mobileUnlessPermission?: string
   permission?: string
   disabled?: boolean
 }
@@ -14,7 +16,12 @@ export function filterNavigation(
   mobileOnly = false,
 ): NavigationEntry[] {
   return entries.filter((entry) => {
-    if (mobileOnly && !entry.mobile) return false
-    return !entry.permission || permissions.has(entry.permission)
+    if (!mobileOnly) return !entry.permission || permissions.has(entry.permission)
+
+    const mobileCapability =
+      entry.mobilePermission === undefined || permissions.has(entry.mobilePermission)
+    const mobileRestriction =
+      entry.mobileUnlessPermission === undefined || !permissions.has(entry.mobileUnlessPermission)
+    return mobileCapability && mobileRestriction && Boolean(entry.mobile)
   })
 }

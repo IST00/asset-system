@@ -79,6 +79,9 @@ def _serialize_item(item: StockInItem, include_amount: bool) -> dict[str, Any]:
         "manager_id": item.manager_id,
         "source_id": item.source_id,
         "location_id": item.location_id,
+        "usage_company_id": item.usage_company_id,
+        "usage_department_id": item.usage_department_id,
+        "holder_user_id": item.holder_user_id,
         "specification_model": item.specification_model,
         "serial_number": item.serial_number,
         "receipt_no": item.receipt_no,
@@ -143,6 +146,18 @@ def _validate_item(
     master_data_service.require_enabled_unit(item["unit_id"])
     master_data_service.require_enabled_source(item["source_id"])
     master_data_service.require_selectable_location(item["location_id"])
+    organization_service.require_enabled(item["usage_company_id"])
+    if item.get("usage_department_id") is not None:
+        organization_service.require_enabled(item["usage_department_id"])
+    holder = None
+    if item.get("holder_user_id") is not None:
+        holder = rbac_repository.find_user(item["holder_user_id"])
+        if holder is None:
+            raise BusinessException("资产使用人不存在")
+        if not holder.enabled:
+            raise BusinessException("资产使用人已停用")
+        if holder.organization_id is None:
+            raise BusinessException("资产使用人未归属部门，请先维护用户组织")
     supplier = None
     if item.get("supplier_id") is not None:
         supplier = supplier_service.require_enabled_supplier(item["supplier_id"])
@@ -188,6 +203,12 @@ def _validate_item(
     normalized["normalized_serial"] = normalized_serial
     normalized["rfid_tag"] = rfid_tag
     normalized["supplier_id"] = supplier.id if supplier is not None else None
+    normalized["holder_user_id"] = holder.id if holder is not None else None
+    normalized["usage_department_id"] = (
+        holder.organization_id
+        if holder is not None
+        else item.get("usage_department_id")
+    )
     normalized["supplier_snapshot"] = (
         {"id": supplier.id, "code": supplier.code, "name": supplier.name}
         if supplier is not None
@@ -359,6 +380,9 @@ def submit(
                 manager_id=item["manager_id"],
                 source_id=item["source_id"],
                 location_id=item["location_id"],
+                usage_company_id=item["usage_company_id"],
+                usage_department_id=item.get("usage_department_id"),
+                holder_user_id=item.get("holder_user_id"),
                 specification_model=item.get("specification_model"),
                 serial_number=item["serial_number"],
                 normalized_serial=item["normalized_serial"],

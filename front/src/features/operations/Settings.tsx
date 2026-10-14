@@ -1,5 +1,5 @@
-import { Button, Spin } from 'antd'
-import { useQuery } from '@tanstack/react-query'
+import { App, Button, Spin } from 'antd'
+import { useMutation, useQuery } from '@tanstack/react-query'
 import {
   Bot,
   Clock3,
@@ -10,6 +10,7 @@ import {
   Settings as SettingsIcon,
   ShieldCheck,
 } from 'lucide-react'
+import { feishuApi } from '@/api/feishu'
 import { systemApi } from '@/api/system'
 import StatePanel from '@/components/ui/StatePanel'
 import { formatBeijingDateTime } from '@/utils/dateTime'
@@ -37,12 +38,23 @@ const feishuLabel = {
 } as const
 
 export default function Settings() {
+  const { message } = App.useApp()
   const query = useQuery({
     queryKey: ['system-status'],
     queryFn: systemApi.status,
     refetchInterval: 60_000,
   })
   const status = query.data
+  const syncFeishu = useMutation({
+    mutationFn: feishuApi.syncAll,
+    onSuccess: (result) => {
+      message.success(
+        `飞书同步完成：${result.departments ?? 0} 个部门、${result.users ?? 0} 个用户`,
+      )
+      void query.refetch()
+    },
+    onError: () => message.error('飞书同步失败，请检查正式配置与权限'),
+  })
   const configuredCount = status
     ? [
         status.feishu.formal_configured,
@@ -199,6 +211,22 @@ export default function Settings() {
                           : 'slate'
                     }
                   />
+                </div>
+                <div className="operations-setting">
+                  <span className="operations-setting__icon">
+                    <RefreshCw size={18} />
+                  </span>
+                  <div className="operations-setting__content">
+                    <strong>飞书组织同步</strong>
+                    <span>拉取部门与用户，并绑定飞书身份用于登录和消息推送。</span>
+                  </div>
+                  <Button
+                    type="primary"
+                    loading={syncFeishu.isPending}
+                    onClick={() => syncFeishu.mutate()}
+                  >
+                    同步
+                  </Button>
                 </div>
               </div>
             </GlassPanel>

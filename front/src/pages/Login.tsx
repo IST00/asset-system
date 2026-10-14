@@ -12,8 +12,9 @@ import {
   UserRound,
 } from 'lucide-react'
 import { useState } from 'react'
-import { useLocation, useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { authApi } from '@/api'
+import { feishuApi } from '@/api/feishu'
 import {
   demoCredentials,
   demoToken,
@@ -29,12 +30,6 @@ interface LoginValues {
   password: string
 }
 
-interface LoginLocationState {
-  from?: {
-    pathname?: string
-  }
-}
-
 const capabilityItems = [
   { icon: Boxes, label: '资产全生命周期管理' },
   { icon: ScanLine, label: '移动盘点与标签追踪' },
@@ -44,18 +39,14 @@ const capabilityItems = [
 export default function Login() {
   const { message } = App.useApp()
   const navigate = useNavigate()
-  const location = useLocation()
   const setAuth = useAuthStore((state) => state.setAuth)
   const [loading, setLoading] = useState(false)
+  const [feishuLoading, setFeishuLoading] = useState(false)
   const demoEnabled =
     import.meta.env.DEV && isDemoLoginEnabled(import.meta.env.VITE_ENABLE_DEMO_LOGIN)
-  const from = (location.state as LoginLocationState | null)?.from?.pathname
-  const destination = from && from !== '/login' ? from : '/home'
-
   const enterSystem = (token: string, user: Parameters<typeof setAuth>[1]) => {
     setAuth(token, user)
-    const target = user.must_change_password ? '/profile?changePassword=required' : destination
-    navigate(target, { replace: true })
+    navigate('/home', { replace: true })
   }
 
   const onFinish = async (values: LoginValues) => {
@@ -76,6 +67,16 @@ export default function Login() {
       message.success('登录成功')
     } finally {
       setLoading(false)
+    }
+  }
+
+  const startFeishuLogin = async () => {
+    setFeishuLoading(true)
+    try {
+      const result = await feishuApi.loginUrl()
+      window.location.href = result.authorize_url
+    } finally {
+      setFeishuLoading(false)
     }
   }
 
@@ -193,6 +194,18 @@ export default function Login() {
               <ArrowRight aria-hidden="true" size={17} />
             </Button>
           </Form>
+
+          <div className="asset-login__divider">
+            <span>或</span>
+          </div>
+          <Button
+            size="large"
+            block
+            loading={feishuLoading}
+            onClick={() => void startFeishuLogin()}
+          >
+            使用飞书登录
+          </Button>
 
           {demoEnabled ? (
             <div className="asset-login__demo">

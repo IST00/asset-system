@@ -3,12 +3,15 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 from io import BytesIO
+
+from sqlalchemy import select
 from zipfile import ZipFile
 
 from app.enums import AssetDataCompleteness, AssetStatus, DataScope
 from app.extensions import db
 from app.models import (
     Asset,
+    AssetLifecycleRecord,
     AssetCategory,
     AssetLocation,
     AssetSource,
@@ -309,6 +312,16 @@ def test_admin_mark_requires_reason_and_end_collection_does_not_auto_mark_loss(
     )
     assert completed.status_code == 200
     assert completed.get_json()["data"]["status"] == "COMPLETED"
+
+    lifecycle_rows = db.session.scalars(
+        select(AssetLifecycleRecord).where(
+            AssetLifecycleRecord.asset_id == fixture["asset"].id,
+            AssetLifecycleRecord.operation_type == "INVENTORY_PROCESS",
+        )
+    ).all()
+    assert len(lifecycle_rows) == 1
+    assert lifecycle_rows[0].operation_no == task["task_no"]
+    assert "盘点单号" in lifecycle_rows[0].remark
 
 
 def test_outside_scope_scan_is_persisted_as_anomaly(client) -> None:
@@ -623,3 +636,31 @@ def test_task_filters_and_parent_child_suite_progress_are_snapshotted(client) ->
     assert all(
         item["suite_progress"] == {"total": 2, "checked": 1} for item in refreshed
     )
+
+
+def test_my_pending_items_endpoint_returns_empty_list_without_tasks(client) -> None:
+    fixture = _inventory_fixture(client)
+
+    response = client.get(
+        "/api/v1/inventory/my-pending-items",
+        headers=fixture["employee_headers"],
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["data"] == []
+
+
+def test_my_pending_items_endpoint_returns_current_employee_assets(client) -> None:
+    fixture = _inventory_fixture(client)
+    _create_task(client, fixture)
+
+    response = client.get(
+        "/api/v1/inventory/my-pending-items",
+        headers=fixture["employee_headers"],
+    )
+
+    assert response.status_code == 200
+    items = response.get_json()["data"]
+    assert len(items) == 1
+    assert all(item["responsible_user_id"] == fixture["employee"].id for item in items)
+    assert {item["asset_code"] for item in items} == {fixture["asset"].asset_code}

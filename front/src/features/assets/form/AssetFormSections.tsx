@@ -1,6 +1,7 @@
+import { useEffect } from 'react'
 import type { FormEventHandler } from 'react'
 import { useWatch } from 'react-hook-form'
-import type { Control, FieldErrors } from 'react-hook-form'
+import type { Control, FieldErrors, UseFormGetValues, UseFormSetValue } from 'react-hook-form'
 import { Button } from 'antd'
 import {
   Box,
@@ -28,6 +29,10 @@ import type { AssetFormInput } from './schema'
 
 export interface AssetFormOptions {
   companies: Array<{ label: string; value: string }>
+  usageCompanies: Array<{ label: string; value: string }>
+  usageDepartments: Array<{ label: string; value: string }>
+  holders: Array<{ label: string; value: string }>
+  holderDepartmentNames: Record<string, string>
   categories: Array<{ label: string; value: string }>
   sources: Array<{ label: string; value: string }>
   units: Array<{ label: string; value: string }>
@@ -40,6 +45,8 @@ interface SectionsProps {
   asset?: AssetDetail
   control: Control<AssetFormInput>
   errors: FieldErrors<AssetFormInput>
+  getValues: UseFormGetValues<AssetFormInput>
+  setValue: UseFormSetValue<AssetFormInput>
   isEdit: boolean
   isResubmit: boolean
   showAmount: boolean
@@ -113,9 +120,27 @@ function BasicSection({ asset, control, errors, isEdit, options }: SectionsProps
   )
 }
 
-function OwnershipSection({ asset, control, errors, isEdit, options }: SectionsProps) {
+function OwnershipSection({
+  asset,
+  control,
+  errors,
+  getValues,
+  setValue,
+  isEdit,
+  options,
+}: SectionsProps) {
   const { t } = useTranslation()
   const emptyValue = t('assets.detail.unassigned')
+  const holderName = useWatch({ control, name: 'holder_user_name' })
+
+  useEffect(() => {
+    const departmentName = holderName ? (options.holderDepartmentNames[holderName] ?? '') : ''
+    if (getValues('usage_department_name') === departmentName) return
+    setValue('usage_department_name', departmentName, {
+      shouldValidate: true,
+      shouldDirty: true,
+    })
+  }, [getValues, holderName, options.holderDepartmentNames, setValue])
   return (
     <SectionPanel
       title={t('assets.form.sections.ownership')}
@@ -131,6 +156,34 @@ function OwnershipSection({ asset, control, errors, isEdit, options }: SectionsP
           options={options.companies}
           disabled={isEdit}
           required
+        />
+        <SelectFormField
+          control={control}
+          errors={errors}
+          name="usage_company_name"
+          label={t('assets.form.labels.usage_company_name')}
+          placeholder={t('assets.form.placeholders.usage_company_name')}
+          options={options.usageCompanies}
+          required
+        />
+        <SelectFormField
+          control={control}
+          errors={errors}
+          name="usage_department_name"
+          label={t('assets.form.labels.usage_department_name')}
+          placeholder={t('assets.form.placeholders.usage_department_name')}
+          options={options.usageDepartments}
+          allowClear
+          disabled={Boolean(holderName)}
+        />
+        <SelectFormField
+          control={control}
+          errors={errors}
+          name="holder_user_name"
+          label={t('assets.form.labels.holder_user_name')}
+          placeholder={t('assets.form.placeholders.holder_user_name')}
+          options={options.holders}
+          allowClear
         />
         <SelectFormField
           control={control}
@@ -291,6 +344,8 @@ export default function AssetFormEditor({
   asset,
   control,
   errors,
+  getValues,
+  setValue,
   isEdit,
   isResubmit,
   isSubmitting,
@@ -301,7 +356,17 @@ export default function AssetFormEditor({
   submitFailed,
 }: AssetFormEditorProps) {
   const { t } = useTranslation()
-  const sections = { asset, control, errors, isEdit, isResubmit, showAmount, options }
+  const sections = {
+    asset,
+    control,
+    errors,
+    getValues,
+    setValue,
+    isEdit,
+    isResubmit,
+    showAmount,
+    options,
+  }
   return (
     <>
       {isEdit && asset ? (

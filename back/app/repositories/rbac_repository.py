@@ -131,6 +131,24 @@ class RbacRepository:
         )
         return list(db.session.scalars(stmt).all())
 
+    def permission_ids_for_role(self, role_id: int) -> set[int]:
+        stmt = select(RolePermission.permission_id).where(
+            RolePermission.role_id == role_id
+        )
+        return set(db.session.scalars(stmt).all())
+
+    def inherit_role_permissions(
+        self, source_role_id: int, target_role_id: int
+    ) -> None:
+        source_ids = self.permission_ids_for_role(source_role_id)
+        target_ids = self.permission_ids_for_role(target_role_id)
+        db.session.add_all(
+            [
+                RolePermission(role_id=target_role_id, permission_id=item)
+                for item in sorted(source_ids - target_ids)
+            ]
+        )
+
     def get_roles(self, role_ids: list[int]) -> list[Role]:
         if not role_ids:
             return []

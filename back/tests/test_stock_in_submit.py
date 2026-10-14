@@ -7,9 +7,11 @@ from threading import Barrier
 
 import pytest
 from marshmallow import ValidationError
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from app import create_app
+from app.common import BusinessException
 from app.enums import DataScope, FlowStatus, OperationType, RecordStatus, SignMode
 from app.extensions import db
 from app.models import (
@@ -17,6 +19,7 @@ from app.models import (
     ApprovalFlowLayer,
     ApprovalFlowVersion,
     ApprovalTask,
+    Asset,
     AssetCategory,
     AssetCodeReservation,
     AssetCodeSequence,
@@ -36,7 +39,7 @@ from app.models import (
 )
 from app.security.passwords import hash_password
 from app.schemas.stock_in import CreateStockInRequestSchema, StockInItemRequestSchema
-from app.services import stock_in_service
+from app.services import asset_service, stock_in_service
 from config import TestConfig
 
 
@@ -112,8 +115,10 @@ def _item(context, **overrides):
         "purchase_date": date(2026, 7, 17).isoformat(),
         "manager_id": context["manager"].id,
         "source_id": context["source"].id,
+        "usage_company_id": context["organization"].id,
         "location_id": context["location"].id,
         "serial_number": " SN-001 ",
+        "custom_attributes": {},
     }
     item.update(overrides)
     return item
@@ -128,10 +133,102 @@ def _schema_item(**overrides: object) -> dict[str, object]:
         "purchase_date": date(2026, 7, 17).isoformat(),
         "manager_id": 3,
         "source_id": 4,
+        "usage_company_id": 2,
         "location_id": 5,
     }
     item.update(overrides)
     return item
+
+
+def test_stock_in_accepts_and_executes_optional_holder(app, client) -> None:
+    context = _setup(client)
+    employee = User(
+        username="stock-holder",
+        password="x",
+        enabled=True,
+        organization_id=context["organization"].id,
+    )
+    db.session.add(employee)
+    db.session.commit()
+
+    payload = {
+        "organization_id": context["organization"].id,
+        "items": [
+            _item(
+                context,
+                usage_department_id=None,
+                holder_user_id=employee.id,
+                purchase_date=date(2026, 7, 17),
+            )
+        ],
+    }
+    submitted = stock_in_service.submit(
+        {**payload, "items": [{**payload["items"][0]}]}, context["applicant"].id
+    )
+
+    stock_in = db.session.scalar(
+        select(StockInRequest).where(
+            StockInRequest.operation_request_id == submitted["id"]
+        )
+    )
+    assert stock_in is not None
+    item = db.session.scalar(
+        select(StockInItem).where(StockInItem.stock_in_request_id == stock_in.id)
+    )
+    assert item is not None
+    assert item.holder_user_id == employee.id
+    assert item.usage_department_id == employee.organization_id
+
+    operation = db.session.get(OperationRequest, submitted["id"])
+    assert operation is not None
+    operation.approval_status = "APPROVED"
+    db.session.commit()
+    asset_service.stock_in_request(submitted["id"], context["applicant"].id)
+
+    asset = db.session.scalar(select(Asset).where(Asset.asset_code == item.asset_code))
+    assert asset is not None
+    assert asset.holder_user_id == employee.id
+    assert asset.usage_department_id == employee.organization_id
+
+    with pytest.raises(BusinessException, match="资产使用人不存在"):
+        stock_in_service.submit(
+            {
+                "organization_id": context["organization"].id,
+                "items": [_item(context, holder_user_id=999999)],
+            },
+            context["applicant"].id,
+        )
+
+    disabled = User(
+        username="stock-holder-disabled",
+        password="x",
+        enabled=False,
+        organization_id=context["organization"].id,
+    )
+    db.session.add(disabled)
+    db.session.commit()
+    with pytest.raises(BusinessException, match="资产使用人已停用"):
+        stock_in_service.submit(
+            {
+                "organization_id": context["organization"].id,
+                "items": [_item(context, holder_user_id=disabled.id)],
+            },
+            context["applicant"].id,
+        )
+
+    no_department = User(
+        username="stock-holder-no-department", password="x", enabled=True
+    )
+    db.session.add(no_department)
+    db.session.commit()
+    with pytest.raises(BusinessException, match="资产使用人未归属部门"):
+        stock_in_service.submit(
+            {
+                "organization_id": context["organization"].id,
+                "items": [_item(context, holder_user_id=no_department.id)],
+            },
+            context["applicant"].id,
+        )
 
 
 def test_stock_in_item_schema_accepts_frozen_fields_and_nested_json() -> None:

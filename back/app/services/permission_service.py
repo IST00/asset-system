@@ -20,9 +20,19 @@ def _require_enabled_user(user_id: int):
     return user
 
 
+def effective_permissions(user_id: int) -> set[str]:
+    """Return role permissions without the authenticated-user enabled check.
+
+    Administrative user listings may contain disabled accounts. Their role and
+    permission snapshot is still needed for display and audit purposes.
+    """
+
+    return rbac_repository.permission_codes_for_user(user_id)
+
+
 def get_user_permissions(user_id: int) -> set[str]:
     _require_enabled_user(user_id)
-    return rbac_repository.permission_codes_for_user(user_id)
+    return effective_permissions(user_id)
 
 
 def has_permission(user_id: int, permission_code: str) -> bool:
@@ -127,6 +137,7 @@ def enabled_role_member_ids(
 
 __all__ = [
     "accessible_organization_ids",
+    "effective_permissions",
     "enabled_role_member_ids",
     "find_approval_candidates",
     "get_data_scopes",

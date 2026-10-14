@@ -18,6 +18,8 @@ _CAS_FIELDS = {
     "holder_user_id",
     "public_object_id",
     "usage_department_id",
+    "organization_id",
+    "usage_company_id",
     "location_id",
 }
 

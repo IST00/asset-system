@@ -21,6 +21,8 @@ from app.enums import (
     AssetStatus,
     DataScope,
     ExecutionStatus,
+    FulfillmentStatus,
+    OperationType,
     RecordStatus,
     UsageType,
 )
@@ -60,6 +62,40 @@ def _usage_service() -> ModuleType:
 
 def _return_service() -> ModuleType:
     return importlib.import_module("app.services.asset_return_service")
+
+
+def _submit_personal_auto_for_handler_test(
+    payload: dict[str, Any],
+    actor_id: int,
+) -> dict[str, Any]:
+    """Build a legacy auto-execution request only for executor concurrency tests."""
+    result = _usage_service().submit_personal(payload, actor_id)
+    operation = db.session.get(OperationRequest, result["id"])
+    detail = (
+        db.session.query(AssetUsageRequest)
+        .filter_by(operation_request_id=result["id"])
+        .one()
+    )
+    assert operation is not None
+    operation.approval_channel = ApprovalChannel.FEISHU.value
+    operation.external_instance_id = f"LOCAL-FEISHU-{operation.id}"
+    operation.approval_execution_mode = ApprovalExecutionMode.AUTO_ON_APPROVAL.value
+    detail.fulfillment_status = FulfillmentStatus.COMPLETED.value
+    db.session.commit()
+    result["approval_execution_mode"] = ApprovalExecutionMode.AUTO_ON_APPROVAL.value
+    result["external_instance_id"] = f"LOCAL-FEISHU-{operation.id}"
+    return result
+
+
+def _switch_return_to_legacy_feishu(submitted: dict[str, Any]) -> str:
+    """Switch an internal return request to the legacy callback adapter."""
+    operation = db.session.get(OperationRequest, submitted["id"])
+    assert operation is not None
+    operation.approval_channel = ApprovalChannel.FEISHU.value
+    external_instance_id = f"LOCAL-FEISHU-{operation.id}"
+    operation.external_instance_id = external_instance_id
+    db.session.commit()
+    return external_instance_id
 
 
 def _concurrent_app(tmp_path: Path, database_name: str) -> Flask:
@@ -116,10 +152,14 @@ def _personal_return_payload(
 def _inspection_payload(
     main_asset_id: int,
     child_asset_id: int,
+    company_id: int,
     return_location_id: int,
     idempotency_key: str,
 ) -> dict[str, Any]:
     return {
+        "return_company_id": company_id,
+        "return_usage_company_id": company_id,
+        "return_region_id": return_location_id,
         "return_location_id": return_location_id,
         "idempotency_key": idempotency_key,
         "items": [
@@ -252,7 +292,7 @@ def test_concurrent_duplicate_feishu_approval_executes_once(tmp_path: Path) -> N
         context = seed_usage_return_context()
         _grant_usage_manage(context)
         _register_handlers()
-        submitted = _usage_service().submit_personal(
+        submitted = _submit_personal_auto_for_handler_test(
             _personal_usage_payload(
                 context.main_asset.id,
                 context.employee.id,
@@ -335,20 +375,27 @@ def test_concurrent_duplicate_personal_return_confirmation_replays_once(
             ),
             context.employee.id,
         )
+        external_instance_id = _switch_return_to_legacy_feishu(submitted)
         approved = approval_provider_service.handle_callback(
             provider="FEISHU",
             external_event_id="concurrent-return-approved",
-            external_instance_id=submitted["external_instance_id"],
+            external_instance_id=external_instance_id,
             status=ApprovalStatus.APPROVED.value,
             actor_id=context.manager.id,
         )
         assert approved.execution_status == ExecutionStatus.NOT_STARTED.value
+        service.handover(
+            submitted["id"],
+            context.employee.id,
+            "并发测试员工已交还",
+        )
         assert db.session.query(AssetBusinessLock).count() == 2
         operation_id = submitted["id"]
         manager_id = context.manager.id
         main_asset_id = context.main_asset.id
         child_asset_id = context.child_asset.id
         return_location_id = context.return_location.id
+        company_id = context.organization.id
 
     service = _return_service()
     original_claim = service._claim_and_apply_inspection
@@ -367,6 +414,7 @@ def test_concurrent_duplicate_personal_return_confirmation_replays_once(
                 _inspection_payload(
                     main_asset_id,
                     child_asset_id,
+                    company_id,
                     return_location_id,
                     "concurrent-return-confirmation",
                 ),
@@ -387,7 +435,12 @@ def test_concurrent_duplicate_personal_return_confirmation_replays_once(
         assert db.session.query(OperationExecutionAttempt).count() == 1
         assert db.session.query(OperationExecutionAttempt).one().status == "SUCCESS"
         assert db.session.query(AssetLifecycleRecord).count() == 2
-        assert db.session.query(OperationLog).count() == 1
+        assert (
+            db.session.query(OperationLog)
+            .filter(OperationLog.action == OperationType.PERSONAL_RETURN.value)
+            .count()
+            == 1
+        )
         assert db.session.query(AssetBusinessLock).count() == 0
         detail = db.session.query(AssetReturnRequest).one()
         assert detail.confirmed_by == manager_id
@@ -453,17 +506,24 @@ def test_concurrent_conflicting_return_confirmations_persist_one_winner(
             ),
             context.employee.id,
         )
+        external_instance_id = _switch_return_to_legacy_feishu(submitted)
         approved = approval_provider_service.handle_callback(
             provider="FEISHU",
             external_event_id="conflicting-return-approved",
-            external_instance_id=submitted["external_instance_id"],
+            external_instance_id=external_instance_id,
             status=ApprovalStatus.APPROVED.value,
             actor_id=context.manager.id,
         )
         assert approved.execution_status == ExecutionStatus.NOT_STARTED.value
+        service.handover(
+            submitted["id"],
+            context.employee.id,
+            "并发测试员工已交还",
+        )
         operation_id = submitted["id"]
         main_asset_id = context.main_asset.id
         child_asset_id = context.child_asset.id
+        company_id = context.organization.id
         competitors: dict[str, dict[str, Any]] = {
             "primary": {
                 "actor_id": context.manager.id,
@@ -530,6 +590,9 @@ def test_concurrent_conflicting_return_confirmations_persist_one_winner(
                 result = service.confirm(
                     operation_id,
                     {
+                        "return_company_id": company_id,
+                        "return_usage_company_id": company_id,
+                        "return_region_id": competitor["return_location_id"],
                         "return_location_id": competitor["return_location_id"],
                         "idempotency_key": competitor["idempotency_key"],
                         "items": competitor["items"],
@@ -592,7 +655,11 @@ def test_concurrent_conflicting_return_confirmations_persist_one_winner(
         lifecycle_rows = db.session.query(AssetLifecycleRecord).all()
         assert len(lifecycle_rows) == 2
         assert all(row.operator_id == winner["actor_id"] for row in lifecycle_rows)
-        operation_log = db.session.query(OperationLog).one()
+        operation_log = (
+            db.session.query(OperationLog)
+            .filter(OperationLog.action == OperationType.PERSONAL_RETURN.value)
+            .one()
+        )
         assert operation_log.operator_id == winner["actor_id"]
         assert db.session.query(AssetBusinessLock).count() == 0
 
@@ -624,19 +691,26 @@ def test_confirmation_creator_converges_when_replay_wins_execution_claim(
             ),
             context.employee.id,
         )
+        external_instance_id = _switch_return_to_legacy_feishu(submitted)
         approved = approval_provider_service.handle_callback(
             provider="FEISHU",
             external_event_id="return-replay-wins-approved",
-            external_instance_id=submitted["external_instance_id"],
+            external_instance_id=external_instance_id,
             status=ApprovalStatus.APPROVED.value,
             actor_id=context.manager.id,
         )
         assert approved.execution_status == ExecutionStatus.NOT_STARTED.value
+        service.handover(
+            submitted["id"],
+            context.employee.id,
+            "并发测试员工已交还",
+        )
         operation_id = submitted["id"]
         manager_id = context.manager.id
         main_asset_id = context.main_asset.id
         child_asset_id = context.child_asset.id
         return_location_id = context.return_location.id
+        company_id = context.organization.id
 
     service = _return_service()
     from app.services import operation_executor
@@ -695,6 +769,7 @@ def test_confirmation_creator_converges_when_replay_wins_execution_claim(
                 _inspection_payload(
                     main_asset_id,
                     child_asset_id,
+                    company_id,
                     return_location_id,
                     "return-replay-wins-confirmation",
                 ),
@@ -712,7 +787,12 @@ def test_confirmation_creator_converges_when_replay_wins_execution_claim(
         assert operation.execution_status == ExecutionStatus.SUCCESS.value
         assert db.session.query(OperationExecutionAttempt).count() == 1
         assert db.session.query(AssetLifecycleRecord).count() == 2
-        assert db.session.query(OperationLog).count() == 1
+        assert (
+            db.session.query(OperationLog)
+            .filter(OperationLog.action == OperationType.PERSONAL_RETURN.value)
+            .count()
+            == 1
+        )
         assert db.session.query(AssetBusinessLock).count() == 0
         claim = db.session.query(OperationActionIdempotency).one()
         assert claim.status == "COMPLETED"
@@ -729,7 +809,7 @@ def test_second_asset_cas_failure_rolls_back_entire_usage_execution(
         context = seed_usage_return_context()
         _grant_usage_manage(context)
         _register_handlers()
-        submitted = _usage_service().submit_personal(
+        submitted = _submit_personal_auto_for_handler_test(
             _personal_usage_payload(
                 context.main_asset.id,
                 context.employee.id,
@@ -787,7 +867,7 @@ def test_version_change_before_approval_fails_safely_and_keeps_locks(
         context = seed_usage_return_context()
         _grant_usage_manage(context)
         _register_handlers()
-        submitted = _usage_service().submit_personal(
+        submitted = _submit_personal_auto_for_handler_test(
             _personal_usage_payload(
                 context.main_asset.id,
                 context.employee.id,
@@ -856,6 +936,7 @@ def test_rejected_and_withdrawn_personal_returns_have_no_asset_side_effects(
             ),
             context.employee.id,
         )
+        external_instance_id = _switch_return_to_legacy_feishu(submitted)
         operation_id = submitted["id"]
         asset_ids = [context.main_asset.id, context.child_asset.id]
         original_states = _asset_states(asset_ids)
@@ -864,7 +945,7 @@ def test_rejected_and_withdrawn_personal_returns_have_no_asset_side_effects(
             result = approval_provider_service.handle_callback(
                 provider="FEISHU",
                 external_event_id="personal-return-rejected",
-                external_instance_id=submitted["external_instance_id"],
+                external_instance_id=external_instance_id,
                 status=ApprovalStatus.REJECTED.value,
                 actor_id=context.manager.id,
             )

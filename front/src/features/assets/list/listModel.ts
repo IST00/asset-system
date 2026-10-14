@@ -10,7 +10,15 @@ import type { AssetListQuery, AssetStatus, AssetSummary } from '../types.ts'
 
 export type AssetColumnKey = Exclude<
   keyof AssetSummary,
-  'id' | 'version' | 'parent_asset_id' | 'holder_user_id' | 'public_object_id' | 'usage_type'
+  | 'id'
+  | 'version'
+  | 'organization_id'
+  | 'usage_company_id'
+  | 'usage_department_id'
+  | 'parent_asset_id'
+  | 'holder_user_id'
+  | 'public_object_id'
+  | 'usage_type'
 >
 export { canCreateAsset }
 
@@ -49,6 +57,8 @@ const availableColumns: AssetColumnKey[] = [
   'location_name',
   'manager_name',
   'company_name',
+  'usage_company_name',
+  'usage_department_name',
   'supplier_name',
   'source_name',
   'unit_name',
@@ -67,6 +77,8 @@ const desktopDefaultColumns: AssetColumnKey[] = [
   'location_name',
   'manager_name',
   'company_name',
+  'usage_company_name',
+  'usage_department_name',
   'purchase_date',
 ]
 

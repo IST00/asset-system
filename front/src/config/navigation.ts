@@ -8,6 +8,7 @@ export const navigationEntries: NavigationEntry[] = [
     path: '/assets',
     icon: 'package',
     mobile: true,
+    mobilePermission: 'asset:edit',
     permission: 'asset:view',
   },
   {
@@ -15,6 +16,7 @@ export const navigationEntries: NavigationEntry[] = [
     labelKey: 'nav.workflows',
     path: '/workflows',
     icon: 'workflow',
+    mobile: true,
   },
   {
     key: 'inventory',
@@ -22,24 +24,28 @@ export const navigationEntries: NavigationEntry[] = [
     path: '/inventory',
     icon: 'scan',
     mobile: true,
+    mobileUnlessPermission: 'asset:edit',
   },
   {
     key: 'approvals',
     labelKey: 'nav.approvals',
     path: '/approvals',
     icon: 'approval',
+    permission: 'approval:task:view',
   },
   {
     key: 'imports',
     labelKey: 'nav.imports',
     path: '/imports',
     icon: 'import',
+    permission: 'asset:import',
   },
   {
     key: 'masterData',
     labelKey: 'nav.masterData',
     path: '/master-data',
     icon: 'database',
+    permission: 'organization:manage',
   },
   {
     key: 'permissions',

@@ -103,6 +103,9 @@ def create_app(config: type[BaseConfig] | None = None) -> Flask:
         PublicUsageHandler,
     )
     from app.operations.stock_in_handler import StockInHandler
+    from app.operations.asset_information_change_handler import (
+        AssetInformationChangeHandler,
+    )
 
     handler_types = (
         StockInHandler,
@@ -111,6 +114,16 @@ def create_app(config: type[BaseConfig] | None = None) -> Flask:
         PersonalReturnHandler,
         PublicReturnHandler,
     )
+    for operation_type in (
+        "PHYSICAL_INFO_CHANGE",
+        "FINANCIAL_INFO_CHANGE",
+        "WARRANTY_INFO_CHANGE",
+    ):
+        if not operation_handler_registry.contains(operation_type):
+            operation_handler_registry.register(
+                AssetInformationChangeHandler(operation_type)
+            )
+
     for handler_type in handler_types:
         if not operation_handler_registry.contains(handler_type.operation_type):
             operation_handler_registry.register(handler_type())

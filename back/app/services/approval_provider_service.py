@@ -40,6 +40,17 @@ def _resume_auto_execution(
     return operation
 
 
+def _require_operation_by_external_instance(
+    external_instance_id: str,
+) -> OperationRequest:
+    operation = operation_request_repository.find_by_external_instance(
+        external_instance_id
+    )
+    if operation is None:
+        raise BusinessException("外部审批实例不存在", result_code=ResultCode.NOT_FOUND)
+    return operation
+
+
 def _require_matching_callback_event(
     event: ExternalApprovalEvent,
     operation_request_id: int,

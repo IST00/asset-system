@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 
+
 from app.enums import DataScope, RecordStatus
 from app.extensions import db
 from app.models import (
@@ -77,6 +78,56 @@ def _seed_http_actors() -> tuple[User, User, User]:
     )
     db.session.commit()
     return admin, applicant, approver
+
+
+def test_stock_in_allows_non_root_organization_as_owner(app) -> None:
+    from app.enums import DataScope
+    from app.models import Organization, Role, UserRole
+    from app.services import stock_in_service
+
+    role = Role(
+        code="STOCK_ROOT_ROLE",
+        name="入库组织角色",
+        data_scope=DataScope.ALL.value,
+    )
+    permissions = [
+        Permission(code=code, name=code, module=code.split(":")[0])
+        for code in ("stock-in:create", "stock-in:approve")
+    ]
+    actor = User(username="stock-root-actor", password="x", enabled=True)
+    approver = User(username="stock-root-approver", password="x", enabled=True)
+    db.session.add_all([role, actor, approver, *permissions])
+    db.session.flush()
+    db.session.add_all(
+        [
+            UserRole(user_id=user_id, role_id=role.id)
+            for user_id in (actor.id, approver.id)
+        ]
+    )
+    db.session.add_all(
+        [
+            RolePermission(role_id=role.id, permission_id=permission.id)
+            for permission in permissions
+        ]
+    )
+
+    root = Organization(code="STOCK-ROOT", name="入库根组织", status="ENABLED")
+    db.session.add(root)
+    db.session.flush()
+    child = Organization(
+        code="STOCK-CHILD",
+        name="入库子部门",
+        parent_id=root.id,
+        status="ENABLED",
+    )
+    db.session.add(child)
+    db.session.commit()
+
+    submitted = stock_in_service.submit(
+        {"organization_id": child.id, "items": []}, actor.id
+    )
+
+    assert submitted["organization_id"] == child.id
 
 
 def test_complete_stock_in_workflow_through_http(client) -> None:
@@ -205,6 +256,7 @@ def test_complete_stock_in_workflow_through_http(client) -> None:
                 "remark": "HTTP E2E",
                 "items": [
                     {
+                        "usage_company_id": organization["id"],
                         "asset_name": "E2E MacBook Air",
                         "category_id": category["id"],
                         "unit_id": unit["id"],

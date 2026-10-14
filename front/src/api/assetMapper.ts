@@ -2,15 +2,18 @@ export interface BackendAsset {
   id: number
   asset_code: string
   asset_name: string
-  status: 'IDLE' | 'IN_USE' | 'REPAIRING' | 'SCRAPPED'
+  status: 'IDLE' | 'PENDING_RECEIPT' | 'IN_USE' | 'REPAIRING' | 'SCRAPPED'
   version: number
   organization_id: number
+  usage_company_id?: number | null
+  usage_company_name?: string | null
+  usage_department_id?: number | null
+  usage_department_name?: string | null
   category_id: number
   unit_id?: number | null
   supplier_id?: number | null
   manager_id: number
   holder_user_id?: number | null
-  usage_department_id?: number | null
   source_id?: number | null
   location_id?: number | null
   parent_asset_id?: number | null
@@ -49,12 +52,15 @@ export function mapBackendAsset(asset: BackendAsset) {
     id: asset.id,
     version: asset.version,
     organization_id: asset.organization_id,
+    usage_company_id: asset.usage_company_id ?? undefined,
+    usage_company_name: fallbackName(asset.usage_company_name, '使用公司'),
+    usage_department_id: asset.usage_department_id ?? undefined,
+    usage_department_name: asset.usage_department_name || undefined,
     category_id: asset.category_id,
     unit_id: asset.unit_id ?? undefined,
     supplier_id: asset.supplier_id ?? undefined,
     manager_id: asset.manager_id,
     holder_user_id: asset.holder_user_id ?? undefined,
-    usage_department_id: asset.usage_department_id ?? undefined,
     source_id: asset.source_id ?? undefined,
     location_id: asset.location_id ?? undefined,
     parent_asset_id: asset.parent_asset_id ?? undefined,

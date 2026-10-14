@@ -5,26 +5,30 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import false, func, inspect, or_, select
+from sqlalchemy import and_, false, func, inspect, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import InstanceState
 
 from app.common import BusinessException, ResultCode
+from app.common.datetime import isoformat_utc, normalize_utc
 from app.enums import (
     ApprovalChannel,
     ApprovalExecutionMode,
     ApprovalStatus,
     AssetDataCompleteness,
     ExecutionStatus,
+    OperationType,
 )
 from app.extensions import db
 from app.models import (
     Asset,
     AssetLocation,
+    AssetReturnRequest,
+    AssetUsageRequest,
     ApprovalStep,
     ApprovalTask,
     ApprovalTaskEvent,
@@ -53,6 +57,16 @@ from app.services import asset_lock_service, audit_service, permission_service
 class CreateOperationResult:
     operation: OperationRequest
     created: bool
+
+
+_SELF_SERVICE_PERMISSIONS = ("asset:return:self", "asset:usage:self")
+
+
+def _can_view_own_requests(actor_id: int) -> bool:
+    return any(
+        permission_service.has_permission(actor_id, permission_code)
+        for permission_code in _SELF_SERVICE_PERMISSIONS
+    )
 
 
 def _request_no() -> str:
@@ -233,6 +247,35 @@ def create_request(
     return CreateOperationResult(operation=operation, created=True)
 
 
+def replace_request_assets(
+    operation: OperationRequest,
+    assets: list[Asset],
+    target_data_by_asset_id: Mapping[int, Mapping[str, Any]],
+) -> None:
+    """Replace a pending request's provisional assets in the current transaction."""
+    ordered_assets = _validate_assets_and_targets(assets, target_data_by_asset_id)
+    asset_lock_service.release(operation.id)
+    operation_request_asset_repository.delete_for_request(operation.id)
+    db.session.flush()
+    for asset in ordered_assets:
+        operation_request_asset_repository.add(
+            OperationRequestAsset(
+                operation_request_id=operation.id,
+                asset_id=asset.id,
+                asset_code_snapshot=asset.asset_code,
+                asset_name_snapshot=asset.asset_name,
+                asset_status_snapshot=asset.status,
+                asset_version_snapshot=asset.version,
+                organization_id_snapshot=asset.organization_id,
+                holder_snapshot=_holder_snapshot(asset),
+                location_snapshot=_location_snapshot(asset),
+                before_data=_before_data(asset),
+                target_data=dict(target_data_by_asset_id[asset.id]),
+            )
+        )
+    asset_lock_service.acquire(operation, ordered_assets)
+
+
 def release_locks(operation_request_id: int) -> None:
     asset_lock_service.release(operation_request_id)
 
@@ -259,8 +302,49 @@ def _protect_amounts(value: Any, can_view_amount: bool) -> Any:
     return value
 
 
+def _personal_return_allowed_actions(
+    operation: OperationRequest,
+    snapshots: list[OperationRequestAsset],
+    actor_id: int,
+    *,
+    can_manage: bool,
+) -> tuple[str, ...]:
+    if (
+        not can_manage
+        or operation.operation_type != OperationType.PERSONAL_RETURN.value
+        or operation.approval_status != ApprovalStatus.APPROVED.value
+        or operation.execution_status != ExecutionStatus.NOT_STARTED.value
+        or operation.approval_execution_mode
+        != ApprovalExecutionMode.MANUAL_CONFIRM.value
+    ):
+        return ()
+    organization_ids = permission_service.accessible_organization_ids(actor_id)
+    if organization_ids is not None and any(
+        snapshot.organization_id_snapshot not in organization_ids
+        for snapshot in snapshots
+    ):
+        return ()
+    return ("CONFIRM_RETURN",)
+
+
 def _serialize(operation: OperationRequest, actor_id: int) -> dict[str, Any]:
     can_view_amount = permission_service.has_permission(actor_id, "asset:amount:view")
+    usage_detail = None
+    if operation.operation_type in {
+        OperationType.PERSONAL_USE.value,
+        OperationType.PUBLIC_USE.value,
+    }:
+        usage_detail = db.session.scalar(
+            select(AssetUsageRequest).where(
+                AssetUsageRequest.operation_request_id == operation.id
+            )
+        )
+    hide_asset_codes = (
+        usage_detail is not None
+        and usage_detail.requested_category_id is not None
+        and operation.applicant_id == actor_id
+        and not permission_service.has_permission(actor_id, "asset:usage:manage")
+    )
     assets = operation_request_asset_repository.find_by_request(operation.id)
     steps = approval_step_repository.find_by_operation_ordered(operation.id)
     attempts = list(
@@ -284,20 +368,33 @@ def _serialize(operation: OperationRequest, actor_id: int) -> dict[str, Any]:
         if latest_reminder is not None
         else None
     )
-    return {
+    transfer_target_user_ids = {
+        item.target_data.get("holder_user_id")
+        for item in assets
+        if isinstance(item.target_data, dict)
+        and type(item.target_data.get("holder_user_id")) is int
+    }
+    transfer_target_user_id = (
+        next(iter(transfer_target_user_ids))
+        if operation.operation_type == OperationType.TRANSFER.value
+        and len(transfer_target_user_ids) == 1
+        else None
+    )
+    result: dict[str, Any] = {
         "id": operation.id,
         "request_no": operation.request_no,
         "operation_type": operation.operation_type,
         "applicant_id": operation.applicant_id,
         "approval_channel": operation.approval_channel,
         "approval_execution_mode": operation.approval_execution_mode,
+        "external_instance_id": operation.external_instance_id,
         "approval_status": operation.approval_status,
         "execution_status": operation.execution_status,
         "execution_error": operation.execution_error,
         "assets": [
             {
                 "asset_id": item.asset_id,
-                "asset_code": item.asset_code_snapshot,
+                "asset_code": None if hide_asset_codes else item.asset_code_snapshot,
                 "asset_name": item.asset_name_snapshot,
                 "asset_status": item.asset_status_snapshot,
                 "asset_version": item.asset_version_snapshot,
@@ -358,14 +455,95 @@ def _serialize(operation: OperationRequest, actor_id: int) -> dict[str, Any]:
         "next_remind_at": (
             next_remind_at.isoformat() if next_remind_at is not None else None
         ),
+        "target_user_id": (
+            usage_detail.target_user_id
+            if usage_detail is not None
+            else transfer_target_user_id
+        ),
+        "requested_category": (
+            usage_detail.requested_category_snapshot
+            if usage_detail is not None
+            else None
+        ),
+        "requested_quantity": (
+            usage_detail.requested_quantity if usage_detail is not None else None
+        ),
+        "reason": usage_detail.reason if usage_detail is not None else None,
+        "fulfillment_status": (
+            usage_detail.fulfillment_status if usage_detail is not None else None
+        ),
+        "issued_by": usage_detail.issued_by if usage_detail is not None else None,
+        "issued_at": (
+            isoformat_utc(usage_detail.issued_at)
+            if usage_detail is not None and usage_detail.issued_at is not None
+            else None
+        ),
+        "issue_remark": usage_detail.issue_remark if usage_detail is not None else None,
+        "signed_by": usage_detail.signed_by if usage_detail is not None else None,
+        "signed_at": (
+            isoformat_utc(usage_detail.signed_at)
+            if usage_detail is not None and usage_detail.signed_at is not None
+            else None
+        ),
+        "sign_remark": usage_detail.sign_remark if usage_detail is not None else None,
+        "usage_mode": (usage_detail.usage_mode if usage_detail is not None else None),
+        "expected_return_at": (
+            isoformat_utc(usage_detail.expected_return_at)
+            if usage_detail is not None and usage_detail.expected_return_at is not None
+            else None
+        ),
+        "is_overdue": bool(
+            usage_detail is not None
+            and usage_detail.usage_mode == "BORROW"
+            and usage_detail.expected_return_at is not None
+            and (
+                normalize_utc(usage_detail.expected_return_at)
+                < datetime.now(timezone.utc)
+            )
+            and operation.execution_status == ExecutionStatus.SUCCESS.value
+        ),
     }
+    if operation.operation_type == OperationType.PERSONAL_RETURN.value:
+        result["return_stage"] = None
+        return_detail = db.session.scalar(
+            select(AssetReturnRequest).where(
+                AssetReturnRequest.operation_request_id == operation.id
+            )
+        )
+        if operation.approval_status == ApprovalStatus.APPROVED.value:
+            if operation.execution_status == ExecutionStatus.SUCCESS.value:
+                result["return_stage"] = "COMPLETED"
+            elif return_detail is not None:
+                result["return_stage"] = "PENDING_INSPECTION"
+        result["allowed_actions"] = list(
+            _personal_return_allowed_actions(
+                operation,
+                assets,
+                actor_id,
+                can_manage=permission_service.has_permission(
+                    actor_id, "asset:usage:manage"
+                ),
+            )
+        )
+    return result
 
 
-def _access_filter(actor_id: int):
+def request_access_filter(actor_id: int):
     organization_ids = permission_service.accessible_organization_ids(actor_id)
     if organization_ids is None:
         return OperationRequest.id.is_not(None)
-    scope_filters = [OperationRequest.applicant_id == actor_id]
+    scope_filters = [
+        OperationRequest.applicant_id == actor_id,
+        and_(
+            OperationRequest.operation_type == OperationType.PERSONAL_USE.value,
+            AssetUsageRequest.target_user_id == actor_id,
+        ),
+        and_(
+            OperationRequest.operation_type == OperationType.TRANSFER.value,
+            OperationRequestAsset.target_data["holder_user_id"].as_integer()
+            == actor_id,
+        ),
+    ]
     if organization_ids:
         scope_filters.append(
             OperationRequestAsset.organization_id_snapshot.in_(organization_ids)
@@ -374,13 +552,34 @@ def _access_filter(actor_id: int):
 
 
 def list_requests(actor_id: int, page: int = 0, size: int = 50) -> dict[str, Any]:
-    permission_service.require_permission(actor_id, "operation:request:view")
-    access_filter = _access_filter(actor_id)
+    can_view_all = permission_service.has_permission(actor_id, "operation:request:view")
+    if not can_view_all and not _can_view_own_requests(actor_id):
+        raise BusinessException("无操作权限", result_code=ResultCode.FORBIDDEN)
+    access_filter = (
+        request_access_filter(actor_id)
+        if can_view_all
+        else or_(
+            OperationRequest.applicant_id == actor_id,
+            and_(
+                OperationRequest.operation_type == OperationType.PERSONAL_USE.value,
+                AssetUsageRequest.target_user_id == actor_id,
+            ),
+            and_(
+                OperationRequest.operation_type == OperationType.TRANSFER.value,
+                OperationRequestAsset.target_data["holder_user_id"].as_integer()
+                == actor_id,
+            ),
+        )
+    )
     base = (
         select(OperationRequest)
         .outerjoin(
             OperationRequestAsset,
             OperationRequestAsset.operation_request_id == OperationRequest.id,
+        )
+        .outerjoin(
+            AssetUsageRequest,
+            AssetUsageRequest.operation_request_id == OperationRequest.id,
         )
         .where(access_filter)
         .distinct()
@@ -402,16 +601,38 @@ def list_requests(actor_id: int, page: int = 0, size: int = 50) -> dict[str, Any
 
 
 def get_request(operation_request_id: int, actor_id: int) -> dict[str, Any]:
-    permission_service.require_permission(actor_id, "operation:request:view")
+    can_view_all = permission_service.has_permission(actor_id, "operation:request:view")
+    if not can_view_all and not _can_view_own_requests(actor_id):
+        raise BusinessException("无操作权限", result_code=ResultCode.FORBIDDEN)
+    access_filter = (
+        request_access_filter(actor_id)
+        if can_view_all
+        else or_(
+            OperationRequest.applicant_id == actor_id,
+            and_(
+                OperationRequest.operation_type == OperationType.PERSONAL_USE.value,
+                AssetUsageRequest.target_user_id == actor_id,
+            ),
+            and_(
+                OperationRequest.operation_type == OperationType.TRANSFER.value,
+                OperationRequestAsset.target_data["holder_user_id"].as_integer()
+                == actor_id,
+            ),
+        )
+    )
     statement = (
         select(OperationRequest)
         .outerjoin(
             OperationRequestAsset,
             OperationRequestAsset.operation_request_id == OperationRequest.id,
         )
+        .outerjoin(
+            AssetUsageRequest,
+            AssetUsageRequest.operation_request_id == OperationRequest.id,
+        )
         .where(
             OperationRequest.id == operation_request_id,
-            _access_filter(actor_id),
+            access_filter,
         )
         .distinct()
     )
@@ -963,6 +1184,7 @@ __all__ = [
     "my_tasks",
     "reject_task",
     "release_locks",
+    "request_access_filter",
     "retry_request",
     "terminate_request",
     "withdraw_request",

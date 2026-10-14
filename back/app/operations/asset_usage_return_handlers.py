@@ -86,11 +86,7 @@ def _personal_target(
     detail: AssetUsageRequest,
     snapshot: OperationRequestAsset,
 ) -> dict[str, object]:
-    if (
-        detail.target_user_id is None
-        or detail.target_public_object_id is not None
-        or detail.usage_department_id is None
-    ):
+    if detail.target_user_id is None or detail.target_public_object_id is not None:
         raise BusinessException("个人领用申请详情不匹配")
     location_id = detail.target_location_id
     if location_id is None:
@@ -178,21 +174,43 @@ def _canonical_before_data(asset: Asset) -> dict[str, object]:
 def _validate_asset_snapshot(
     asset: Asset,
     snapshot: OperationRequestAsset,
+    *,
+    pending_receipt: bool = False,
 ) -> dict[str, object]:
-    if not _same_scalar(snapshot.asset_status_snapshot, asset.status):
+    expected_current_status = (
+        AssetStatus.PENDING_RECEIPT.value
+        if pending_receipt
+        else snapshot.asset_status_snapshot
+    )
+    if not _same_scalar(asset.status, expected_current_status):
         raise BusinessException("领用资产状态快照与当前数据不匹配")
+    if pending_receipt and snapshot.asset_status_snapshot != AssetStatus.IDLE.value:
+        raise BusinessException("领用资产原始状态不是空闲")
     if not _same_scalar(snapshot.organization_id_snapshot, asset.organization_id):
         raise BusinessException("领用资产组织快照与当前数据不匹配")
-    if not _same_scalar(snapshot.asset_version_snapshot, asset.version):
+    if pending_receipt:
+        if asset.version <= snapshot.asset_version_snapshot:
+            raise BusinessException("领用资产发放状态未生效")
+    elif not _same_scalar(snapshot.asset_version_snapshot, asset.version):
         raise BusinessException("领用资产版本已变化")
 
     canonical = _canonical_before_data(asset)
     before_data = snapshot.before_data
+    comparable = {
+        key: value
+        for key, value in canonical.items()
+        if not pending_receipt or key not in {"status", "version"}
+    }
     if not isinstance(before_data, dict) or any(
         key not in before_data or not _same_scalar(before_data[key], value)
-        for key, value in canonical.items()
+        for key, value in comparable.items()
     ):
         raise BusinessException("领用资产操作前快照与当前数据不匹配")
+    if pending_receipt and (
+        not _same_scalar(before_data.get("status"), snapshot.asset_status_snapshot)
+        or not _same_scalar(before_data.get("version"), snapshot.asset_version_snapshot)
+    ):
+        raise BusinessException("领用资产原始快照不匹配")
 
     holder_snapshot = snapshot.holder_snapshot
     if holder_snapshot is None:
@@ -333,11 +351,29 @@ def _load_context(
     if [asset.id for asset in assets] != snapshot_ids:
         raise BusinessException("领用申请资产与快照不一致")
 
+    pending_receipt = (
+        operation_type == OperationType.PERSONAL_USE.value
+        and operation.approval_execution_mode
+        == ApprovalExecutionMode.MANUAL_CONFIRM.value
+    )
     targets: list[dict[str, object]] = []
     for asset, snapshot in zip(assets, snapshots, strict=True):
-        if asset.status != AssetStatus.IDLE.value:
-            raise BusinessException("领用资产当前状态不是空闲")
-        _validate_asset_snapshot(asset, snapshot)
+        expected_status = (
+            AssetStatus.PENDING_RECEIPT.value
+            if pending_receipt
+            else AssetStatus.IDLE.value
+        )
+        if asset.status != expected_status:
+            raise BusinessException(
+                "领用资产当前状态不是领用待确认"
+                if pending_receipt
+                else "领用资产当前状态不是空闲"
+            )
+        _validate_asset_snapshot(
+            asset,
+            snapshot,
+            pending_receipt=pending_receipt,
+        )
         targets.append(_validate_target(operation_type, detail, snapshot))
     _validate_current_feature_target(operation_type, detail, targets)
     return _ExecutionContext(
@@ -355,14 +391,14 @@ def _execute(operation_request_id: int, actor_id: int, operation_type: str) -> N
         before_data = _canonical_before_data(asset)
         if not asset_repository.cas_update(
             snapshot.asset_id,
-            snapshot.asset_version_snapshot,
+            asset.version,
             snapshot.target_data,
         ):
             raise BusinessException("资产版本冲突")
         after_data = {
             **before_data,
             **snapshot.target_data,
-            "version": snapshot.asset_version_snapshot + 1,
+            "version": asset.version + 1,
         }
         audit_service.record_asset_lifecycle(
             asset_id=snapshot.asset_id,
@@ -371,6 +407,12 @@ def _execute(operation_request_id: int, actor_id: int, operation_type: str) -> N
             actor_id=actor_id,
             before_data=before_data,
             after_data=after_data,
+            remark=(
+                "员工签收"
+                if context.operation.approval_execution_mode
+                == ApprovalExecutionMode.MANUAL_CONFIRM.value
+                else None
+            ),
         )
         asset_ids.append(snapshot.asset_id)
 
@@ -391,7 +433,10 @@ def _require_return_detail(operation_request_id: int) -> AssetReturnRequest:
     if detail is None:
         raise BusinessException("退回申请详情不存在")
     if (
-        type(detail.return_location_id) is not int
+        type(detail.return_company_id) is not int
+        or type(detail.return_usage_company_id) is not int
+        or type(detail.return_region_id) is not int
+        or type(detail.return_location_id) is not int
         or type(detail.confirmed_by) is not int
         or not isinstance(detail.confirmed_at, datetime)
     ):
@@ -434,11 +479,14 @@ def _return_target(
         "usage_department_id": None,
     }
     fields = frozenset(expected)
-    if operation_type == OperationType.PERSONAL_RETURN.value:
-        return expected, fields
     return (
-        {**expected, "location_id": detail.return_location_id},
-        frozenset({*fields, "location_id"}),
+        {
+            **expected,
+            "organization_id": detail.return_company_id,
+            "usage_company_id": detail.return_usage_company_id,
+            "location_id": detail.return_location_id,
+        },
+        frozenset({*fields, "organization_id", "usage_company_id", "location_id"}),
     )
 
 
@@ -465,9 +513,14 @@ def _validate_return_operation_contract(
         raise BusinessException("退回申请类型与处理器不匹配")
     if operation_type == OperationType.PERSONAL_RETURN.value:
         valid = (
-            operation.approval_channel == ApprovalChannel.FEISHU.value
+            operation.approval_channel
+            in {ApprovalChannel.FEISHU.value, ApprovalChannel.INTERNAL.value}
             and operation.approval_execution_mode
             == ApprovalExecutionMode.MANUAL_CONFIRM.value
+        ) or (
+            operation.approval_channel == ApprovalChannel.DIRECT.value
+            and operation.approval_execution_mode
+            == ApprovalExecutionMode.AUTO_ON_APPROVAL.value
         )
     else:
         valid = (
@@ -488,7 +541,10 @@ def _validate_return_asset_state(
         valid = (
             asset.status == AssetStatus.IN_USE.value
             and asset.usage_type == UsageType.PERSONAL.value
-            and asset.holder_user_id == operation.applicant_id
+            and (
+                operation.approval_channel == ApprovalChannel.DIRECT.value
+                or asset.holder_user_id == operation.applicant_id
+            )
             and asset.public_object_id is None
         )
         if not valid:
@@ -568,6 +624,8 @@ def _execute_return(
             "holder_user_id": None,
             "public_object_id": None,
             "usage_department_id": None,
+            "organization_id": context.detail.return_company_id,
+            "usage_company_id": context.detail.return_usage_company_id,
             "location_id": context.detail.return_location_id,
         }
         if not asset_repository.cas_update(
