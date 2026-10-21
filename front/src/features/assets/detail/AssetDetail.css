@@ -296,8 +296,8 @@
 }
 
 .asset-detail__action-link:hover {
-  color: #154fb9;
-  border-color: rgba(48, 99, 184, 0.34);
+  color: var(--asset-color-brand-hover);
+  border-color: rgba(180, 139, 0, 0.38);
   background: rgba(255, 255, 255, 0.88);
   box-shadow:
     0 3px 9px rgba(31, 67, 120, 0.1),
@@ -310,20 +310,16 @@
 
 .asset-detail__action-link--primary {
   color: #ffffff;
-  background: linear-gradient(180deg, #3d7df0 0%, #2867df 100%);
-  border-color: rgba(18, 69, 165, 0.52);
-  box-shadow:
-    0 2px 5px rgba(27, 82, 181, 0.24),
-    inset 0 1px 0 rgba(255, 255, 255, 0.3);
+  background: linear-gradient(180deg, #c99b08 0%, #a37e00 100%);
+  border-color: rgba(102, 78, 0, 0.55);
+  box-shadow: 0 2px 5px rgba(180, 139, 0, 0.24);
 }
 
 .asset-detail__action-link--primary:hover {
   color: #ffffff;
-  border-color: rgba(16, 62, 151, 0.58);
-  background: linear-gradient(180deg, #4b88f4 0%, #2f6fe6 100%);
-  box-shadow:
-    0 4px 10px rgba(27, 82, 181, 0.28),
-    inset 0 1px 0 rgba(255, 255, 255, 0.36);
+  border-color: rgba(90, 69, 0, 0.62);
+  background: linear-gradient(180deg, #d4a412 0%, #ad8602 100%);
+  box-shadow: 0 3px 8px rgba(180, 139, 0, 0.26);
 }
 
 .asset-detail__empty-tab {
@@ -407,7 +403,7 @@
 }
 
 .asset-detail__relation-card:hover {
-  color: #154fb9;
+  color: var(--asset-color-brand-hover);
   border-color: rgba(52, 120, 246, 0.36);
   box-shadow:
     0 12px 26px rgba(42, 74, 115, 0.13),

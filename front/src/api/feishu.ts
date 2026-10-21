@@ -13,5 +13,8 @@ export interface FeishuSyncResult {
 export const feishuApi = {
   loginUrl: () => http.get<unknown, FeishuLoginUrl>('/feishu/login-url'),
   exchange: (code: string) => http.post<unknown, LoginResponse>('/feishu/login/exchange', { code }),
-  syncAll: () => http.post<unknown, FeishuSyncResult>('/feishu/sync'),
+  syncAll: () =>
+    http.post<unknown, FeishuSyncResult>('/feishu/sync', undefined, {
+      timeout: 30_000,
+    }),
 }

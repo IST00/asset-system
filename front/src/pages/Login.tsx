@@ -22,6 +22,7 @@ import {
   isDemoCredentials,
   isDemoLoginEnabled,
 } from '@/features/auth/demoAuth'
+import fanshuLogo from '@/assets/fanshu-logo.png'
 import { useAuthStore } from '@/store/auth'
 import './Login.css'
 
@@ -93,7 +94,7 @@ export default function Login() {
       <section className="asset-login__story" aria-labelledby="asset-login-title">
         <div className="asset-login__brand">
           <span className="asset-login__brand-mark">
-            <Boxes aria-hidden="true" size={24} strokeWidth={1.9} />
+            <img src={fanshuLogo} alt="" />
           </span>
           <span>
             <strong>资产管理系统</strong>
@@ -136,7 +137,7 @@ export default function Login() {
         <div className="asset-login__card">
           <div className="asset-login__card-heading">
             <span className="asset-login__mobile-brand">
-              <Boxes aria-hidden="true" size={20} />
+              <img src={fanshuLogo} alt="" />
               资产管理系统
             </span>
             <span className="asset-login__secure-label">

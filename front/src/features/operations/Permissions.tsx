@@ -1,4 +1,16 @@
-import { App, Button, Checkbox, Form, Input, Modal, Radio, Select, Spin, Switch } from 'antd'
+import {
+  App,
+  Button,
+  Checkbox,
+  Form,
+  Input,
+  Modal,
+  Pagination,
+  Radio,
+  Select,
+  Spin,
+  Switch,
+} from 'antd'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlertTriangle,
@@ -11,7 +23,7 @@ import {
   UserCog,
   UsersRound,
 } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   administrationApi,
   masterDataApi,
@@ -118,6 +130,8 @@ function flattenOrganizations(items: TreeItem[], depth = 0): { value: number; la
 export default function Permissions() {
   const { message, modal } = App.useApp()
   const [keyword, setKeyword] = useState('')
+  const [userPage, setUserPage] = useState(0)
+  const [debouncedKeyword, setDebouncedKeyword] = useState('')
   const [roleDialog, setRoleDialog] = useState<RoleDialogMode | null>(null)
   const [editingRole, setEditingRole] = useState<RoleItem | null>(null)
   const [editingUser, setEditingUser] = useState<User | null>(null)
@@ -155,10 +169,19 @@ export default function Permissions() {
       return { roles, permissionItems, organizations }
     },
   })
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedKeyword(keyword.trim())
+      setUserPage(0)
+    }, 300)
+    return () => window.clearTimeout(timer)
+  }, [keyword])
+
   const usersQuery = useQuery({
-    queryKey: ['administration', 'users'],
-    queryFn: () => administrationApi.users(0, 100),
+    queryKey: ['administration', 'users', userPage, debouncedKeyword],
+    queryFn: () => administrationApi.users(userPage, 50, debouncedKeyword),
     enabled: canViewUsers,
+    placeholderData: (previous) => previous,
   })
   const roles = useMemo(() => accessQuery.data?.roles ?? [], [accessQuery.data?.roles])
   const permissionItems = useMemo(
@@ -177,15 +200,7 @@ export default function Permissions() {
     [accessQuery.data?.organizations],
   )
   const roleIdByCode = useMemo(() => new Map(roles.map((role) => [role.code, role.id])), [roles])
-  const normalizedKeyword = keyword.trim().toLowerCase()
   const users = (usersQuery.data?.items ?? [])
-    .filter(
-      (user) =>
-        !normalizedKeyword ||
-        [user.username, user.nickname ?? '', ...(user.roles ?? [])].some((value) =>
-          value.toLowerCase().includes(normalizedKeyword),
-        ),
-    )
     .map((user) => ({
       user,
       rolePriority: Math.min(...(user.roles ?? []).map(roleDisplayPriority)),
@@ -603,7 +618,7 @@ export default function Permissions() {
                         <div className="operations-user-row__content">
                           <strong>{user.nickname || user.username}</strong>
                           <span>
-                            {user.username} · 组织 #{user.organization_id ?? '未设置'}
+                            {user.username} · {user.organization_path || '未设置组织'}
                           </span>
                         </div>
                         {user.enabled === false ? (
@@ -656,8 +671,18 @@ export default function Permissions() {
             ) : (
               <StatePanel mode="empty" message="没有匹配的用户" />
             )}
+            <div className="operations-user-pagination">
+              <Pagination
+                current={userPage + 1}
+                pageSize={50}
+                total={usersQuery.data?.total ?? 0}
+                showSizeChanger={false}
+                showTotal={(total) => `共 ${total} 名用户`}
+                onChange={(page) => setUserPage(page - 1)}
+              />
+            </div>
             <div className="operations-form-note">
-              <UsersRound size={15} /> 当前展示前 100 名用户；更多用户需接入服务端搜索和分页。
+              <UsersRound size={15} /> 支持按账号、姓名服务端搜索；角色分配后列表会自动刷新。
             </div>
           </>
         ) : (

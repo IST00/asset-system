@@ -112,9 +112,9 @@ def _normalize_changes(change_type: str, changes: dict[str, Any]) -> dict[str, A
         try:
             amount = Decimal(str(normalized["original_amount"]))
         except InvalidOperation as error:
-            raise BusinessException("资产原值格式无效") from error
+            raise BusinessException("金额格式无效") from error
         if amount < 0:
-            raise BusinessException("资产原值不能为负数")
+            raise BusinessException("金额不能为负数")
         normalized["original_amount"] = f"{amount:.2f}"
     if "service_life_months" in normalized:
         months = normalized["service_life_months"]

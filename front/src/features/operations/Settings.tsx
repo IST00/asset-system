@@ -53,7 +53,14 @@ export default function Settings() {
       )
       void query.refetch()
     },
-    onError: () => message.error('飞书同步失败，请检查正式配置与权限'),
+    onError: (error) => {
+      const isTimeout = error.message.includes('timeout')
+      message.error(
+        isTimeout
+          ? '飞书组织较大，同步仍在处理中，请稍后刷新查看结果'
+          : '飞书同步失败，请检查正式配置与权限',
+      )
+    },
   })
   const configuredCount = status
     ? [

@@ -144,7 +144,7 @@ const informationChangeFieldLabels: Record<string, string> = {
   rfid_tag: 'RFID 标签',
   remark: '备注',
   organization_id: '所属组织',
-  original_amount: '资产原值',
+  original_amount: '金额',
   zero_amount_reason: '零金额原因',
   purchase_date: '购入日期',
   service_life_months: '使用期限（月）',
@@ -1365,7 +1365,7 @@ export default function Workflows() {
                   <small>{dayjs(handover.created_at).format('YYYY-MM-DD HH:mm')}</small>
                 </div>
                 <span>{handover.items.map((item) => item.asset_code).join('、')}</span>
-                <span>{handover.receiver_user?.name ?? `用户 #${handover.receiver_user_id}`}</span>
+                <span>{handover.receiver_user?.name ?? '扫码接收人待确认'}</span>
                 <StatusPill
                   label={handover.status === 'PENDING_OUTGOING' ? '待转出确认' : '待员工签收'}
                   tone={handover.status === 'PENDING_OUTGOING' ? 'amber' : 'blue'}
@@ -2215,7 +2215,7 @@ export default function Workflows() {
               if (changeType === 'FINANCIAL') {
                 return (
                   <>
-                    <Form.Item name="original_amount" label="变更后资产原值">
+                    <Form.Item name="original_amount" label="变更后金额">
                       <InputNumber min={0} precision={2} prefix="¥" style={{ width: '100%' }} />
                     </Form.Item>
                     <Form.Item name="zero_amount_reason" label="零金额原因">

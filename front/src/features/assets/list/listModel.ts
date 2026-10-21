@@ -37,6 +37,7 @@ export interface AssetListFilterValues {
   source_name?: string
   purchase_date_from?: string
   purchase_date_to?: string
+  only_my_assets?: boolean
 }
 
 export interface AssetStatusOption {
@@ -128,6 +129,7 @@ export function buildAssetListQuery(
   if (sourceName) query.source_name = sourceName
   if (purchaseDateFrom) query.purchase_date_from = purchaseDateFrom
   if (purchaseDateTo) query.purchase_date_to = purchaseDateTo
+  if (filters.only_my_assets) query.only_my_assets = true
 
   return query
 }

@@ -66,6 +66,7 @@ export interface AssetListQuery {
   source_name?: string
   purchase_date_from?: string
   purchase_date_to?: string
+  only_my_assets?: boolean
   page: number
   size: 20 | 50 | 100
 }

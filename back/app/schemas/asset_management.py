@@ -288,6 +288,25 @@ class ScrapAssetsSchema(Schema):
         return normalized
 
 
+class TransferHandoverSchema(Schema):
+    items = fields.List(
+        fields.Nested(LifecycleAssetTargetSchema),
+        required=True,
+        validate=validate.Length(min=1, max=100),
+    )
+    receiver_user_id = fields.Integer(required=False, allow_none=True, strict=True)
+    outgoing_user_id = fields.Integer(required=False, allow_none=True, strict=True)
+    organization_id = fields.Integer(required=False, strict=True)
+    location_id = fields.Integer(required=False, strict=True)
+    manager_id = fields.Integer(required=False, strict=True)
+    reason = fields.String(required=False, validate=validate.Length(min=2, max=500))
+
+
+class TransferHandoverClaimSchema(Schema):
+    handover_token = fields.String(required=True, validate=validate.Length(equal=32))
+    remark = fields.String(required=False, validate=validate.Length(min=2, max=500))
+
+
 __all__ = [
     "BatchUpdateAssetRequestSchema",
     "CreatePublicUsageObjectSchema",
@@ -300,18 +319,6 @@ __all__ = [
     "TransferAssetsSchema",
     "UpdateAssetRequestSchema",
     "UpdatePublicUsageObjectSchema",
+    "TransferHandoverSchema",
+    "TransferHandoverClaimSchema",
 ]
-
-
-class TransferHandoverSchema(Schema):
-    items = fields.List(
-        fields.Nested(LifecycleAssetTargetSchema),
-        required=True,
-        validate=validate.Length(min=1, max=100),
-    )
-    receiver_user_id = fields.Integer(required=True, strict=True)
-    outgoing_user_id = fields.Integer(required=False, allow_none=True, strict=True)
-    organization_id = fields.Integer(required=False, strict=True)
-    location_id = fields.Integer(required=False, strict=True)
-    manager_id = fields.Integer(required=False, strict=True)
-    reason = fields.String(required=True, validate=validate.Length(min=2, max=500))

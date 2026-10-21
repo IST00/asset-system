@@ -2,17 +2,16 @@ import { Avatar, Button, Drawer, Dropdown, Tooltip } from 'antd'
 import type { MenuProps } from 'antd'
 import { useQuery } from '@tanstack/react-query'
 import {
-  ArrowLeftRight,
   Bell,
   Box,
+  Boxes,
   ClipboardCheck,
   Database,
   FileUp,
-  Home,
+  LayoutDashboard,
   LogOut,
   Menu,
-  Package,
-  ScanLine,
+  ScanBarcode,
   ScrollText,
   Settings,
   ShieldCheck,
@@ -27,28 +26,37 @@ import { authApi } from '@/api'
 import { navigationEntries } from '@/config/navigation'
 import { filterNavigation } from '@/config/navigationModel'
 import type { NavigationEntry } from '@/config/navigationModel'
+import fanshuLogo from '@/assets/fanshu-logo.png'
 import { useAuthStore } from '@/store/auth'
 import { roleCodeLabel } from '@/utils/displayLabels'
 import './AppShell.css'
 
 const iconMap: Record<string, LucideIcon> = {
   approval: ClipboardCheck,
-  assets: Package,
+  assets: Boxes,
   database: Database,
-  home: Home,
+  home: LayoutDashboard,
   import: FileUp,
   logs: ScrollText,
-  package: Package,
-  scan: ScanLine,
+  package: Boxes,
+  scan: ScanBarcode,
   shield: ShieldCheck,
   user: UserRound,
   workflow: Workflow,
-  workflows: ArrowLeftRight,
+  workflows: Workflow,
 }
 
-function NavigationIcon({ name, size = 20 }: { name: string; size?: number }) {
+function NavigationIcon({
+  name,
+  size = 21,
+  strokeWidth = 1.65,
+}: {
+  name: string
+  size?: number
+  strokeWidth?: number
+}) {
   const Icon = iconMap[name] ?? Box
-  return <Icon aria-hidden="true" size={size} strokeWidth={1.8} />
+  return <Icon aria-hidden="true" size={size} strokeWidth={strokeWidth} />
 }
 
 export default function AppShell() {
@@ -128,26 +136,21 @@ export default function AppShell() {
       .join(' ')
 
     return (
-      <Tooltip
+      <button
         key={entry.key}
-        title={entry.disabled ? `${label} · ${t('common.comingSoon')}` : label}
-        placement="right"
-        mouseEnterDelay={0.35}
-        mouseLeaveDelay={0}
-        arrow={false}
-        classNames={{ root: 'asset-shell__rail-tooltip' }}
+        type="button"
+        className={classNames}
+        aria-label={label}
+        aria-current={isSelected(entry) ? 'page' : undefined}
+        aria-disabled={entry.disabled || undefined}
+        title={entry.disabled ? `${label} · ${t('common.comingSoon')}` : undefined}
+        onClick={() => handleNavigation(entry)}
       >
-        <button
-          type="button"
-          className={classNames}
-          aria-label={label}
-          aria-current={isSelected(entry) ? 'page' : undefined}
-          aria-disabled={entry.disabled || undefined}
-          onClick={() => handleNavigation(entry)}
-        >
+        <span className="asset-shell__rail-icon">
           <NavigationIcon name={entry.icon} />
-        </button>
-      </Tooltip>
+        </span>
+        <span className="asset-shell__rail-label">{label}</span>
+      </button>
     )
   }
 
@@ -160,7 +163,7 @@ export default function AppShell() {
           aria-label={t('nav.home')}
           onClick={() => navigate('/home')}
         >
-          <Box aria-hidden="true" size={24} strokeWidth={2} />
+          <img className="asset-shell__brand-logo" src={fanshuLogo} alt="" />
         </button>
 
         <nav className="asset-shell__rail-nav" aria-label={t('app.name')}>
@@ -169,28 +172,22 @@ export default function AppShell() {
 
         <div className="asset-shell__rail-footer">
           {canViewSettings ? (
-            <Tooltip
-              title={t('nav.settings')}
-              placement="right"
-              mouseEnterDelay={0.35}
-              mouseLeaveDelay={0}
-              arrow={false}
-              classNames={{ root: 'asset-shell__rail-tooltip' }}
+            <button
+              type="button"
+              className={
+                location.pathname.startsWith('/settings')
+                  ? 'asset-shell__rail-button asset-shell__rail-button--active'
+                  : 'asset-shell__rail-button'
+              }
+              aria-label={t('nav.settings')}
+              aria-current={location.pathname.startsWith('/settings') ? 'page' : undefined}
+              onClick={() => navigate('/settings')}
             >
-              <button
-                type="button"
-                className={
-                  location.pathname.startsWith('/settings')
-                    ? 'asset-shell__rail-button asset-shell__rail-button--active'
-                    : 'asset-shell__rail-button'
-                }
-                aria-label={t('nav.settings')}
-                aria-current={location.pathname.startsWith('/settings') ? 'page' : undefined}
-                onClick={() => navigate('/settings')}
-              >
-                <Settings aria-hidden="true" size={20} strokeWidth={1.8} />
-              </button>
-            </Tooltip>
+              <span className="asset-shell__rail-icon">
+                <Settings aria-hidden="true" size={21} strokeWidth={1.65} />
+              </span>
+              <span className="asset-shell__rail-label">{t('nav.settings')}</span>
+            </button>
           ) : null}
           <Dropdown menu={accountMenu} placement="topLeft" trigger={['click']}>
             <button
@@ -207,7 +204,7 @@ export default function AppShell() {
       <div className="asset-shell__workspace">
         <header className="asset-shell__topbar">
           <div className="asset-shell__mobile-brand">
-            <Box aria-hidden="true" size={22} strokeWidth={2} />
+            <img src={fanshuLogo} alt="" />
             <span>{t('app.shortName')}</span>
           </div>
           <div className="asset-shell__topbar-actions">
@@ -258,7 +255,7 @@ export default function AppShell() {
               aria-disabled={entry.disabled || undefined}
               onClick={() => handleNavigation(entry)}
             >
-              <NavigationIcon name={entry.icon} size={19} />
+              <NavigationIcon name={entry.icon} size={19} strokeWidth={1.6} />
               <span>{t(entry.labelKey)}</span>
             </button>
           )
@@ -291,7 +288,7 @@ export default function AppShell() {
               aria-disabled={entry.disabled || undefined}
               onClick={() => handleNavigation(entry)}
             >
-              <NavigationIcon name={entry.icon} size={18} />
+              <NavigationIcon name={entry.icon} size={18} strokeWidth={1.6} />
               <span>{t(entry.labelKey)}</span>
               {entry.disabled ? <small>{t('common.comingSoon')}</small> : null}
             </button>

@@ -13,6 +13,8 @@ from app.schemas.asset_management import (
     RepairStartSchema,
     ScrapAssetsSchema,
     TransferAssetsSchema,
+    TransferHandoverClaimSchema,
+    TransferHandoverSchema,
     UpdateAssetRequestSchema,
     UpdatePublicUsageObjectSchema,
 )
@@ -35,6 +37,8 @@ _transfer_schema = TransferAssetsSchema()
 _repair_start_schema = RepairStartSchema()
 _repair_complete_schema = RepairCompleteSchema()
 _scrap_schema = ScrapAssetsSchema()
+_transfer_handover_schema = TransferHandoverSchema()
+_transfer_handover_claim_schema = TransferHandoverClaimSchema()
 _financial_summary_query_schema = FinancialSummaryQuerySchema()
 
 
@@ -176,15 +180,10 @@ def scrap_assets() -> dict:
     ).to_dict()
 
 
-__all__ = ["bp"]
-
-
 @bp.post("/asset-actions/transfer-handover")
 @jwt_required()
 def create_transfer_handover() -> dict:
-    from app.schemas.asset_management import TransferHandoverSchema
-
-    payload = TransferHandoverSchema().load(request.get_json(silent=True) or {})
+    payload = _transfer_handover_schema.load(request.get_json(silent=True) or {})
     return Result.success(
         asset_transfer_handover_service.create(payload, current_user_id())
     ).to_dict()
@@ -237,5 +236,26 @@ def reject_transfer_handover(handover_id: int) -> dict:
     return Result.success(
         asset_transfer_handover_service.reject(
             handover_id, current_user_id(), str(reason)
+        )
+    ).to_dict()
+
+
+@bp.get("/asset-actions/transfer-handovers/by-token/<handover_token>")
+@jwt_required()
+def transfer_handover_by_token(handover_token: str) -> dict:
+    return Result.success(
+        asset_transfer_handover_service.get_by_token(current_user_id(), handover_token)
+    ).to_dict()
+
+
+@bp.post("/asset-actions/transfer-handovers/claim-by-token")
+@jwt_required()
+def claim_transfer_handover_by_token() -> dict:
+    payload = _transfer_handover_claim_schema.load(request.get_json(silent=True) or {})
+    return Result.success(
+        asset_transfer_handover_service.claim_by_token(
+            current_user_id(),
+            payload["handover_token"],
+            payload.get("remark"),
         )
     ).to_dict()

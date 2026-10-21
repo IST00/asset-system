@@ -67,6 +67,28 @@ def require_enabled(organization_id: int) -> Organization:
     return organization
 
 
+def full_paths() -> dict[int, str]:
+    """Return every organization's full path keyed by organization id."""
+    rows = organization_repository.list_all()
+    rows_by_id = {row.id: row for row in rows}
+    result: dict[int, str] = {}
+    for row in rows:
+        names = [row.name]
+        parent_id = row.parent_id
+        visited = {row.id}
+        while (
+            parent_id is not None
+            and parent_id in rows_by_id
+            and parent_id not in visited
+        ):
+            parent = rows_by_id[parent_id]
+            names.append(parent.name)
+            visited.add(parent_id)
+            parent_id = parent.parent_id
+        result[row.id] = "/".join(reversed(names))
+    return result
+
+
 def _to_dict(organization: Organization, include_top: bool = False) -> dict[str, Any]:
     result: dict[str, Any] = {
         "id": organization.id,
@@ -175,6 +197,7 @@ __all__ = [
     "get_descendant_ids",
     "get_top_level",
     "require_enabled",
+    "full_paths",
     "set_enabled",
     "tree",
     "update",

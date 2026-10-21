@@ -24,8 +24,8 @@ class AssetTransferHandover(TimestampMixin, db.Model):  # type: ignore[misc,name
     outgoing_user_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="RESTRICT"), nullable=True
     )
-    receiver_user_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True
+    receiver_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=True, index=True
     )
     organization_id: Mapped[int | None] = mapped_column(
         ForeignKey("organizations.id", ondelete="RESTRICT"), nullable=True
@@ -37,6 +37,9 @@ class AssetTransferHandover(TimestampMixin, db.Model):  # type: ignore[misc,name
         ForeignKey("users.id", ondelete="RESTRICT"), nullable=True
     )
     reason: Mapped[str] = mapped_column(Text, nullable=False)
+    handover_token: Mapped[str | None] = mapped_column(
+        String(64), unique=True, nullable=True, index=True
+    )
     items: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     status: Mapped[str] = mapped_column(
         String(24), nullable=False, default="PENDING_OUTGOING", index=True

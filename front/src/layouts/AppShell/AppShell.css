@@ -16,17 +16,10 @@
   padding: 12px 10px;
   color: #ffffff;
   overflow: hidden;
-  background:
-    linear-gradient(150deg, rgba(255, 255, 255, 0.13), transparent 28%),
-    linear-gradient(180deg, rgba(15, 35, 68, 0.9), rgba(8, 20, 42, 0.8));
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: 28px;
-  box-shadow:
-    0 24px 54px rgba(10, 29, 60, 0.27),
-    inset 0 1px 0 rgba(255, 255, 255, 0.28),
-    inset 0 -1px 0 rgba(0, 0, 0, 0.18);
-  backdrop-filter: blur(28px) saturate(150%);
-  -webkit-backdrop-filter: blur(28px) saturate(150%);
+  background: linear-gradient(180deg, rgba(38, 41, 47, 0.98), rgba(24, 26, 30, 0.98));
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 24px;
+  box-shadow: 0 18px 40px rgba(24, 26, 30, 0.22);
 }
 
 .asset-shell__rail::after {
@@ -35,8 +28,8 @@
   height: 34%;
   content: '';
   pointer-events: none;
-  background: linear-gradient(180deg, rgba(91, 200, 255, 0.1), transparent);
-  border-radius: 24px;
+  background: linear-gradient(180deg, rgba(245, 197, 24, 0.07), transparent);
+  border-radius: 20px;
 }
 
 .asset-shell__brand,
@@ -53,22 +46,26 @@
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
-  color: #ffffff;
   cursor: pointer;
-  background: linear-gradient(180deg, #4f8af3 0%, #2f69d8 100%);
-  border: 1px solid rgba(255, 255, 255, 0.34);
-  border-radius: 14px;
-  box-shadow:
-    0 4px 12px rgba(19, 75, 171, 0.32),
-    inset 0 1px 0 rgba(255, 255, 255, 0.32);
-  transition: background 140ms ease, box-shadow 140ms ease, transform 90ms ease;
+  background: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.42);
+  border-radius: 15px;
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.22);
+  transition:
+    box-shadow 140ms ease,
+    transform 90ms ease;
+}
+
+.asset-shell__brand-logo {
+  width: 31px;
+  height: 28px;
+  object-fit: contain;
 }
 
 .asset-shell__brand:hover {
-  background: linear-gradient(180deg, #5b94f6 0%, #3974df 100%);
   box-shadow:
-    0 6px 16px rgba(19, 75, 171, 0.36),
-    inset 0 1px 0 rgba(255, 255, 255, 0.38);
+    0 8px 18px rgba(0, 0, 0, 0.26),
+    0 0 0 3px rgba(245, 197, 24, 0.24);
 }
 
 .asset-shell__brand:active {
@@ -77,7 +74,7 @@
 
 .asset-shell__rail-nav {
   width: 100%;
-  margin-top: 25px;
+  margin-top: 22px;
 }
 
 .asset-shell__rail-nav > * + *,
@@ -89,13 +86,11 @@
 .asset-shell__account-button {
   position: relative;
   display: flex;
-  width: 48px;
-  height: 46px;
+  width: 100%;
+  min-height: 46px;
   align-items: center;
-  justify-content: center;
-  margin-right: auto;
-  margin-left: auto;
-  color: rgba(220, 231, 248, 0.68);
+  padding: 6px 10px;
+  color: rgba(226, 230, 236, 0.72);
   cursor: pointer;
   background: transparent;
   border: 1px solid transparent;
@@ -108,30 +103,71 @@
     box-shadow 140ms ease;
 }
 
+.asset-shell__rail-icon {
+  position: relative;
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  place-items: center;
+}
+
+.asset-shell__rail-icon::before {
+  position: absolute;
+  inset: 0;
+  content: '';
+  pointer-events: none;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  transition:
+    background 180ms ease,
+    border-color 180ms ease,
+    box-shadow 180ms ease;
+}
+
+.asset-shell__rail-label {
+  margin-left: 10px;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .asset-shell__rail-button:hover {
   color: #ffffff;
-  background: rgba(255, 255, 255, 0.08);
-  border-color: rgba(255, 255, 255, 0.12);
+  background: transparent;
+  border-color: transparent;
+}
+
+.asset-shell__rail-button:hover .asset-shell__rail-icon::before {
+  background: rgba(255, 255, 255, 0.07);
+  border-color: rgba(255, 255, 255, 0.1);
 }
 
 .asset-shell__rail-button--active {
   color: #ffffff;
-  background: rgba(75, 132, 226, 0.42);
-  border-color: rgba(151, 197, 255, 0.34);
-  box-shadow:
-    0 3px 9px rgba(8, 41, 99, 0.26),
-    inset 0 1px 0 rgba(255, 255, 255, 0.22);
+  background: transparent;
+  border-color: transparent;
+}
+
+.asset-shell__rail-button--active .asset-shell__rail-icon::before {
+  background: rgba(245, 197, 24, 0.15);
+  border-color: rgba(245, 197, 24, 0.28);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
 }
 
 .asset-shell__rail-button--active::after {
   position: absolute;
-  right: -8px;
+  right: -6px;
   width: 3px;
-  height: 18px;
+  height: 20px;
   content: '';
-  background: #8ddcff;
+  background: #f5c518;
   border-radius: 999px;
-  box-shadow: 0 0 14px rgba(91, 200, 255, 0.9);
+  box-shadow: 0 0 12px rgba(245, 197, 24, 0.72);
 }
 
 .asset-shell__rail-button--disabled {
@@ -152,15 +188,28 @@
 }
 
 .asset-shell__account-button {
-  height: 42px;
+  justify-content: center;
+  width: 46px;
+  height: 46px;
+  margin-right: auto;
+  margin-left: auto;
+  padding: 0;
+  border-radius: 50%;
   color: inherit;
+}
+
+.asset-shell__account-button .ant-avatar {
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
+  border-radius: 50%;
 }
 
 .asset-shell__account-button .ant-avatar,
 .asset-shell__user-button .ant-avatar,
 .asset-shell__drawer-user .ant-avatar {
   color: #ffffff;
-  background: linear-gradient(145deg, #72d0fb, #356de4 58%, #615bd2);
+  background: linear-gradient(145deg, #f5c518, #b48b00);
   border: 1px solid rgba(255, 255, 255, 0.55);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.5);
 }
@@ -184,10 +233,8 @@
   align-items: center;
   justify-content: flex-end;
   padding: 10px 32px;
-  background: linear-gradient(180deg, rgba(238, 244, 251, 0.88), rgba(238, 244, 251, 0.52));
-  border-bottom: 1px solid rgba(255, 255, 255, 0.62);
-  backdrop-filter: blur(24px) saturate(155%);
-  -webkit-backdrop-filter: blur(24px) saturate(155%);
+  background: rgba(246, 245, 241, 0.94);
+  border-bottom: 1px solid #e7e6df;
 }
 
 .asset-shell__mobile-brand {
@@ -207,14 +254,10 @@
   display: flex;
   align-items: center;
   padding: 3px;
-  background: rgba(255, 255, 255, 0.48);
-  border: 1px solid rgba(94, 121, 160, 0.14);
-  border-radius: 15px;
-  box-shadow:
-    0 2px 8px rgba(34, 68, 117, 0.06),
-    inset 0 1px 0 rgba(255, 255, 255, 0.74);
-  backdrop-filter: blur(16px) saturate(125%);
-  -webkit-backdrop-filter: blur(16px) saturate(125%);
+  background: #ffffff;
+  border: 1px solid #e7e6df;
+  border-radius: 14px;
+  box-shadow: 0 1px 4px rgba(34, 37, 42, 0.05);
 }
 
 .asset-shell__topbar-actions > * + * {
@@ -302,16 +345,19 @@
   color: var(--asset-color-text);
   text-align: left;
   cursor: pointer;
-  background: rgba(255, 255, 255, 0.44);
-  border: 1px solid transparent;
-  border-radius: 11px;
-  transition: background 140ms ease, border-color 140ms ease, transform 90ms ease;
+  background: #ffffff;
+  border: 1px solid #e7e6df;
+  border-radius: 10px;
+  transition:
+    background 140ms ease,
+    border-color 140ms ease,
+    transform 90ms ease;
 }
 
 .asset-shell__drawer-nav button:hover,
 .asset-shell__drawer-logout:hover {
-  background: rgba(255, 255, 255, 0.72);
-  border-color: rgba(83, 108, 146, 0.2);
+  background: #fffdf5;
+  border-color: rgba(180, 139, 0, 0.32);
 }
 
 .asset-shell__drawer-nav button:active,
@@ -340,6 +386,12 @@
   background: var(--asset-color-danger-soft);
 }
 
+.asset-shell__mobile-brand img {
+  width: 26px;
+  height: 24px;
+  object-fit: contain;
+}
+
 @media (max-width: 767px) {
   .asset-shell__rail {
     display: none;
@@ -354,7 +406,7 @@
     min-height: 64px;
     justify-content: space-between;
     padding: 8px 16px;
-    background: rgba(239, 246, 253, 0.72);
+    background: rgba(246, 245, 241, 0.96);
   }
 
   .asset-shell__mobile-brand,
@@ -385,16 +437,10 @@
     min-height: 68px;
     padding: 6px;
     overflow: hidden;
-    background:
-      linear-gradient(145deg, rgba(255, 255, 255, 0.7), rgba(228, 240, 255, 0.5)),
-      rgba(247, 250, 255, 0.66);
-    border: 1px solid rgba(255, 255, 255, 0.88);
-    border-radius: 24px;
-    box-shadow:
-      0 18px 42px rgba(28, 60, 107, 0.2),
-      inset 0 1px 0 #ffffff;
-    backdrop-filter: blur(28px) saturate(165%);
-    -webkit-backdrop-filter: blur(28px) saturate(165%);
+    background: #ffffff;
+    border: 1px solid #e7e6df;
+    border-radius: 20px;
+    box-shadow: 0 12px 30px rgba(24, 26, 30, 0.12);
   }
 
   .asset-shell__mobile-nav-item {
@@ -411,7 +457,10 @@
     background: transparent;
     border: 1px solid transparent;
     border-radius: 15px;
-    transition: color 140ms ease, background 140ms ease, transform 90ms ease;
+    transition:
+      color 140ms ease,
+      background 140ms ease,
+      transform 90ms ease;
   }
 
   .asset-shell__mobile-nav-item span {
@@ -425,12 +474,9 @@
   }
 
   .asset-shell__mobile-nav-item.is-active {
-    color: #1d5ad7;
-    background: rgba(215, 232, 255, 0.72);
-    border-color: rgba(82, 131, 207, 0.18);
-    box-shadow:
-      0 2px 6px rgba(37, 99, 235, 0.1),
-      inset 0 1px 0 rgba(255, 255, 255, 0.68);
+    color: #8f6d00;
+    background: #fff7dc;
+    border-color: rgba(180, 139, 0, 0.24);
   }
 
   .asset-shell__mobile-nav-item.is-active::after {
@@ -439,9 +485,9 @@
     width: 16px;
     height: 2px;
     content: '';
-    background: #3478f6;
+    background: #f5c518;
     border-radius: 999px;
-    box-shadow: 0 0 8px rgba(52, 120, 246, 0.58);
+    box-shadow: 0 0 8px rgba(245, 197, 24, 0.5);
   }
 
   .asset-shell__mobile-nav-item[aria-disabled='true'] {
@@ -451,13 +497,13 @@
 
 @supports not ((backdrop-filter: blur(2px)) or (-webkit-backdrop-filter: blur(2px))) {
   .asset-shell__rail {
-    background: #102445;
+    background: #1e2126;
   }
 
   .asset-shell__topbar,
   .asset-shell__mobile-nav,
   .asset-shell__topbar-actions {
-    background: #f7faff;
+    background: #ffffff;
   }
 }
 
@@ -472,7 +518,6 @@
   }
 }
 
-
 /* Rail hints are informational only: they must never intercept clicks on nearby icons. */
 .asset-shell__rail-tooltip {
   pointer-events: none;
@@ -485,10 +530,8 @@
   font-size: 12px;
   line-height: 1.35;
   white-space: nowrap;
-  background: rgba(12, 28, 54, 0.86);
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 10px;
-  box-shadow: 0 10px 30px rgba(4, 17, 38, 0.2);
-  backdrop-filter: blur(18px) saturate(140%);
-  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  background: rgba(30, 33, 38, 0.94);
+  border: 1px solid rgba(245, 197, 24, 0.18);
+  border-radius: 9px;
+  box-shadow: 0 8px 20px rgba(24, 26, 30, 0.2);
 }

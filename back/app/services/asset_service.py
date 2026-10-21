@@ -174,7 +174,7 @@ _LIFECYCLE_FIELD_LABELS: dict[str, tuple[str, type[Any] | None]] = {
     "receipt_no": ("收货单号", None),
     "rfid_tag": ("RFID", None),
     "remark": ("备注", None),
-    "original_amount": ("资产原值", None),
+    "original_amount": ("金额", None),
     "zero_amount_reason": ("零金额原因", None),
     "purchase_date": ("购入日期", None),
     "service_life_months": ("使用期限（月）", None),
@@ -294,7 +294,7 @@ def _lifecycle_change_summary(record: AssetLifecycleRecord) -> str:
         suffix = "（历史导入）" if import_type == "HISTORICAL_IMPORT" else ""
         return (
             f"入账到 “{organization_name}” 公司，“{department_name}” 部门，"
-            f"原值：{amount}{suffix}"
+            f"金额：{amount}{suffix}"
         )
 
     changes = _format_lifecycle_changes(before, after)
@@ -334,6 +334,7 @@ def _serialize(asset: Asset, include_amount: bool) -> dict[str, Any]:
         "user_name": _entity_name(User, asset.holder_user_id),
         "usage_department_id": asset.usage_department_id,
         "department_name": _entity_name(Organization, asset.usage_department_id),
+        "usage_department_name": _entity_name(Organization, asset.usage_department_id),
         "source_id": asset.source_id,
         "source_name": _entity_name(AssetSource, asset.source_id),
         "location_id": asset.location_id,
@@ -597,6 +598,8 @@ def _build_asset_filters(
     purchase_date_to = filters.get("purchase_date_to")
     if isinstance(purchase_date_to, date):
         conditions.append(Asset.purchase_date <= purchase_date_to)
+    if filters.get("only_my_assets") is True:
+        conditions.append(Asset.holder_user_id == actor_id)
     return conditions
 
 
@@ -638,6 +641,7 @@ def page(
     purchase_date_from: date | None = None,
     purchase_date_to: date | None = None,
     data_completeness: str | None = None,
+    only_my_assets: bool = False,
 ) -> PageResult:
     permission_service.require_permission(actor_id, "asset:view")
     filters = _build_asset_filters(
@@ -660,12 +664,13 @@ def page(
             "purchase_date_from": purchase_date_from,
             "purchase_date_to": purchase_date_to,
             "data_completeness": data_completeness,
+            "only_my_assets": only_my_assets,
         },
     )
     result = asset_repository.page(
         QuerySpec(
             filters=filters,
-            order_by=[Asset.id.asc()],
+            order_by=[Asset.id.desc()],
             page=page_index,
             size=size,
         )

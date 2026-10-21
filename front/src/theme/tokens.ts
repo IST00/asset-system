@@ -2,10 +2,11 @@ import type { ThemeConfig } from 'antd'
 
 export const designTokens = {
   color: {
-    brand: '#2563eb',
-    brandHover: '#1d4ed8',
-    brandSoft: '#eaf1ff',
-    canvas: '#f5f7fb',
+    brand: '#b48b00',
+    brandHover: '#8f6d00',
+    brandSoft: '#fff7dc',
+    brandCanvas: '#f6f5f1',
+    canvas: '#f6f5f1',
     surface: '#ffffff',
     surfaceMuted: '#f8fafc',
     border: '#e6eaf0',
@@ -20,7 +21,8 @@ export const designTokens = {
     danger: '#dc3545',
     dangerSoft: '#fff0f1',
     info: '#2f80ed',
-    rail: '#172033',
+    brandInk: '#22252a',
+    rail: '#1e2126',
   },
   radius: {
     small: 8,
@@ -39,7 +41,7 @@ export const designTokens = {
     glass: '0 18px 44px rgba(31, 62, 112, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.82)',
   },
   layout: {
-    railWidth: 72,
+    railWidth: 168,
     maxContentWidth: 1440,
     mobileBreakpoint: 768,
   },

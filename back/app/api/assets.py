@@ -58,6 +58,7 @@ def page() -> dict:
         purchase_date_from=query.get("purchase_date_from"),
         purchase_date_to=query.get("purchase_date_to"),
         data_completeness=query.get("data_completeness"),
+        only_my_assets=query.get("only_my_assets", False),
     )
     return Result.success(result.to_dict()).to_dict()
 

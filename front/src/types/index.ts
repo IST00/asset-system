@@ -19,6 +19,7 @@ export interface User {
   role?: string
   roles?: string[]
   organization_id?: number | null
+  organization_path?: string | null
   permissions?: string[]
   enabled?: boolean
   created_at?: string

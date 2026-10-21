@@ -1263,7 +1263,7 @@ function FinancialSummaryTab({
       >
         <dl className="asset-detail__fields">
           <div className="asset-detail__field">
-            <dt>资产原值</dt>
+            <dt>金额</dt>
             <dd>{money(summary.original_amount)}</dd>
           </div>
           <div className="asset-detail__field">
@@ -1316,7 +1316,7 @@ function FinancialSummaryTab({
           </div>
         </dl>
         <p className="asset-detail__record-note">
-          当前结果为直线法折旧试算，不会修改资产原值，也不会生成会计凭证。
+          当前结果为直线法折旧试算，不会修改金额，也不会生成会计凭证。
           {summary.is_fully_depreciated ? '该资产已完成预计折旧。' : ''}
         </p>
       </SectionPanel>

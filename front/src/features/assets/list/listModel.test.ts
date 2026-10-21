@@ -18,6 +18,15 @@ test('builds an explicit query and resets a new search to page one', () => {
   )
 })
 
+test('builds a current-holder-only query when requested', () => {
+  assert.deepEqual(buildAssetListQuery({ keyword: ' MacBook ', only_my_assets: true }, 50), {
+    keyword: 'MacBook',
+    only_my_assets: true,
+    page: 1,
+    size: 50,
+  })
+})
+
 test('hides amount configuration without permission', () => {
   assert.equal(getAvailableColumns([]).includes('purchase_amount'), false)
   assert.equal(getAvailableColumns(['asset:amount:view']).includes('purchase_amount'), true)

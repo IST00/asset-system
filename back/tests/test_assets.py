@@ -81,12 +81,23 @@ def _reader(
 def _asset_fixture():
     organization = Organization(code="ASSET-ORG", name="资产公司")
     other_organization = Organization(code="OTHER-ORG", name="其他公司")
+    usage_department = Organization(
+        code="ASSET-USAGE-DEPT", name="使用部门", parent_id=organization.id
+    )
     unit = Unit(code="ASSET-UNIT", name="台")
     source = AssetSource(code="ASSET-SOURCE", name="采购")
     location = AssetLocation(code="ASSET-LOC", name="仓库", is_selectable=True)
     manager = User(username="asset-owner", password="x", enabled=True)
     db.session.add_all(
-        [organization, other_organization, unit, source, location, manager]
+        [
+            organization,
+            other_organization,
+            usage_department,
+            unit,
+            source,
+            location,
+            manager,
+        ]
     )
     db.session.flush()
     manager.organization_id = organization.id
@@ -103,6 +114,7 @@ def _asset_fixture():
         asset_name="MacBook Air",
         status=AssetStatus.IDLE.value,
         organization_id=organization.id,
+        usage_department_id=usage_department.id,
         category_id=category.id,
         unit_id=unit.id,
         original_amount=Decimal("8999.00"),
@@ -214,6 +226,34 @@ def test_asset_list_applies_scope_and_amount_field_permission(client) -> None:
     assert self_result["items"][0]["asset_code"] == asset.asset_code
 
 
+def test_asset_page_only_my_assets_filters_current_holder(client) -> None:
+    organization, _other, _manager, asset = _asset_fixture()
+    admin, headers = _reader(
+        client,
+        "all-scope-holder",
+        DataScope.ALL.value,
+        ["asset:view"],
+    )
+    other = _copy_asset(
+        asset,
+        asset_code="ASSET-OTHER-HOLDER",
+        organization_id=organization.id,
+        manager_id=asset.manager_id,
+    )
+    asset.holder_user_id = admin.id
+    db.session.commit()
+
+    result = client.get(
+        "/api/v1/assets",
+        headers=headers,
+        query_string={"only_my_assets": "true"},
+    ).get_json()["data"]
+
+    assert result["total"] == 1
+    assert [item["id"] for item in result["items"]] == [asset.id]
+    assert other.id not in {item["id"] for item in result["items"]}
+
+
 def test_asset_dashboard_returns_real_scoped_aggregates(client) -> None:
     organization, _other, manager, asset = _asset_fixture()
     departed_holder = User(
@@ -279,7 +319,7 @@ def test_asset_detail_lifecycle_and_audit_require_permissions(client) -> None:
     assert lifecycle[0]["operation_no"] == "STI-ASSET"
     assert lifecycle[0]["operator_name"] == "asset-owner"
     assert lifecycle[0]["change_summary"] == (
-        "入账到 “未指定公司” 公司，“未指定部门” 部门，原值：0.00"
+        "入账到 “未指定公司” 公司，“未指定部门” 部门，金额：0.00"
     )
     audit = client.get("/api/v1/audit-logs", headers=headers).get_json()["data"]
     assert audit[0]["action"] == "STOCK_IN"
@@ -386,8 +426,8 @@ def test_department_and_self_scopes_are_combined_with_or(client) -> None:
     result = client.get("/api/v1/assets", headers=headers).get_json()["data"]
 
     assert [item["id"] for item in result["items"]] == [
-        department_asset.id,
         self_asset.id,
+        department_asset.id,
     ]
     assert hidden_asset.id not in {item["id"] for item in result["items"]}
 
@@ -419,7 +459,7 @@ def test_all_scope_sees_everything_and_empty_usable_scope_sees_nothing(client) -
         "data"
     ]
 
-    assert [item["id"] for item in all_result["items"]] == [asset.id, second.id]
+    assert [item["id"] for item in all_result["items"]] == [second.id, asset.id]
     assert empty_result["total"] == 0
     assert empty_result["items"] == []
 
@@ -533,6 +573,8 @@ def test_asset_outputs_include_data_fields_and_copy_custom_attributes(client) ->
         "data"
     ]
     expected = {
+        "usage_department_name": "使用部门",
+        "department_name": "使用部门",
         "supplier_id": supplier.id,
         "service_life_months": 36,
         "expected_expiry_date": "2029-01-01",

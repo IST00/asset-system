@@ -56,6 +56,7 @@ def _serialize(row: AssetTransferHandover) -> dict[str, Any]:
         "manager_id": row.manager_id,
         "manager_user": _user_summary(row.manager_id),
         "reason": row.reason,
+        "handover_token": row.handover_token,
         "items": row.items,
         "status": row.status,
         "outgoing_confirmed_by": row.outgoing_confirmed_by,
@@ -75,17 +76,12 @@ def _serialize(row: AssetTransferHandover) -> dict[str, Any]:
     }
 
 
-def _load_assets(items: list[dict[str, Any]], actor_id: int) -> list[Asset]:
+def _validate_assets(items: list[dict[str, Any]], assets: list[Asset]) -> list[Asset]:
     ids = [int(item["asset_id"]) for item in items]
     if len(set(ids)) != len(ids):
         raise BusinessException("资产不能重复选择", result_code=ResultCode.BAD_REQUEST)
-    assets = asset_repository.find_many_accessible_for_update(
-        ids, asset_access_service.access_filter(actor_id)
-    )
     if len(assets) != len(ids):
-        raise BusinessException(
-            "资产不存在或无权操作", result_code=ResultCode.NOT_FOUND
-        )
+        raise BusinessException("资产不存在或已删除", result_code=ResultCode.NOT_FOUND)
     by_id = {asset.id: asset for asset in assets}
     for item in items:
         asset = by_id[int(item["asset_id"])]
@@ -96,9 +92,42 @@ def _load_assets(items: list[dict[str, Any]], actor_id: int) -> list[Asset]:
     return [by_id[asset_id] for asset_id in ids]
 
 
+def _load_assets(items: list[dict[str, Any]], actor_id: int) -> list[Asset]:
+    ids = [int(item["asset_id"]) for item in items]
+    assets = asset_repository.find_many_accessible_for_update(
+        ids, asset_access_service.access_filter(actor_id)
+    )
+    if len(assets) != len(ids):
+        raise BusinessException(
+            "资产不存在或无权操作", result_code=ResultCode.NOT_FOUND
+        )
+    return _validate_assets(items, assets)
+
+
+def _load_assets_by_handover_token(items: list[dict[str, Any]]) -> list[Asset]:
+    """Load only assets bound to a pending handover token.
+
+    A valid token is the authorization boundary for the receiver. This avoids
+    applying the receiver's ordinary asset-view scope before the transfer has
+    changed the asset holder.
+    """
+    ids = [int(item["asset_id"]) for item in items]
+    return _validate_assets(items, asset_repository.find_many_for_update(ids))
+
+
 def create(payload: dict[str, Any], actor_id: int) -> dict[str, Any]:
     permission_service.require_permission(actor_id, _MANAGE_PERMISSION)
-    receiver = _user(payload["receiver_user_id"])
+    receiver = (
+        _user(payload["receiver_user_id"])
+        if payload.get("receiver_user_id") is not None
+        else None
+    )
+    if receiver is None:
+        reason = (payload.get("reason") or "").strip()
+        if len(reason) < 2:
+            raise BusinessException(
+                "交接原因至少填写 2 个字符", result_code=ResultCode.BAD_REQUEST
+            )
     if payload.get("outgoing_user_id") is not None:
         _user(payload["outgoing_user_id"])
     if payload.get("organization_id") is not None:
@@ -125,11 +154,13 @@ def create(payload: dict[str, Any], actor_id: int) -> dict[str, Any]:
         handover_no=f"JH{datetime.now(timezone.utc):%Y%m%d}{uuid4().hex[:12].upper()}",
         initiated_by=actor_id,
         outgoing_user_id=payload.get("outgoing_user_id"),
-        receiver_user_id=receiver.id,
+        receiver_user_id=receiver.id if receiver is not None else None,
+        handover_token=uuid4().hex if receiver is None else None,
         organization_id=payload.get("organization_id"),
         location_id=payload.get("location_id"),
         manager_id=payload.get("manager_id"),
-        reason=payload["reason"].strip(),
+        reason=(payload.get("reason") or "").strip(),
+        status="PENDING_RECEIPT" if receiver is None else "PENDING_OUTGOING",
         items=snapshots,
     )
     db.session.add(row)
@@ -144,6 +175,94 @@ def create(payload: dict[str, Any], actor_id: int) -> dict[str, Any]:
         reason=row.reason,
     )
     db.session.commit()
+    return _serialize(row)
+
+
+def claim_by_token(
+    actor_id: int, handover_token: str, remark: str | None = None
+) -> dict[str, Any]:
+    receiver = _user(actor_id)
+    if receiver.organization_id is None:
+        raise BusinessException(
+            "接收人未归属部门，请联系管理员维护", result_code=ResultCode.BAD_REQUEST
+        )
+    row = db.session.scalar(
+        select(AssetTransferHandover)
+        .where(AssetTransferHandover.handover_token == handover_token)
+        .with_for_update()
+    )
+    if row is None or row.status != "PENDING_RECEIPT":
+        raise BusinessException(
+            "交接二维码无效或已被处理", result_code=ResultCode.NOT_FOUND
+        )
+    assets = _load_assets_by_handover_token(row.items)
+    target_fields: dict[str, Any] = {
+        "status": AssetStatus.IN_USE.value,
+        "usage_type": "PERSONAL",
+        "holder_user_id": receiver.id,
+        "public_object_id": None,
+        "usage_department_id": receiver.organization_id,
+    }
+    if row.organization_id is not None:
+        target_fields["organization_id"] = row.organization_id
+    if row.location_id is not None:
+        target_fields["location_id"] = row.location_id
+    if row.manager_id is not None:
+        target_fields["manager_id"] = row.manager_id
+    for asset in assets:
+        before = {
+            "status": asset.status,
+            "holder_user_id": asset.holder_user_id,
+            "organization_id": asset.organization_id,
+            "location_id": asset.location_id,
+            "manager_id": asset.manager_id,
+        }
+        for key, value in target_fields.items():
+            setattr(asset, key, value)
+        asset.version += 1
+        audit_service.record_asset_lifecycle(
+            asset_id=asset.id,
+            operation_type="TRANSFER",
+            request_no=row.handover_no,
+            actor_id=actor_id,
+            before_data=before,
+            after_data={
+                "status": asset.status,
+                "holder_user_id": asset.holder_user_id,
+                "organization_id": asset.organization_id,
+                "location_id": asset.location_id,
+                "manager_id": asset.manager_id,
+            },
+            remark=remark or row.reason,
+        )
+    row.receiver_user_id = receiver.id
+    row.status = "COMPLETED"
+    row.received_confirmed_by = actor_id
+    row.received_confirmed_at = utc_now()
+    row.version += 1
+    audit_service.record_resource_change(
+        action="ASSET_TRANSFER_HANDOVER_CLAIMED",
+        resource_type="asset_transfer_handover",
+        resource_id=row.id,
+        actor_id=actor_id,
+        before_data={"status": "PENDING_RECEIPT", "receiver_user_id": None},
+        after_data={"status": row.status, "receiver_user_id": receiver.id},
+        reason=remark or "员工扫码确认接收",
+    )
+    db.session.commit()
+    return _serialize(row)
+
+
+def get_by_token(_actor_id: int, handover_token: str) -> dict[str, Any]:
+    row = db.session.scalar(
+        select(AssetTransferHandover).where(
+            AssetTransferHandover.handover_token == handover_token
+        )
+    )
+    if row is None or row.status != "PENDING_RECEIPT":
+        raise BusinessException(
+            "交接二维码无效或已被处理", result_code=ResultCode.NOT_FOUND
+        )
     return _serialize(row)
 
 
@@ -295,4 +414,12 @@ def reject(row_id: int, actor_id: int, reason: str) -> dict[str, Any]:
     return _serialize(row)
 
 
-__all__ = ["confirm_outgoing", "confirm_receipt", "create", "page", "reject"]
+__all__ = [
+    "claim_by_token",
+    "confirm_outgoing",
+    "confirm_receipt",
+    "create",
+    "get_by_token",
+    "page",
+    "reject",
+]

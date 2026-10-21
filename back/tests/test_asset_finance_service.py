@@ -152,7 +152,7 @@ def test_trial_stops_at_service_life() -> None:
 @pytest.mark.parametrize(
     ("original_amount", "service_life_months", "message"),
     [
-        (Decimal("-1.00"), 36, "资产原值不能为负数"),
+        (Decimal("-1.00"), 36, "金额不能为负数"),
         (Decimal("1000.00"), 0, "资产使用期限必须大于零"),
     ],
 )

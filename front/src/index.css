@@ -1,20 +1,21 @@
 :root {
-  color: #172033;
-  background: #eef4fb;
+  color: var(--asset-color-text);
+  background: var(--asset-color-canvas);
   font-family:
-    -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', 'Microsoft YaHei',
-    'Segoe UI', sans-serif;
+    -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', 'Microsoft YaHei', 'Segoe UI',
+    sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
-  --asset-color-brand: #2563eb;
-  --asset-color-brand-hover: #1d4ed8;
-  --asset-color-brand-soft: rgba(225, 237, 255, 0.74);
-  --asset-color-canvas: #eef4fb;
-  --asset-color-surface: rgba(255, 255, 255, 0.7);
-  --asset-color-surface-strong: rgba(255, 255, 255, 0.88);
-  --asset-color-surface-muted: rgba(245, 249, 255, 0.62);
-  --asset-color-border: rgba(255, 255, 255, 0.78);
-  --asset-color-border-strong: rgba(111, 145, 195, 0.3);
+  --asset-color-brand: #b48b00;
+  --asset-color-brand-hover: #8f6d00;
+  --asset-color-brand-soft: #fff7dc;
+  --asset-color-brand-ink: #22252a;
+  --asset-color-canvas: #f6f5f1;
+  --asset-color-surface: #ffffff;
+  --asset-color-surface-strong: #ffffff;
+  --asset-color-surface-muted: #f9f8f4;
+  --asset-color-border: #e7e6df;
+  --asset-color-border-strong: #d8d6cd;
   --asset-color-text: #14213b;
   --asset-color-text-muted: #5f6f88;
   --asset-color-text-subtle: #8a99af;
@@ -25,25 +26,24 @@
   --asset-color-danger: #d63c52;
   --asset-color-danger-soft: rgba(255, 229, 234, 0.78);
   --asset-color-info: #2f80ed;
-  --asset-color-rail: #0d1b35;
+  --asset-color-rail: #1e2126;
   --asset-color-cyan: #5bc8ff;
   --asset-color-violet: #8175ff;
-  --asset-glass-surface: rgba(255, 255, 255, 0.66);
-  --asset-glass-surface-strong: rgba(255, 255, 255, 0.82);
-  --asset-glass-dark: rgba(12, 27, 54, 0.76);
-  --asset-glass-border: rgba(255, 255, 255, 0.78);
+  --asset-glass-surface: #ffffff;
+  --asset-glass-surface-strong: #ffffff;
+  --asset-glass-dark: rgba(30, 33, 38, 0.82);
+  --asset-glass-border: #e7e6df;
   --asset-glass-highlight: rgba(255, 255, 255, 0.94);
   --asset-glass-blur: 24px;
   --asset-radius-sm: 10px;
   --asset-radius-md: 14px;
   --asset-radius-lg: 20px;
   --asset-radius-xl: 28px;
-  --asset-shadow-floating: 0 18px 48px rgba(31, 62, 112, 0.14);
-  --asset-shadow-glass:
-    0 18px 44px rgba(31, 62, 112, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.82);
+  --asset-shadow-floating: 0 14px 36px rgba(34, 37, 42, 0.09);
+  --asset-shadow-glass: 0 10px 28px rgba(34, 37, 42, 0.07), inset 0 1px 0 #ffffff;
   --asset-shadow-button:
-    0 10px 22px rgba(30, 91, 205, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.72);
-  --asset-rail-width: 72px;
+    0 7px 16px rgba(180, 139, 0, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.48);
+  --asset-rail-width: 168px;
   --asset-content-max-width: 1440px;
 }
 
@@ -63,28 +63,13 @@ body {
   min-width: 320px;
   min-height: 100vh;
   color: var(--asset-color-text);
-  background:
-    radial-gradient(circle at 10% 10%, rgba(101, 203, 255, 0.2), transparent 27%),
-    radial-gradient(circle at 78% 2%, rgba(125, 111, 255, 0.14), transparent 24%),
-    linear-gradient(145deg, #f5f9ff 0%, #edf4fc 46%, #f6f9fd 100%);
-  background-attachment: fixed;
+  background: var(--asset-color-canvas);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
-
 body::before {
-  position: fixed;
-  z-index: -1;
-  top: 24%;
-  right: 5%;
-  width: min(38vw, 560px);
-  height: min(38vw, 560px);
-  content: '';
-  pointer-events: none;
-  background: radial-gradient(circle, rgba(91, 200, 255, 0.13), transparent 68%);
-  filter: blur(10px);
+  display: none;
 }
-
 button,
 input,
 textarea,
@@ -98,7 +83,7 @@ a {
 }
 
 :focus-visible {
-  outline: 3px solid rgba(66, 133, 255, 0.3);
+  outline: 3px solid rgba(245, 197, 24, 0.48);
   outline-offset: 3px;
 }
 
@@ -107,20 +92,14 @@ a {
 }
 
 /*
- * Shared controls use a restrained Apple-like glass treatment.
- * The glass belongs to the surrounding surface; buttons should feel precise,
- * not like floating glossy capsules.
+ * Shared controls use a clean utility treatment with one Fanshu accent.
  */
 .ant-btn {
   color: var(--asset-color-text);
-  border-color: rgba(83, 108, 146, 0.22);
-  border-radius: 11px;
-  background: rgba(255, 255, 255, 0.68);
-  box-shadow:
-    0 1px 2px rgba(31, 54, 88, 0.08),
-    inset 0 1px 0 rgba(255, 255, 255, 0.78);
-  backdrop-filter: blur(14px) saturate(125%);
-  -webkit-backdrop-filter: blur(14px) saturate(125%);
+  border-color: #dedcd3;
+  border-radius: 10px;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(34, 37, 42, 0.05);
   transition:
     color 140ms ease,
     background-color 140ms ease,
@@ -138,49 +117,37 @@ a {
 }
 
 .ant-btn:not(:disabled):hover {
-  color: #154fb9;
-  border-color: rgba(48, 99, 184, 0.34);
-  background: rgba(255, 255, 255, 0.88);
-  box-shadow:
-    0 3px 9px rgba(31, 67, 120, 0.1),
-    inset 0 1px 0 rgba(255, 255, 255, 0.92);
+  color: var(--asset-color-brand-hover);
+  border-color: rgba(180, 139, 0, 0.38);
+  background: #fffdf5;
 }
 
 .ant-btn:not(:disabled):active {
   transform: scale(0.975);
-  border-color: rgba(48, 91, 165, 0.34);
-  background: rgba(229, 238, 250, 0.82);
-  box-shadow:
-    0 1px 2px rgba(31, 54, 88, 0.08),
-    inset 0 1px 3px rgba(38, 72, 126, 0.12);
+  border-color: rgba(180, 139, 0, 0.46);
+  background: #fff9e0;
 }
 
 .ant-btn-primary,
 .ant-btn-primary:not(:disabled) {
   color: #ffffff;
-  border-color: rgba(18, 69, 165, 0.52);
-  background: linear-gradient(180deg, #3d7df0 0%, #2867df 100%);
-  box-shadow:
-    0 2px 5px rgba(27, 82, 181, 0.24),
-    inset 0 1px 0 rgba(255, 255, 255, 0.3);
+  border-color: rgba(102, 78, 0, 0.55);
+  background: linear-gradient(180deg, #c99b08 0%, #a37e00 100%);
+  box-shadow: 0 2px 5px rgba(180, 139, 0, 0.24);
 }
 
 .ant-btn-primary:not(:disabled):hover {
   color: #ffffff;
-  border-color: rgba(16, 62, 151, 0.58);
-  background: linear-gradient(180deg, #4b88f4 0%, #2f6fe6 100%);
-  box-shadow:
-    0 4px 10px rgba(27, 82, 181, 0.28),
-    inset 0 1px 0 rgba(255, 255, 255, 0.36);
+  border-color: rgba(90, 69, 0, 0.62);
+  background: linear-gradient(180deg, #d4a412 0%, #ad8602 100%);
+  box-shadow: 0 3px 8px rgba(180, 139, 0, 0.26);
 }
 
 .ant-btn-primary:not(:disabled):active {
   color: #ffffff;
-  border-color: rgba(13, 54, 135, 0.62);
-  background: linear-gradient(180deg, #2866d8 0%, #225bc7 100%);
-  box-shadow:
-    0 1px 2px rgba(20, 58, 126, 0.2),
-    inset 0 1px 3px rgba(8, 39, 103, 0.22);
+  border-color: rgba(78, 60, 0, 0.68);
+  background: linear-gradient(180deg, #b98e06 0%, #957300 100%);
+  box-shadow: inset 0 1px 3px rgba(65, 49, 0, 0.16);
 }
 
 .ant-btn-text,
@@ -195,13 +162,13 @@ a {
 .ant-btn-text:not(:disabled):hover,
 .ant-btn-link:not(:disabled):hover {
   border-color: transparent;
-  background: rgba(57, 104, 180, 0.08);
+  background: rgba(245, 197, 24, 0.14);
   box-shadow: none;
 }
 
 .ant-btn-text:not(:disabled):active,
 .ant-btn-link:not(:disabled):active {
-  background: rgba(57, 104, 180, 0.13);
+  background: rgba(245, 197, 24, 0.2);
   box-shadow: none;
 }
 
@@ -220,8 +187,8 @@ a {
 .ant-btn:focus-visible {
   outline: none;
   box-shadow:
-    0 0 0 3px rgba(52, 112, 230, 0.17),
-    0 1px 2px rgba(31, 54, 88, 0.08);
+    0 0 0 3px rgba(245, 197, 24, 0.24),
+    0 1px 2px rgba(34, 37, 42, 0.05);
 }
 
 .ant-btn[disabled],
@@ -235,32 +202,26 @@ a {
 .ant-select-selector,
 .ant-picker,
 .ant-input-number {
-  border-color: rgba(123, 148, 185, 0.28) !important;
-  background: rgba(255, 255, 255, 0.66) !important;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.86);
-  backdrop-filter: blur(16px) saturate(135%);
-  -webkit-backdrop-filter: blur(16px) saturate(135%);
+  border-color: #dedcd3 !important;
+  background: #ffffff !important;
+  box-shadow: none;
 }
 
 .ant-input-affix-wrapper-focused,
 .ant-select-focused .ant-select-selector,
 .ant-picker-focused,
 .ant-input-number-focused {
-  border-color: rgba(53, 111, 224, 0.56) !important;
-  box-shadow:
-    0 0 0 3px rgba(52, 112, 230, 0.12),
-    inset 0 1px 0 rgba(255, 255, 255, 0.94) !important;
+  border-color: rgba(180, 139, 0, 0.58) !important;
+  box-shadow: 0 0 0 3px rgba(245, 197, 24, 0.18) !important;
 }
 
 .ant-dropdown-menu,
 .ant-drawer-content,
 .ant-modal-content,
 .ant-popover-inner {
-  border: 1px solid rgba(255, 255, 255, 0.78);
-  background: rgba(250, 252, 255, 0.84) !important;
-  box-shadow: var(--asset-shadow-glass) !important;
-  backdrop-filter: blur(28px) saturate(150%);
-  -webkit-backdrop-filter: blur(28px) saturate(150%);
+  border: 1px solid #e7e6df;
+  background: #ffffff !important;
+  box-shadow: var(--asset-shadow-floating) !important;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -272,8 +233,53 @@ a {
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   :root {
     --asset-color-surface: #ffffff;
-    --asset-color-surface-muted: #f7f9fc;
+    --asset-color-surface-muted: #f9f8f4;
     --asset-glass-surface: #ffffff;
     --asset-glass-surface-strong: #ffffff;
   }
+}
+
+/*
+ * Fanshu utility theme: keep dense data areas calm and readable.
+ * These tokens are intentionally global so tables remain consistent across pages.
+ */
+.ant-table {
+  font-variant-numeric: tabular-nums;
+}
+
+.ant-table-thead > tr > th {
+  color: var(--asset-color-text-muted);
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.03em;
+  background: #faf9f6 !important;
+}
+
+.ant-table-tbody > tr > td {
+  border-color: #efeee8;
+}
+
+.ant-table-tbody > tr:hover > td {
+  background: #fbf8ec !important;
+}
+
+.ant-pagination .ant-pagination-item-active {
+  border-color: rgba(180, 139, 0, 0.38);
+}
+
+.ant-pagination .ant-pagination-item-active a {
+  color: var(--asset-color-brand-hover);
+}
+
+.ant-input,
+.ant-input-affix-wrapper,
+.ant-select-selector {
+  background: #ffffff;
+}
+
+.ant-input:focus,
+.ant-input-focused,
+.ant-input-affix-wrapper:focus,
+.ant-input-affix-wrapper-focused {
+  box-shadow: 0 0 0 3px rgba(245, 197, 24, 0.22);
 }

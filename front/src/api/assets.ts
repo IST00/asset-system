@@ -39,7 +39,7 @@ import { mapBackendAsset, type BackendAsset } from '@/api/assetMapper'
 const toSummary = (asset: AssetDetail): AssetSummary => asset
 
 export async function listAssets(query: AssetListQuery): Promise<PageResult<AssetSummary>> {
-  const params: Record<string, string | number> = {
+  const params: Record<string, string | number | boolean> = {
     page: Math.max(0, query.page - 1),
     size: query.size,
   }
@@ -66,6 +66,7 @@ export async function listAssets(query: AssetListQuery): Promise<PageResult<Asse
   if (query.information_complete !== undefined) {
     params.data_completeness = query.information_complete ? 'COMPLETE' : 'INCOMPLETE'
   }
+  if (query.only_my_assets) params.only_my_assets = true
 
   const result = await http.get<unknown, BackendPage<BackendAsset>>('/assets', { params })
   return {

@@ -617,6 +617,18 @@ button.operations-approval:active {
   font-size: 12px !important;
 }
 
+.operations-user-pagination {
+  display: flex;
+  justify-content: center;
+  padding-top: 4px;
+}
+
+.operations-user-pagination .ant-pagination {
+  flex-wrap: wrap;
+  justify-content: center;
+  row-gap: 8px;
+}
+
 .operations-user-list {
   display: grid;
   gap: 12px;
@@ -2105,6 +2117,10 @@ button.operations-approval:active {
   line-height: 1.45;
 }
 
+.operations-import-validation small.operations-import-validation__auto {
+  color: #175cd3;
+}
+
 .operations-import-history .operations-table__header,
 .operations-import-history .operations-table__row {
   grid-template-columns:
@@ -2877,9 +2893,9 @@ button.operations-approval:active {
 
 .employee-task-center__tabs button.is-active {
   color: #fff;
-  border-color: #2563eb;
-  background: #2563eb;
-  box-shadow: 0 8px 20px rgba(37, 99, 235, 0.2);
+  border-color: var(--asset-color-brand);
+  background: var(--asset-color-brand);
+  box-shadow: 0 6px 16px rgba(180, 139, 0, 0.18);
 }
 
 .employee-task-center__filters {

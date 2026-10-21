@@ -101,13 +101,14 @@ export interface TransferHandover {
   initiated_by_user?: { id: number; name: string } | null
   outgoing_user_id: number | null
   outgoing_user?: { id: number; name: string } | null
-  receiver_user_id: number
+  receiver_user_id: number | null
   receiver_user?: { id: number; name: string } | null
   organization_id: number | null
   location_id: number | null
   manager_id: number | null
   manager_user?: { id: number; name: string } | null
   reason: string
+  handover_token?: string | null
   items: Array<{ asset_id: number; asset_code: string; asset_name: string; version: number }>
   status: 'PENDING_OUTGOING' | 'PENDING_RECEIPT' | 'COMPLETED' | 'REJECTED'
   outgoing_confirmed_at: string | null
@@ -178,17 +179,34 @@ export const assetManagementApi = {
     http.post<unknown, PublicUsageObject>(`/public-usage-objects/${id}/update`, changes),
   transferHandover: async (payload: {
     items: AssetTarget[]
-    receiver_user_id: number
+    receiver_user_id?: number | null
     outgoing_user_id?: number | null
     organization_id?: number
     location_id?: number
     manager_id?: number
-    reason: string
+    reason?: string
   }) =>
     http.post<
       unknown,
-      { id: number; handover_no: string; status: string; updated_count: number; command_no: string }
+      {
+        id: number
+        handover_no: string
+        status: string
+        updated_count?: number
+        command_no?: string
+        handover_token?: string | null
+        items: TransferHandover['items']
+      }
     >('/asset-actions/transfer-handover', payload),
+  transferHandoverByToken: (handoverToken: string) =>
+    http.get<unknown, TransferHandover>(
+      `/asset-actions/transfer-handovers/by-token/${encodeURIComponent(handoverToken)}`,
+    ),
+  claimTransferHandoverByToken: (payload: { handover_token: string; remark?: string }) =>
+    http.post<unknown, TransferHandover>(
+      '/asset-actions/transfer-handovers/claim-by-token',
+      payload,
+    ),
   pendingTransferHandovers: () =>
     http.get<unknown, TransferHandover[]>('/asset-actions/transfer-handovers/pending'),
   receivedTransferHandovers: () =>

@@ -41,9 +41,7 @@ def calculate_straight_line_trial(
     original amount or create accounting vouchers.
     """
     if original_amount < _ZERO:
-        raise BusinessException(
-            "资产原值不能为负数", result_code=ResultCode.BAD_REQUEST
-        )
+        raise BusinessException("金额不能为负数", result_code=ResultCode.BAD_REQUEST)
     if service_life_months <= 0:
         raise BusinessException(
             "资产使用期限必须大于零", result_code=ResultCode.BAD_REQUEST

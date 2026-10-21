@@ -98,6 +98,7 @@ export default function AppRouter() {
               </AssetAccessBoundary>
             }
           />
+          <Route path="asset-transfer" element={<AssetScanUse />} />
           <Route
             path="settings"
             element={

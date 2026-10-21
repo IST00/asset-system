@@ -53,9 +53,13 @@ class LoginResponseSchema(Schema):
     user = fields.Nested(UserResponseSchema)
 
 
-class PageQuerySchema(Schema):
+class UserPageQuerySchema(Schema):
     page = fields.Integer(load_default=0, validate=validate.Range(min=0))
     size = fields.Integer(load_default=10, validate=validate.Range(min=1, max=200))
+    keyword = fields.String(
+        load_default="",
+        validate=validate.Length(max=64),
+    )
 
 
 class UserPreferenceUpdateSchema(Schema):

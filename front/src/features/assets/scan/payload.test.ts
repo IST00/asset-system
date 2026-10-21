@@ -40,3 +40,16 @@ test('parses compound QR and plain barcode payloads', () => {
   })
   assert.deepEqual(parseScannedAssetValue(' ZC-0001 '), { assetCode: 'ZC-0001' })
 })
+
+test('parses open transfer handover QR payloads', () => {
+  assert.deepEqual(
+    parseScannedAssetValue(
+      '/asset-transfer?handover_token=0123456789abcdef0123456789abcdef&handover_no=JH2026',
+    ),
+    {
+      assetCode: '',
+      handoverToken: '0123456789abcdef0123456789abcdef',
+      transferHandoverNo: 'JH2026',
+    },
+  )
+})

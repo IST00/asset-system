@@ -11,6 +11,7 @@ import {
   Popover,
   Select,
   Skeleton,
+  QRCode,
   Table,
   message,
 } from 'antd'
@@ -32,11 +33,12 @@ import {
   RotateCcw,
   Search,
   SlidersHorizontal,
+  UserRoundCog,
 } from 'lucide-react'
 import type { Key } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Link } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { authApi } from '@/api'
 import { assetManagementApi } from '@/api/assetManagement'
 import { assetUsageReturnApi } from '@/api/assetUsageReturn'
@@ -136,6 +138,8 @@ export default function AssetList() {
   const currentUserId = useAuthStore((state) => state.user?.id)
   const canCreate = canCreateAsset(permissions)
   const canSelfReturn = permissions?.includes('asset:return:self') ?? false
+  const canViewAllAssets = permissions?.includes('asset:usage:manage') ?? false
+  const canTransferHandover = canViewAllAssets
   const canExport = permissions?.includes('asset:export') ?? false
   const canPrintLabels = permissions?.includes('asset:label:print') ?? false
   const locale = i18n.resolvedLanguage || i18n.language || 'zh-CN'
@@ -153,12 +157,21 @@ export default function AssetList() {
   const [selectedRowKeys, setSelectedRowKeys] = useState<Key[]>([])
   const [batchEditOpen, setBatchEditOpen] = useState(false)
   const [returnConfirmOpen, setReturnConfirmOpen] = useState(false)
+  const [handoverOpen, setHandoverOpen] = useState(false)
+  const [handoverResult, setHandoverResult] = useState<{
+    handoverNo: string
+    handoverToken: string
+    assetCount: number
+  } | null>(null)
   const [batchEditAsset, setBatchEditAsset] = useState<AssetSummary | null>(null)
   const [exportJobsOpen, setExportJobsOpen] = useState(false)
   const [batchForm] = Form.useForm<BatchEditFormValues>()
+  const [handoverForm] = Form.useForm<{ reason?: string }>()
   const [queryRevision, setQueryRevision] = useState(0)
   const preferenceAppliedRef = useRef(false)
   const queryClient = useQueryClient()
+  const location = useLocation()
+  const navigate = useNavigate()
 
   const preferenceQuery = useQuery({
     queryKey: ['auth', 'preferences'],
@@ -172,6 +185,13 @@ export default function AssetList() {
     },
     onError: (error: Error) => void message.error(error.message || '列表偏好保存失败'),
   })
+
+  useEffect(() => {
+    const locationState = location.state as { transferHandoverCompleted?: boolean } | null
+    if (!locationState?.transferHandoverCompleted) return
+    void message.success('资产交接已完成，资产已归属当前账号')
+    navigate(location.pathname, { replace: true, state: null })
+  }, [location.pathname, location.state, navigate])
 
   useEffect(() => {
     if (!preferenceQuery.data || preferenceAppliedRef.current) return
@@ -197,7 +217,7 @@ export default function AssetList() {
   const referenceQuery = useQuery({
     queryKey: ['asset-form', 'references'],
     queryFn: loadAssetReferences,
-    enabled: batchEditOpen,
+    enabled: batchEditOpen || handoverOpen,
   })
 
   const selectedAssets = useMemo(
@@ -341,6 +361,35 @@ export default function AssetList() {
     onError: (error: Error) => void message.error(error.message),
   })
 
+  const createHandoverMutation = useMutation({
+    mutationFn: async (values: { reason?: string }) => {
+      const selected = (assetsQuery.data?.records ?? []).filter((asset) =>
+        selectedRowKeys.includes(asset.id),
+      )
+      if (!selected.length) throw new Error('请先选择要交接的资产')
+      const invalidAsset = selected.find(
+        (asset) => asset.status !== 'IDLE' && asset.status !== 'IN_USE',
+      )
+      if (invalidAsset) {
+        throw new Error(`资产 ${invalidAsset.asset_code} 当前状态不允许交接`)
+      }
+      return assetManagementApi.transferHandover({
+        items: selected.map((asset) => ({ asset_id: asset.id, version: asset.version })),
+        reason: values.reason?.trim() || '资产台账发起扫码交接',
+      })
+    },
+    onSuccess: async (result) => {
+      if (!result.handover_token) throw new Error('交接二维码生成失败')
+      setHandoverResult({
+        handoverNo: result.handover_no,
+        handoverToken: result.handover_token,
+        assetCount: result.items.length,
+      })
+      await queryClient.invalidateQueries({ queryKey: ['transfer-handovers'] })
+    },
+    onError: (error: Error) => void message.error(error.message || '交接单创建失败'),
+  })
+
   const selectedAssetIds = selectedRowKeys.map((key) => Number(key))
 
   const personalReturnMutation = useMutation({
@@ -411,6 +460,16 @@ export default function AssetList() {
     setAssetCodesText('')
     setSelectedRowKeys([])
     setQuery(buildAssetListQuery(emptyFilters, query.size))
+  }
+
+  const toggleMyAssets = () => {
+    setSelectedRowKeys([])
+    setDraft((current) => {
+      const next = { ...current, only_my_assets: !current.only_my_assets }
+      setQuery(buildAssetListQuery(next, query.size))
+      setQueryRevision(getNextQueryRevision)
+      return next
+    })
   }
 
   const openAssetCodes = () => {
@@ -795,7 +854,7 @@ export default function AssetList() {
         title={t('assets.list.title')}
         description={t('assets.list.description')}
         actions={
-          canCreate || canExport || canPrintLabels ? (
+          canCreate || canExport || canPrintLabels || canTransferHandover ? (
             <div className="asset-list__header-actions">
               {canExport || canPrintLabels ? (
                 <Button
@@ -812,6 +871,22 @@ export default function AssetList() {
                   onClick={exportCurrentResult}
                 >
                   导出当前结果
+                </Button>
+              ) : null}
+              {canTransferHandover ? (
+                <Button
+                  icon={<UserRoundCog aria-hidden="true" size={16} />}
+                  onClick={() => {
+                    if (!selectedRowKeys.length) {
+                      void message.warning('请先选择要交接的资产')
+                      return
+                    }
+                    handoverForm.resetFields()
+                    setHandoverResult(null)
+                    setHandoverOpen(true)
+                  }}
+                >
+                  交接资产
                 </Button>
               ) : null}
               {canCreate ? (
@@ -894,6 +969,15 @@ export default function AssetList() {
           </div>
 
           <div className="asset-list__filter-actions">
+            {canViewAllAssets ? (
+              <Button
+                type={draft.only_my_assets ? 'primary' : 'default'}
+                aria-pressed={draft.only_my_assets}
+                onClick={toggleMyAssets}
+              >
+                {draft.only_my_assets ? '显示全部资产' : '显示我名下资产'}
+              </Button>
+            ) : null}
             <Button
               icon={<SlidersHorizontal aria-hidden="true" size={17} />}
               onClick={() => setMoreFiltersOpen(true)}
@@ -975,6 +1059,78 @@ export default function AssetList() {
       ) : null}
 
       <section className="asset-list__results">{renderResults()}</section>
+
+      <Modal
+        className="asset-list__modal"
+        open={handoverOpen}
+        title={handoverResult ? '交接二维码已生成' : '发起资产交接'}
+        okText={handoverResult ? '完成' : '生成交接二维码'}
+        cancelText={handoverResult ? '关闭' : '取消'}
+        confirmLoading={createHandoverMutation.isPending}
+        afterClose={() => createHandoverMutation.reset()}
+        onOk={() => {
+          if (handoverResult) {
+            setHandoverOpen(false)
+            setSelectedRowKeys([])
+            return
+          }
+          void handoverForm.submit()
+        }}
+        onCancel={() => setHandoverOpen(false)}
+        footer={handoverResult ? null : undefined}
+      >
+        {handoverResult ? (
+          <div className="asset-list__handover-result">
+            <div className="asset-list__handover-meta">
+              <strong>{handoverResult.handoverNo}</strong>
+              <span>共 {handoverResult.assetCount} 件资产</span>
+            </div>
+            <QRCode
+              size={216}
+              errorLevel="M"
+              value={`${window.location.origin}${import.meta.env.BASE_URL}asset-transfer?handover_token=${handoverResult.handoverToken}&handover_no=${encodeURIComponent(handoverResult.handoverNo)}`}
+            />
+            <div className="asset-list__handover-tip">
+              接收员工在「业务流程 → 扫码领用 / 借用」中扫描此二维码，确认后即完成交接。
+            </div>
+            <Button
+              type="primary"
+              block
+              onClick={() => {
+                setHandoverOpen(false)
+                setSelectedRowKeys([])
+              }}
+            >
+              完成
+            </Button>
+          </div>
+        ) : (
+          <Form
+            form={handoverForm}
+            layout="vertical"
+            onFinish={(values) => createHandoverMutation.mutate(values)}
+          >
+            <div className="asset-list__batch-note">
+              将为已选择的 {selectedRowKeys.length} 件生成交接二维码，接收人扫码确认后变为使用人。
+            </div>
+            <Form.Item
+              name="reason"
+              label="交接原因"
+              rules={[{ required: true, whitespace: true, message: '请填写交接原因' }]}
+            >
+              <Input.TextArea
+                rows={3}
+                maxLength={200}
+                showCount
+                placeholder="例如：设备责任人调整"
+              />
+            </Form.Item>
+            <Button htmlType="submit" className="asset-list__hidden-submit" aria-hidden="true">
+              提交
+            </Button>
+          </Form>
+        )}
+      </Modal>
 
       <Modal
         className="asset-list__modal"

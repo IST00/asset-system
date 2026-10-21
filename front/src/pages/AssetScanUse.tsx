@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Alert, Button, Card, DatePicker, Form, Input, Radio, Select, Spin, Tag } from 'antd'
 import { ScanLine } from 'lucide-react'
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import dayjs from 'dayjs'
 import { assetUsageReturnApi, type AssetUsageReturnSubmission } from '@/api/assetUsageReturn'
@@ -10,7 +10,7 @@ import { getAsset, lookupScanIntent } from '@/api/assets'
 import { assetManagementApi } from '@/api/assetManagement'
 import { useAuthStore } from '@/store/auth'
 import { OperationsHero } from '@/features/operations/OperationsUI'
-import { parseScannedAssetValue } from '@/features/assets/scan/payload'
+import { isTransferHandoverPayload, parseScannedAssetValue } from '@/features/assets/scan/payload'
 import { assetStatusLabel } from '@/utils/displayLabels'
 import {
   assetScanActionMeta,
@@ -56,14 +56,46 @@ export default function AssetScanUse() {
     [],
   )
 
+  const isTransferHandover = isTransferHandoverPayload(scanned ?? ({} as never))
+  const handoverToken = scanned?.handoverToken
   const intentQuery = useQuery({
     queryKey: ['asset-scan-use', 'intent', scanned?.assetCode],
     queryFn: () => {
-      if (!scanned) throw new Error('缺少资产编码')
+      if (!scanned?.assetCode) throw new Error('缺少资产编码')
       return lookupScanIntent({ asset_code: scanned.assetCode })
     },
-    enabled: Boolean(token && scanned),
+    enabled: Boolean(token && scanned?.assetCode),
     retry: false,
+  })
+
+  const handoverQuery = useQuery({
+    queryKey: ['asset-transfer-handover', handoverToken],
+    queryFn: () => {
+      if (!handoverToken) throw new Error('缺少交接二维码标识')
+      return assetManagementApi.transferHandoverByToken(handoverToken)
+    },
+    enabled: Boolean(token && handoverToken),
+    retry: false,
+  })
+
+  const [handoverRemark, setHandoverRemark] = useState('')
+  const claimHandoverMutation = useMutation({
+    mutationFn: () => {
+      if (!handoverToken) throw new Error('缺少交接二维码标识')
+      return assetManagementApi.claimTransferHandoverByToken({
+        handover_token: handoverToken,
+        remark: handoverRemark.trim() || undefined,
+      })
+    },
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['assets'] }),
+        queryClient.invalidateQueries({ queryKey: ['asset-transfer-handover'] }),
+        queryClient.invalidateQueries({ queryKey: ['transfer-handovers'] }),
+        queryClient.invalidateQueries({ queryKey: ['asset-usage', 'my-assets'] }),
+      ])
+      navigate('/assets', { state: { transferHandoverCompleted: true } })
+    },
   })
 
   const preferredPurpose = useMemo<AssetScanPurpose | undefined>(() => {
@@ -257,6 +289,78 @@ export default function AssetScanUse() {
   )
 
   if (!token) return <Spin />
+
+  if (isTransferHandover) {
+    return (
+      <div className="operations-page">
+        <OperationsHero
+          eyebrow="ASSET TRANSFER"
+          title="扫码确认交接"
+          description="确认后，所选资产的使用人将变更为当前登录账号。"
+          icon={ScanLine}
+          tone="cyan"
+        />
+        <Card style={{ marginTop: 24 }}>
+          {handoverQuery.isLoading ? <Spin /> : null}
+          {handoverQuery.isError ? (
+            <Alert
+              type="error"
+              showIcon
+              message={
+                handoverQuery.error instanceof Error
+                  ? handoverQuery.error.message
+                  : '交接二维码无效或已被处理'
+              }
+            />
+          ) : null}
+          {handoverQuery.data ? (
+            <>
+              <div className="operations-table__primary">
+                <strong>{handoverQuery.data.handover_no}</strong>
+                <span>{handoverQuery.data.items.length} 件资产待接收</span>
+              </div>
+              <ul style={{ margin: '16px 0', paddingLeft: 20 }}>
+                {handoverQuery.data.items.map((item) => (
+                  <li key={item.asset_id}>
+                    {item.asset_name} · {item.asset_code}
+                  </li>
+                ))}
+              </ul>
+              <Input.TextArea
+                value={handoverRemark}
+                onChange={(event) => setHandoverRemark(event.target.value)}
+                placeholder="确认备注（可选）"
+                maxLength={200}
+                rows={3}
+                style={{ marginBottom: 16 }}
+              />
+              <Button
+                type="primary"
+                size="large"
+                block
+                loading={claimHandoverMutation.isPending}
+                onClick={() => claimHandoverMutation.mutate()}
+              >
+                确认接收并完成交接
+              </Button>
+              {claimHandoverMutation.isError ? (
+                <Alert
+                  style={{ marginTop: 16 }}
+                  type="error"
+                  showIcon
+                  message={
+                    claimHandoverMutation.error instanceof Error
+                      ? claimHandoverMutation.error.message
+                      : '交接确认失败'
+                  }
+                />
+              ) : null}
+            </>
+          ) : null}
+        </Card>
+      </div>
+    )
+  }
 
   return (
     <div className="operations-page">

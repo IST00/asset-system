@@ -429,3 +429,84 @@ def test_users_page_can_display_disabled_users(client) -> None:
         if item["id"] == disabled.id
     )
     assert listed["enabled"] is False
+
+
+def test_users_page_searches_username_and_nickname_on_server(client) -> None:
+    headers = _authorized_client(client)
+    root = Organization(code="REMOTE-ORG-ROOT", name="远端集团")
+    db.session.add(root)
+    db.session.flush()
+    department = Organization(code="REMOTE-ORG-DEPT", name="技术部", parent_id=root.id)
+    db.session.add(department)
+    db.session.flush()
+    target = User(
+        username="remote-target-user",
+        password="x",
+        nickname="远端搜索员工",
+        enabled=True,
+        organization_id=department.id,
+    )
+    other = User(username="remote-other-user", password="x", nickname="其他员工")
+    db.session.add_all([target, other])
+    db.session.flush()
+    target.organization_id = department.id
+    db.session.commit()
+
+    by_nickname = client.get(
+        "/api/v1/users?page=0&size=20&keyword=远端搜索",
+        headers=headers,
+    )
+    by_username = client.get(
+        "/api/v1/users?page=0&size=20&keyword=remote-target",
+        headers=headers,
+    )
+
+    assert by_nickname.status_code == 200
+    assert [item["id"] for item in by_nickname.get_json()["data"]["items"]] == [
+        target.id
+    ]
+    assert by_username.status_code == 200
+    assert [item["id"] for item in by_username.get_json()["data"]["items"]] == [
+        target.id
+    ]
+    assert by_username.get_json()["data"]["items"][0]["organization_path"] == (
+        "远端集团/技术部"
+    )
+
+
+def test_users_page_orders_builtin_roles_before_users(client) -> None:
+    headers = _authorized_client(client)
+    plain = User(
+        username="plain-employee", password="x", nickname="普通员工", enabled=True
+    )
+    asset_admin = User(
+        username="asset-admin-user", password="x", nickname="资产管理员", enabled=True
+    )
+    super_admin = User(
+        username="super-admin-user", password="x", nickname="超级管理员", enabled=True
+    )
+    employee_role = Role(code="USER", name="普通员工", data_scope=DataScope.SELF.value)
+    administrator_role = Role(
+        code="ASSET_ADMIN", name="资产管理员", data_scope=DataScope.ALL.value
+    )
+    super_role = Role(
+        code="SUPER_ADMIN", name="超级管理员", data_scope=DataScope.ALL.value
+    )
+    db.session.add_all(
+        [plain, asset_admin, super_admin, employee_role, administrator_role, super_role]
+    )
+    db.session.flush()
+    db.session.add(UserRole(user_id=plain.id, role_id=employee_role.id))
+    db.session.add(UserRole(user_id=asset_admin.id, role_id=administrator_role.id))
+    db.session.add(UserRole(user_id=super_admin.id, role_id=super_role.id))
+    db.session.commit()
+
+    response = client.get("/api/v1/users?page=0&size=3", headers=headers)
+
+    assert response.status_code == 200
+    items = response.get_json()["data"]["items"]
+    assert [item["roles"] for item in items] == [
+        ["SUPER_ADMIN"],
+        ["ASSET_ADMIN"],
+        ["USER"],
+    ]

@@ -6,6 +6,7 @@ import base64
 import hashlib
 import hmac
 import json
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -283,14 +284,8 @@ def _upsert_feishu_user(item: dict[str, Any]) -> tuple[User, bool]:
     default_role = db.session.scalar(
         select(Role).where(Role.code == "USER", Role.enabled.is_(True))
     )
-    if default_role is not None:
-        role_ids = set(
-            db.session.scalars(
-                select(UserRole.role_id).where(UserRole.user_id == row.id)
-            ).all()
-        )
-        if default_role.id not in role_ids:
-            db.session.add(UserRole(user_id=row.id, role_id=default_role.id))
+    if default_role is not None and created:
+        db.session.add(UserRole(user_id=row.id, role_id=default_role.id))
 
     department_ids = item.get("department_ids")
     departments = department_ids if isinstance(department_ids, list) else []
@@ -529,21 +524,77 @@ def sync_approval_operations() -> dict[str, int]:
     return {"synced": synced}
 
 
-def sync_organization_tree() -> dict[str, int]:
-    token = tenant_access_token()
+def _fetch_child_departments(
+    parent_external_id: str, *, token: str
+) -> list[dict[str, Any]]:
+    """Fetch all direct children of one Feishu department."""
     departments: list[dict[str, Any]] = []
     page_token = ""
     while True:
-        query = "page_size=50"
+        query: dict[str, str | int] = {
+            "parent_department_id": parent_external_id,
+            "page_size": 50,
+        }
         if page_token:
-            query += f"&page_token={page_token}"
-        data = _get(f"/contact/v3/departments?{query}", token=token)
+            query["page_token"] = page_token
+        data = _get(
+            f"/contact/v3/departments?{urlencode(query)}",
+            token=token,
+        )
         items = data.get("items")
         if isinstance(items, list):
             departments.extend(item for item in items if isinstance(item, dict))
         page_token = str(data.get("page_token") or "")
         if data.get("has_more") is not True or not page_token:
-            break
+            return departments
+
+
+def _fetch_department_tree(
+    *, token: str
+) -> tuple[list[dict[str, Any]], dict[str, str | None]]:
+    """Fetch the complete department tree with explicit parent relationships.
+
+    Feishu's list API does not return ``parent_department_id`` in list mode.
+    We start from the tenant root (``0``) and walk each level by
+    ``open_department_id``. Requests for sibling departments are executed in
+    bounded parallel batches so a tenant with hundreds of departments remains
+    comfortably within the frontend request timeout.
+    """
+    pending: list[tuple[str, str | None]] = [("0", None)]
+    departments: list[dict[str, Any]] = []
+    parents: dict[str, str | None] = {}
+    seen: set[str] = set()
+
+    with ThreadPoolExecutor(max_workers=8, thread_name_prefix="feishu-dept") as pool:
+        while pending:
+
+            def fetch_children(entry: tuple[str, str | None]) -> list[dict[str, Any]]:
+                return _fetch_child_departments(entry[0], token=token)
+
+            batches = list(pool.map(fetch_children, pending))
+            next_pending: list[tuple[str, str | None]] = []
+            for (parent_external_id, tree_parent_id), items in zip(
+                pending, batches, strict=True
+            ):
+                for item in items:
+                    external_id = str(item.get("open_department_id") or "").strip()
+                    if not external_id or external_id in seen:
+                        continue
+                    seen.add(external_id)
+                    parents[external_id] = tree_parent_id
+                    departments.append(item)
+                    next_pending.append((external_id, external_id))
+            pending = next_pending
+
+    return departments, parents
+
+
+def sync_organization_tree() -> dict[str, int]:
+    departments, parents = _fetch_department_tree(token=tenant_access_token())
+    if not departments:
+        raise BusinessException(
+            "飞书通讯录未返回任何部门，请检查应用通讯录权限和可用范围后重试"
+        )
 
     synced = 0
     now = datetime.now(timezone.utc)
@@ -555,14 +606,15 @@ def sync_organization_tree() -> dict[str, int]:
     }
     children: dict[str | None, list[dict[str, Any]]] = {}
     for item in departments:
-        parent = item.get("parent_department_id")
+        external_id = str(item.get("open_department_id") or "").strip()
+        parent_external_id = parents.get(external_id)
         children.setdefault(
-            parent if isinstance(parent, str) and parent else None, []
+            parent_external_id if isinstance(parent_external_id, str) else None, []
         ).append(item)
 
     def upsert(item: dict[str, Any], parent_id: int | None) -> None:
         nonlocal synced
-        external_id = str(item.get("department_id") or "").strip()
+        external_id = str(item.get("open_department_id") or "").strip()
         name = str(item.get("name") or "").strip()
         if not external_id or not name:
             return
@@ -577,8 +629,7 @@ def sync_organization_tree() -> dict[str, int]:
                 db.session.add(row)
                 db.session.flush()
         row.name = name
-        if parent_id is not None:
-            row.parent_id = parent_id
+        row.parent_id = parent_id
         row.feishu_department_id = external_id
         row.feishu_synced_at = now
         db.session.flush()
@@ -605,21 +656,73 @@ def _default_feishu_organization_id() -> int | None:
     )
 
 
+def _fetch_users_by_department(
+    organizations: list[Organization], *, token: str
+) -> list[dict[str, Any]]:
+    """Fetch visible users from all synced departments in bounded parallel batches."""
+    users: list[dict[str, Any]] = []
+    seen_open_ids: set[str] = set()
+
+    def fetch_users(organization: Organization) -> list[dict[str, Any]]:
+        external_department_id = organization.feishu_department_id
+        if not external_department_id:
+            return []
+        department_users: list[dict[str, Any]] = []
+        page_token = ""
+        while True:
+            query: dict[str, str | int] = {
+                "department_id": external_department_id,
+                "page_size": 50,
+                "user_id_type": "open_id",
+            }
+            if page_token:
+                query["page_token"] = page_token
+            data = _get(
+                f"/contact/v3/users?{urlencode(query)}",
+                token=token,
+            )
+            items = data.get("items")
+            if isinstance(items, list):
+                department_users.extend(
+                    item for item in items if isinstance(item, dict)
+                )
+            page_token = str(data.get("page_token") or "")
+            if data.get("has_more") is not True or not page_token:
+                return department_users
+
+    with ThreadPoolExecutor(max_workers=8, thread_name_prefix="feishu-user") as pool:
+        batches = list(pool.map(fetch_users, organizations))
+
+    for organization, department_users in zip(organizations, batches, strict=True):
+        external_department_id = organization.feishu_department_id
+        if not external_department_id:
+            continue
+        for item in department_users:
+            open_id = str(item.get("open_id") or "").strip()
+            if not open_id or open_id in seen_open_ids:
+                continue
+            seen_open_ids.add(open_id)
+            # Department-scoped user lists may omit department_ids. Attach the
+            # queried department explicitly so organization assignment is stable.
+            users.append({**item, "department_ids": [external_department_id]})
+    return users
+
+
 def sync_users() -> dict[str, int]:
     token = tenant_access_token()
-    users: list[dict[str, Any]] = []
-    page_token = ""
-    while True:
-        query = "page_size=50&user_id_type=open_id"
-        if page_token:
-            query += f"&page_token={page_token}"
-        data = _get(f"/contact/v3/users?{query}", token=token)
-        items = data.get("items")
-        if isinstance(items, list):
-            users.extend(item for item in items if isinstance(item, dict))
-        page_token = str(data.get("page_token") or "")
-        if data.get("has_more") is not True or not page_token:
-            break
+    organizations = list(
+        db.session.scalars(
+            select(Organization).where(Organization.feishu_department_id.is_not(None))
+        ).all()
+    )
+    if not organizations:
+        raise BusinessException("请先同步飞书部门，再同步飞书成员")
+
+    users = _fetch_users_by_department(organizations, token=token)
+    if not users:
+        raise BusinessException(
+            "飞书通讯录未返回任何成员，请检查应用通讯录权限和可用范围后重试"
+        )
 
     now = datetime.now(timezone.utc)
     synced = 0

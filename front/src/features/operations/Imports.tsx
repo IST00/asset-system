@@ -57,7 +57,7 @@ const typeMeta: Record<
     label: '资产台账',
     permission: 'asset:import',
     description: '历史资产整批预览后直接建账，保留原编码；缺少单位、来源或地点时进入待补充清单。',
-    example: '资产编码、公司编码、分类编码、金额、日期与责任管理员',
+    example: '资产编码、所属公司、资产分类、金额、采购日期与使用信息',
     tone: 'green',
   },
   ORGANIZATION: {
@@ -128,8 +128,9 @@ function rowPrimary(row: ImportPreviewRow, type: ImportType): { title: string; d
       title: row.values['资产名称'] || `第 ${row.line} 行`,
       detail: [
         row.values['资产编码'] || '系统生成编码',
-        row.values['所属公司编码'],
-        row.values['资产分类编码'],
+        row.values['所属公司'],
+        row.values['资产分类'],
+        row.values['履历条数'] ? `${row.values['履历条数']} 条履历` : '',
       ]
         .filter(Boolean)
         .join(' · '),
@@ -361,6 +362,11 @@ export default function Imports() {
                 <CheckCircle2 size={15} /> 字段校验通过
               </span>
             )}
+            {row.auto_actions?.length ? (
+              <small className="operations-import-validation__auto">
+                自动处理：{row.auto_actions.join('；')}
+              </small>
+            ) : null}
             {row.warnings.length ? <small>{row.warnings.join('；')}</small> : null}
           </div>
         ),
@@ -376,7 +382,7 @@ export default function Imports() {
       title: `确认整批导入 ${currentJob.row_count} 行？`,
       content:
         currentJob.import_type === 'ASSET'
-          ? '确认后会直接建立正式历史资产，不再进入入库审批；全部记录在同一事务中写入。'
+          ? '确认后会直接建立正式历史资产，不再进入入库审批；供应商、公共使用对象和可识别的存放地点会自动创建，全部记录在同一事务中写入。'
           : '确认后会按预览结果新增或更新基础资料，编码保持不变，并记录完整前后快照。',
       okText: '确认整批导入',
       cancelText: '继续核对',
@@ -404,7 +410,7 @@ export default function Imports() {
         }
         description={
           workspaceMode === 'IMPORT'
-            ? 'CSV 与 XLSX 都交给后端统一校验。资产、公司编码和分类编码使用独立模板；任何错误都会阻止整批写入，不会出现部分成功。'
+            ? 'CSV 与 XLSX 都交给后端统一校验。资产、公司与分类使用独立模板；任何错误都会阻止整批写入，不会出现部分成功。'
             : '资产台账由服务端按当前账号的数据范围和金额权限生成；公司、分类导出完整层级，资产标签生成 65 × 30 mm PDF。'
         }
         icon={workspaceMode === 'IMPORT' ? FileUp : FileDown}
@@ -567,7 +573,9 @@ export default function Imports() {
                   <History size={21} />
                 </span>
                 <h3>历史迁移规则</h3>
-                <p>资产导入允许单位、来源或地点为空或未匹配，保留原始文字并进入“待补充”清单。</p>
+                <p>
+                  供应商、公共使用对象和可识别的存放地点会在确认导入时自动创建；单位、来源等字段未匹配时保留原文并进入“待补充”清单。
+                </p>
               </div>
             </GlassPanel>
           </div>

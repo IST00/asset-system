@@ -490,8 +490,12 @@ def test_contact_pagination_uses_feishu_page_size_limit(
 
     def fake_get(path: str, *, token: str) -> dict[str, Any]:
         del token
-        query = path.split("?", 1)[1]
-        queries.append(query)
+        queries.append(path.split("?", 1)[1])
+        if "parent_department_id=0" in path:
+            return {
+                "items": [{"open_department_id": "od-root", "name": "根部门"}],
+                "has_more": False,
+            }
         return {"items": [], "has_more": False}
 
     monkeypatch.setattr(feishu_service, "_get", fake_get)
@@ -502,12 +506,116 @@ def test_contact_pagination_uses_feishu_page_size_limit(
     )
 
     feishu_service.sync_organization_tree()
-    feishu_service.sync_users()
 
     assert queries == [
-        "page_size=50",
-        "page_size=50&user_id_type=open_id",
+        "parent_department_id=0&page_size=50",
+        "parent_department_id=od-root&page_size=50",
     ]
+
+    from app.extensions import db
+    from app.models import Organization
+
+    root = db.session.scalar(
+        select(Organization).where(Organization.feishu_department_id == "od-root")
+    )
+    assert root is not None
+    db.session.add(
+        Organization(
+            code="FEISHU-contact-root",
+            name="通讯录根部门",
+            feishu_department_id="od-contact-root",
+            parent_id=root.id,
+        )
+    )
+    db.session.commit()
+    queries.clear()
+    with pytest.raises(Exception, match="未返回任何成员"):
+        feishu_service.sync_users()
+
+    assert queries == [
+        "department_id=od-root&page_size=50&user_id_type=open_id",
+        "department_id=od-contact-root&page_size=50&user_id_type=open_id",
+    ]
+
+
+def test_contact_sync_walks_explicit_department_tree(
+    app: Any,
+    native_config: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.extensions import db
+    from app.models import Organization, User
+
+    root_payload = {
+        "open_department_id": "od-root",
+        "department_id": "root-custom-id",
+        "name": "根部门",
+    }
+    child_payload = {
+        "open_department_id": "od-child",
+        "department_id": "child-custom-id",
+        "name": "子部门",
+    }
+
+    def fake_get(path: str, *, token: str) -> dict[str, Any]:
+        del token
+        if path.startswith("/contact/v3/departments?"):
+            if "parent_department_id=0" in path:
+                return {"items": [root_payload], "has_more": False}
+            if "parent_department_id=od-root" in path:
+                return {"items": [child_payload], "has_more": False}
+            return {"items": [], "has_more": False}
+        if path.startswith("/contact/v3/users?"):
+            if "department_id=od-root" in path:
+                return {
+                    "items": [
+                        {
+                            "open_id": "ou-root-user",
+                            "name": "根部门员工",
+                            "active": True,
+                        }
+                    ],
+                    "has_more": False,
+                }
+            if "department_id=od-child" in path:
+                return {
+                    "items": [
+                        {
+                            "open_id": "ou-child-user",
+                            "name": "子部门员工",
+                            "active": True,
+                        }
+                    ],
+                    "has_more": False,
+                }
+        raise AssertionError(path)
+
+    monkeypatch.setattr(feishu_service, "_get", fake_get)
+    monkeypatch.setattr(
+        feishu_service,
+        "tenant_access_token",
+        lambda: "tenant-token",
+    )
+
+    assert feishu_service.sync_organization_tree() == {"departments": 2}
+    assert feishu_service.sync_users() == {"users": 2}
+
+    root = db.session.scalar(
+        select(Organization).where(Organization.feishu_department_id == "od-root")
+    )
+    child = db.session.scalar(
+        select(Organization).where(Organization.feishu_department_id == "od-child")
+    )
+    root_user = db.session.scalar(
+        select(User).where(User.feishu_open_id == "ou-root-user")
+    )
+    child_user = db.session.scalar(
+        select(User).where(User.feishu_open_id == "ou-child-user")
+    )
+    assert root is not None and root.parent_id is None
+    assert child is not None and child.parent_id == root.id
+    assert root_user is not None and root_user.organization_id == root.id
+    assert child_user is not None and child_user.organization_id == child.id
 
 
 def test_sync_users_assigns_default_user_role_to_created_users(
@@ -517,7 +625,7 @@ def test_sync_users_assigns_default_user_role_to_created_users(
 ) -> None:
     from app.enums import DataScope
     from app.extensions import db
-    from app.models import Role, User, UserRole
+    from app.models import Organization, Role, User, UserRole
 
     role = Role(
         code="USER",
@@ -526,7 +634,12 @@ def test_sync_users_assigns_default_user_role_to_created_users(
         built_in=True,
         enabled=True,
     )
-    db.session.add(role)
+    organization = Organization(
+        code="FEISHU-default-role",
+        name="默认角色部门",
+        feishu_department_id="od-default-role",
+    )
+    db.session.add_all([role, organization])
     db.session.commit()
     open_id = "ou-default-role"
 
@@ -566,6 +679,81 @@ def test_sync_users_assigns_default_user_role_to_created_users(
         )
         is not None
     )
+
+
+def test_sync_users_preserves_existing_role_for_existing_users(
+    app: Any,
+    native_config: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.enums import DataScope
+    from app.extensions import db
+    from app.models import Organization, Role, User, UserRole
+
+    user_role = Role(
+        code="USER",
+        name="普通员工",
+        data_scope=DataScope.SELF.value,
+        built_in=True,
+        enabled=True,
+    )
+    admin_role = Role(
+        code="SUPER_ADMIN",
+        name="超级管理员",
+        data_scope=DataScope.ALL.value,
+        built_in=True,
+        enabled=True,
+    )
+    organization = Organization(
+        code="FEISHU-preserve-role",
+        name="保留角色部门",
+        feishu_department_id="od-preserve-role",
+    )
+    db.session.add_all([user_role, admin_role, organization])
+    db.session.flush()
+    existing = User(
+        username="feishu-existing-admin",
+        password="password123",
+        nickname="已有管理员",
+        enabled=True,
+        feishu_open_id="ou-existing-admin",
+    )
+    db.session.add(existing)
+    db.session.flush()
+    db.session.add(UserRole(user_id=existing.id, role_id=admin_role.id))
+    db.session.commit()
+
+    def fake_get(path: str, *, token: str) -> dict[str, Any]:
+        del token
+        assert path.startswith("/contact/v3/users?")
+        return {
+            "items": [
+                {
+                    "open_id": "ou-existing-admin",
+                    "name": "已有管理员",
+                    "active": True,
+                    "department_ids": [],
+                }
+            ],
+            "has_more": False,
+        }
+
+    monkeypatch.setattr(feishu_service, "_get", fake_get)
+    monkeypatch.setattr(
+        feishu_service,
+        "tenant_access_token",
+        lambda: "tenant-token",
+    )
+
+    result = feishu_service.sync_users()
+
+    assert result == {"users": 1}
+    role_codes = db.session.scalars(
+        select(Role.code)
+        .join(UserRole, UserRole.role_id == Role.id)
+        .where(UserRole.user_id == existing.id)
+    ).all()
+    assert role_codes == ["SUPER_ADMIN"]
 
 
 def test_sync_users_assigns_department_when_feishu_returns_multiple_departments(
@@ -678,8 +866,31 @@ def test_sync_users_disables_missing_feishu_users(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from app.extensions import db
-    from app.models import User
+    from datetime import date
+    from decimal import Decimal
 
+    from app.enums import AssetStatus
+    from app.models import Asset, AssetCategory, Organization, Unit, User
+
+    organization = Organization(
+        code="FEISHU-ASSET-ORG",
+        name="资产组织",
+        feishu_department_id="od-asset-org",
+    )
+    db.session.add(organization)
+    db.session.flush()
+    unit = Unit(code="FEISHU-ASSET-UNIT", name="台", status="ENABLED")
+    db.session.add(unit)
+    db.session.flush()
+    category = AssetCategory(
+        code="FEISHU-ASSET-CAT",
+        name="笔记本电脑",
+        service_life_months=36,
+        default_unit_id=unit.id,
+        status="ENABLED",
+    )
+    db.session.add(category)
+    db.session.flush()
     remaining = User(
         username="feishu-remaining",
         password="x",
@@ -693,7 +904,27 @@ def test_sync_users_disables_missing_feishu_users(
         feishu_open_id="ou-missing",
     )
     local = User(username="local-user", password="x", enabled=True)
+    remaining.organization_id = organization.id
+    missing.organization_id = organization.id
     db.session.add_all([remaining, missing, local])
+    db.session.flush()
+    missing_asset = Asset(
+        asset_code="FEISHU-LEAVED-ASSET",
+        asset_name="离职员工电脑",
+        status=AssetStatus.IN_USE.value,
+        organization_id=organization.id,
+        usage_company_id=organization.id,
+        holder_user_id=missing.id,
+        category_id=category.id,
+        unit_id=category.default_unit_id,
+        original_amount=Decimal("6000.00"),
+        purchase_date=date(2026, 1, 1),
+        service_life_months=36,
+        expected_expiry_date=date(2029, 1, 1),
+        manager_id=missing.id,
+        custom_attributes={},
+    )
+    db.session.add(missing_asset)
     db.session.commit()
 
     def fake_get(path: str, *, token: str) -> dict[str, Any]:
@@ -725,8 +956,10 @@ def test_sync_users_disables_missing_feishu_users(
     assert remaining.feishu_sync_status == "SYNCED"
     assert missing.enabled is False
     assert missing.feishu_sync_status == "MISSING"
+    assert missing.feishu_open_id is None
     assert local.enabled is True
     assert local.feishu_sync_status == "UNSYNCED"
+    assert missing_asset.holder_user_id == missing.id
 
 
 def test_formal_feishu_approval_submit_matches_real_approval_contract(

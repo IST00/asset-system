@@ -1,6 +1,8 @@
 export interface ScannedAssetPayload {
   assetCode: string
   barcodeValue?: string
+  handoverToken?: string
+  transferHandoverNo?: string
 }
 
 /**
@@ -27,6 +29,15 @@ export function parseScannedAssetValue(rawValue: string): ScannedAssetPayload | 
         return barcode ? { assetCode, barcodeValue: barcode } : { assetCode }
       }
 
+      const handoverToken = url.searchParams.get('handover_token')?.trim()
+      if (handoverToken && url.pathname.endsWith('/asset-transfer')) {
+        return {
+          assetCode: '',
+          handoverToken,
+          transferHandoverNo: url.searchParams.get('handover_no')?.trim() || undefined,
+        }
+      }
+
       const legacyMatch = url.pathname.match(/\/assets\/(?:code\/)?([^/]+)$/)
       if (legacyMatch?.[1]) {
         const assetCode = decodeURIComponent(legacyMatch[1]).trim()
@@ -51,3 +62,8 @@ export function parseScannedAssetValue(rawValue: string): ScannedAssetPayload | 
 
   return { assetCode: value }
 }
+
+export const isTransferHandoverPayload = (
+  payload: ScannedAssetPayload,
+): payload is Required<Pick<ScannedAssetPayload, 'handoverToken'>> & ScannedAssetPayload =>
+  Boolean(payload.handoverToken)

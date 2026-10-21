@@ -50,12 +50,16 @@ export default function BarcodeScanner({
   const [decodeError, setDecodeError] = useState<string | null>(null)
 
   const buildScanUseUrl = useCallback(
-    (scanned: { assetCode: string; barcodeValue?: string }) => {
-      const params = new URLSearchParams({ asset_code: scanned.assetCode })
-      if (scanned.barcodeValue) params.set('barcode', scanned.barcodeValue)
-      if (preferredPurpose) params.set('preferred', preferredPurpose)
+    (scanned: { assetCode: string; barcodeValue?: string; handoverToken?: string }) => {
       const baseUrl = import.meta.env.BASE_URL
       const base = baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`
+      if (scanned.handoverToken) {
+        return `${base}asset-transfer?handover_token=${encodeURIComponent(scanned.handoverToken)}`
+      }
+      const params = new URLSearchParams()
+      if (scanned.assetCode) params.set('asset_code', scanned.assetCode)
+      if (scanned.barcodeValue) params.set('barcode', scanned.barcodeValue)
+      if (preferredPurpose) params.set('preferred', preferredPurpose)
       return `${base}scan-use?${params.toString()}`
     },
     [preferredPurpose],
