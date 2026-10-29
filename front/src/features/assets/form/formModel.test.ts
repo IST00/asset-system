@@ -11,6 +11,7 @@ import {
 const validValues = {
   asset_name: 'MacBook Pro',
   company_name: '总部',
+  usage_company_name: '上海公司',
   category_name: '电脑设备',
   source_name: '采购',
   unit_name: '台',

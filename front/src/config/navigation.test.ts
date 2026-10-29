@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { navigationEntries } from './navigation.ts'
+import { filterNavigation } from './navigationModel.ts'
 
 test('defines the business modules from the asset system plan', () => {
   assert.deepEqual(
@@ -19,10 +20,17 @@ test('defines the business modules from the asset system plan', () => {
   )
 })
 
-test('marks exactly four destinations for mobile navigation', () => {
+test('selects employee and administrator destinations for mobile navigation', () => {
+  const employeeNavigation = filterNavigation(navigationEntries, new Set(), true)
+  const administratorNavigation = filterNavigation(navigationEntries, new Set(['asset:edit']), true)
+
   assert.deepEqual(
-    navigationEntries.filter((entry) => entry.mobile).map((entry) => entry.key),
-    ['home', 'assets', 'inventory', 'profile'],
+    employeeNavigation.map((entry) => entry.key),
+    ['home', 'workflows', 'inventory', 'profile'],
+  )
+  assert.deepEqual(
+    administratorNavigation.map((entry) => entry.key),
+    ['home', 'assets', 'workflows', 'profile'],
   )
 })
 

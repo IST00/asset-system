@@ -19,6 +19,10 @@ class AssetAttachment(TimestampMixin, db.Model):  # type: ignore[misc,name-defin
         ForeignKey("assets.id", ondelete="RESTRICT"), nullable=False, index=True
     )
     business_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    business_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    document_type: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="OTHER", index=True
+    )
     original_name: Mapped[str] = mapped_column(String(255), nullable=False)
     storage_key: Mapped[str] = mapped_column(
         String(512), nullable=False, unique=True, index=True

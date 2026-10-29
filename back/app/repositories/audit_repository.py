@@ -16,7 +16,9 @@ class AssetLifecycleRepository(BaseRepository[AssetLifecycleRecord]):
         stmt = (
             select(AssetLifecycleRecord)
             .where(AssetLifecycleRecord.asset_id == asset_id)
-            .order_by(AssetLifecycleRecord.id.asc())
+            .order_by(
+                AssetLifecycleRecord.created_at.desc(), AssetLifecycleRecord.id.desc()
+            )
         )
         return list(db.session.scalars(stmt).all())
 

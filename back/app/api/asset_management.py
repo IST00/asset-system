@@ -7,16 +7,25 @@ from app.common import Result
 from app.schemas.asset_management import (
     BatchUpdateAssetRequestSchema,
     CreatePublicUsageObjectSchema,
+    FinancialSummaryQuerySchema,
     RelationRequestSchema,
     RepairCompleteSchema,
     RepairStartSchema,
     ScrapAssetsSchema,
     TransferAssetsSchema,
+    TransferHandoverClaimSchema,
+    TransferHandoverSchema,
     UpdateAssetRequestSchema,
     UpdatePublicUsageObjectSchema,
 )
 from app.security import current_user_id
-from app.services import asset_management_service
+from app.services import (
+    asset_finance_service,
+    asset_management_service,
+    asset_repair_service,
+    asset_scrap_service,
+    asset_transfer_handover_service,
+)
 
 bp = Blueprint("asset_management", __name__, url_prefix="/api/v1")
 _update_schema = UpdateAssetRequestSchema()
@@ -28,6 +37,9 @@ _transfer_schema = TransferAssetsSchema()
 _repair_start_schema = RepairStartSchema()
 _repair_complete_schema = RepairCompleteSchema()
 _scrap_schema = ScrapAssetsSchema()
+_transfer_handover_schema = TransferHandoverSchema()
+_transfer_handover_claim_schema = TransferHandoverClaimSchema()
+_financial_summary_query_schema = FinancialSummaryQuerySchema()
 
 
 @bp.post("/assets/<int:asset_id>/update")
@@ -45,6 +57,33 @@ def batch_update_assets() -> dict:
     payload = _batch_update_schema.load(request.get_json(silent=True) or {})
     return Result.success(
         asset_management_service.update_batch(payload, current_user_id())
+    ).to_dict()
+
+
+@bp.get("/assets/<int:asset_id>/financial-summary")
+@jwt_required()
+def asset_financial_summary(asset_id: int) -> dict:
+    query = _financial_summary_query_schema.load(request.args.to_dict())
+    return Result.success(
+        asset_finance_service.get_summary(
+            asset_id, current_user_id(), query.get("as_of")
+        )
+    ).to_dict()
+
+
+@bp.get("/assets/<int:asset_id>/repair-records")
+@jwt_required()
+def asset_repair_records(asset_id: int) -> dict:
+    return Result.success(
+        asset_repair_service.list_for_asset(asset_id, current_user_id())
+    ).to_dict()
+
+
+@bp.get("/assets/<int:asset_id>/scrap-records")
+@jwt_required()
+def asset_scrap_records(asset_id: int) -> dict:
+    return Result.success(
+        asset_scrap_service.list_for_asset(asset_id, current_user_id())
     ).to_dict()
 
 
@@ -141,4 +180,82 @@ def scrap_assets() -> dict:
     ).to_dict()
 
 
-__all__ = ["bp"]
+@bp.post("/asset-actions/transfer-handover")
+@jwt_required()
+def create_transfer_handover() -> dict:
+    payload = _transfer_handover_schema.load(request.get_json(silent=True) or {})
+    return Result.success(
+        asset_transfer_handover_service.create(payload, current_user_id())
+    ).to_dict()
+
+
+@bp.get("/asset-actions/transfer-handovers/pending")
+@jwt_required()
+def pending_transfer_handovers() -> dict:
+    return Result.success(
+        asset_transfer_handover_service.page(current_user_id(), received=False)
+    ).to_dict()
+
+
+@bp.get("/asset-actions/transfer-handovers/received")
+@jwt_required()
+def received_transfer_handovers() -> dict:
+    return Result.success(
+        asset_transfer_handover_service.page(current_user_id(), received=True)
+    ).to_dict()
+
+
+@bp.post("/asset-actions/transfer-handovers/<int:handover_id>/confirm-outgoing")
+@jwt_required()
+def confirm_transfer_outgoing(handover_id: int) -> dict:
+    return Result.success(
+        asset_transfer_handover_service.confirm_outgoing(
+            handover_id,
+            current_user_id(),
+            (request.get_json(silent=True) or {}).get("remark"),
+        )
+    ).to_dict()
+
+
+@bp.post("/asset-actions/transfer-handovers/<int:handover_id>/confirm-receipt")
+@jwt_required()
+def confirm_transfer_receipt(handover_id: int) -> dict:
+    return Result.success(
+        asset_transfer_handover_service.confirm_receipt(
+            handover_id,
+            current_user_id(),
+            (request.get_json(silent=True) or {}).get("remark"),
+        )
+    ).to_dict()
+
+
+@bp.post("/asset-actions/transfer-handovers/<int:handover_id>/reject")
+@jwt_required()
+def reject_transfer_handover(handover_id: int) -> dict:
+    reason = (request.get_json(silent=True) or {}).get("reason", "")
+    return Result.success(
+        asset_transfer_handover_service.reject(
+            handover_id, current_user_id(), str(reason)
+        )
+    ).to_dict()
+
+
+@bp.get("/asset-actions/transfer-handovers/by-token/<handover_token>")
+@jwt_required()
+def transfer_handover_by_token(handover_token: str) -> dict:
+    return Result.success(
+        asset_transfer_handover_service.get_by_token(current_user_id(), handover_token)
+    ).to_dict()
+
+
+@bp.post("/asset-actions/transfer-handovers/claim-by-token")
+@jwt_required()
+def claim_transfer_handover_by_token() -> dict:
+    payload = _transfer_handover_claim_schema.load(request.get_json(silent=True) or {})
+    return Result.success(
+        asset_transfer_handover_service.claim_by_token(
+            current_user_id(),
+            payload["handover_token"],
+            payload.get("remark"),
+        )
+    ).to_dict()

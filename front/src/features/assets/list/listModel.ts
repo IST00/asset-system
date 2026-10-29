@@ -10,7 +10,15 @@ import type { AssetListQuery, AssetStatus, AssetSummary } from '../types.ts'
 
 export type AssetColumnKey = Exclude<
   keyof AssetSummary,
-  'id' | 'version' | 'parent_asset_id' | 'holder_user_id' | 'public_object_id' | 'usage_type'
+  | 'id'
+  | 'version'
+  | 'organization_id'
+  | 'usage_company_id'
+  | 'usage_department_id'
+  | 'parent_asset_id'
+  | 'holder_user_id'
+  | 'public_object_id'
+  | 'usage_type'
 >
 export { canCreateAsset }
 
@@ -29,6 +37,7 @@ export interface AssetListFilterValues {
   source_name?: string
   purchase_date_from?: string
   purchase_date_to?: string
+  only_my_assets?: boolean
 }
 
 export interface AssetStatusOption {
@@ -49,6 +58,8 @@ const availableColumns: AssetColumnKey[] = [
   'location_name',
   'manager_name',
   'company_name',
+  'usage_company_name',
+  'usage_department_name',
   'supplier_name',
   'source_name',
   'unit_name',
@@ -67,6 +78,8 @@ const desktopDefaultColumns: AssetColumnKey[] = [
   'location_name',
   'manager_name',
   'company_name',
+  'usage_company_name',
+  'usage_department_name',
   'purchase_date',
 ]
 
@@ -116,6 +129,7 @@ export function buildAssetListQuery(
   if (sourceName) query.source_name = sourceName
   if (purchaseDateFrom) query.purchase_date_from = purchaseDateFrom
   if (purchaseDateTo) query.purchase_date_to = purchaseDateTo
+  if (filters.only_my_assets) query.only_my_assets = true
 
   return query
 }

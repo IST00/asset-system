@@ -5,6 +5,9 @@ export interface OperationAssetSnapshot {
   asset_code: string
   asset_name: string
   asset_status: string
+  organization_id?: number
+  before_data?: Record<string, unknown>
+  target_data?: Record<string, unknown>
 }
 
 export interface OperationRequest {
@@ -12,6 +15,9 @@ export interface OperationRequest {
   request_no: string
   operation_type: string
   applicant_id: number
+  target_user_id?: number | null
+  approval_channel?: string
+  external_instance_id?: string | null
   approval_status: string
   execution_status: string
   execution_error?: string | null
@@ -19,6 +25,27 @@ export interface OperationRequest {
   termination_reason?: string | null
   last_reminded_at?: string | null
   next_remind_at?: string | null
+  usage_mode?: 'USE' | 'BORROW' | null
+  expected_return_at?: string | null
+  is_overdue?: boolean
+  requested_category?: { id: number; code: string; name: string } | null
+  requested_quantity?: number | null
+  reason?: string | null
+  fulfillment_status?: 'PENDING_ISSUE' | 'PENDING_SIGN' | 'COMPLETED' | 'SIGN_REFUSED' | null
+  issued_by?: number | null
+  issued_at?: string | null
+  issue_remark?: string | null
+  signed_by?: number | null
+  signed_at?: string | null
+  sign_remark?: string | null
+  return_requested_by?: number | null
+  return_requested_at?: string | null
+  return_request_reason?: string | null
+  handed_over_by?: number | null
+  handed_over_at?: string | null
+  handover_remark?: string | null
+  return_stage?: 'PENDING_HANDOVER' | 'PENDING_INSPECTION' | 'COMPLETED' | null
+  allowed_actions?: string[]
 }
 
 export interface OperationPage {
@@ -37,6 +64,7 @@ export interface ApprovalTask {
   status: string
   version: number
   approver_id?: number
+  request?: OperationRequest
 }
 
 export interface ApprovalCandidate {
@@ -75,6 +103,11 @@ export const operationApi = {
     http.post<unknown, OperationRequest>(`/approval-tasks/${taskId}/approve`, { opinion }),
   reject: (taskId: number, opinion: string) =>
     http.post<unknown, OperationRequest>(`/approval-tasks/${taskId}/reject`, { opinion }),
+  withdraw: (operationRequestId: number, reason: string, idempotencyKey?: string) =>
+    http.post<unknown, OperationRequest>(`/operation-requests/${operationRequestId}/withdraw`, {
+      reason,
+      idempotency_key: idempotencyKey,
+    }),
   transferCandidates: (taskId: number) =>
     http.get<unknown, ApprovalCandidate[]>(`/approval-tasks/${taskId}/transfer-candidates`),
   transfer: (taskId: number, toApproverId: number, taskVersion: number, reason: string) =>
@@ -89,4 +122,5 @@ export const operationApi = {
     }),
   approvalEvents: (operationRequestId: number) =>
     http.get<unknown, ApprovalEvent[]>(`/operation-requests/${operationRequestId}/approval-events`),
+  syncFeishuApprovals: () => http.post<unknown, { synced: number }>('/feishu/approvals/sync'),
 }

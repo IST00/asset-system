@@ -5,7 +5,17 @@ import { assetDetailTabs, getDetailFieldGroups } from './detailModel.ts'
 test('asset detail tabs keep the required order', () => {
   assert.deepEqual(
     assetDetailTabs.map((tab) => tab.key),
-    ['basic', 'attachments', 'relations', 'history', 'repairs', 'scrap', 'inventory', 'approvals'],
+    [
+      'basic',
+      'finance',
+      'attachments',
+      'relations',
+      'history',
+      'repairs',
+      'scrap',
+      'inventory',
+      'approvals',
+    ],
   )
 })
 

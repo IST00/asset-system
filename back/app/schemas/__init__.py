@@ -15,7 +15,7 @@ from app.schemas.user import (
     ChangePasswordRequestSchema,
     LoginRequestSchema,
     LoginResponseSchema,
-    PageQuerySchema,
+    UserPageQuerySchema,
     RegisterRequestSchema,
     UserResponseSchema,
 )
@@ -29,7 +29,7 @@ __all__ = [
     "ChangePasswordRequestSchema",
     "LoginRequestSchema",
     "LoginResponseSchema",
-    "PageQuerySchema",
+    "UserPageQuerySchema",
     "RegisterRequestSchema",
     "SupplierVersionRequestSchema",
     "UpdateSupplierRequestSchema",

@@ -2,9 +2,11 @@ import { Navigate, Route, Routes } from 'react-router-dom'
 import { lazy, Suspense } from 'react'
 import { Spin } from 'antd'
 import AssetAccessBoundary from '@/features/assets/AssetAccessBoundary'
+import PermissionBoundary from './PermissionBoundary'
 import ProtectedRoute from './ProtectedRoute'
 
 const Login = lazy(() => import('@/pages/Login'))
+const FeishuCallback = lazy(() => import('@/pages/FeishuCallback'))
 const Home = lazy(() => import('@/pages/Home'))
 const Assets = lazy(() => import('@/pages/Assets'))
 const AssetDetail = lazy(() => import('@/pages/AssetDetail'))
@@ -18,6 +20,8 @@ const Permissions = lazy(() => import('@/pages/Permissions'))
 const AuditLogs = lazy(() => import('@/pages/AuditLogs'))
 const Profile = lazy(() => import('@/pages/Profile'))
 const Notifications = lazy(() => import('@/pages/Notifications'))
+const AssetScan = lazy(() => import('@/pages/AssetScan'))
+const AssetScanUse = lazy(() => import('@/pages/AssetScanUse'))
 const Settings = lazy(() => import('@/pages/Settings'))
 const NotFound = lazy(() => import('@/pages/NotFound'))
 const AppShell = lazy(() => import('@/layouts/AppShell'))
@@ -33,6 +37,7 @@ export default function AppRouter() {
     <Suspense fallback={loading}>
       <Routes>
         <Route path="/login" element={<Login />} />
+        <Route path="/feishu/callback" element={<FeishuCallback />} />
         <Route
           path="/"
           element={
@@ -84,7 +89,24 @@ export default function AppRouter() {
           <Route path="logs" element={<AuditLogs />} />
           <Route path="profile" element={<Profile />} />
           <Route path="notifications" element={<Notifications />} />
-          <Route path="settings" element={<Settings />} />
+          <Route path="scan" element={<AssetScan />} />
+          <Route
+            path="scan-use"
+            element={
+              <AssetAccessBoundary access="view">
+                <AssetScanUse />
+              </AssetAccessBoundary>
+            }
+          />
+          <Route path="asset-transfer" element={<AssetScanUse />} />
+          <Route
+            path="settings"
+            element={
+              <PermissionBoundary permission="system:user:view">
+                <Settings />
+              </PermissionBoundary>
+            }
+          />
         </Route>
         <Route path="*" element={<NotFound />} />
       </Routes>

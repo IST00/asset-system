@@ -31,6 +31,13 @@ class OperationRequestAssetRepository(BaseRepository[OperationRequestAsset]):
         )
         return list(db.session.scalars(statement).all())
 
+    def delete_for_request(self, request_id: int) -> None:
+        db.session.execute(
+            delete(OperationRequestAsset).where(
+                OperationRequestAsset.operation_request_id == request_id
+            )
+        )
+
 
 class AssetBusinessLockRepository(BaseRepository[AssetBusinessLock]):
     def __init__(self) -> None:

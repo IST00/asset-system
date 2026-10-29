@@ -172,6 +172,7 @@ def _seed_api_context(
         operation_type="API_TEST",
         applicant_id=applicant.id,
         approval_execution_mode=approval_execution_mode,
+        external_instance_id="LOCAL-FEISHU-API-REQUEST",
         approval_status=ApprovalStatus.PENDING.value,
         execution_status=ExecutionStatus.NOT_STARTED.value,
     )
@@ -231,11 +232,13 @@ def test_common_request_and_my_task_queries_protect_amount_and_self_scope(
     ).get_json()["data"]
     assert listed["total"] == 1
     assert listed["items"][0]["id"] == operation.id
+    assert listed["items"][0]["external_instance_id"] == "LOCAL-FEISHU-API-REQUEST"
     detail = client.get(
         f"/api/v1/operation-requests/{operation.id}",
         headers=context["applicant_headers"],
     ).get_json()["data"]
     assert detail["approval_execution_mode"] == "AUTO_ON_APPROVAL"
+    assert detail["external_instance_id"] == "LOCAL-FEISHU-API-REQUEST"
     assert "original_amount" not in detail["assets"][0]["before_data"]
 
     tasks = client.get(

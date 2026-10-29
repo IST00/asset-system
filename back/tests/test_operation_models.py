@@ -151,6 +151,9 @@ def test_operation_foundation_enums_expose_stable_persisted_values() -> None:
         "SCRAP",
         "REPAIR_START",
         "REPAIR_COMPLETE",
+        "PHYSICAL_INFO_CHANGE",
+        "FINANCIAL_INFO_CHANGE",
+        "WARRANTY_INFO_CHANGE",
     }
     assert _enum_values("ApprovalExecutionMode") == {
         "AUTO_ON_APPROVAL",

@@ -106,6 +106,7 @@ def _workflow_setup(client, self_approve: bool = False):
         "organization_id": organization.id,
         "items": [
             {
+                "usage_company_id": organization.id,
                 "asset_name": "MacBook Air",
                 "category_id": category.id,
                 "unit_id": unit.id,
@@ -476,6 +477,7 @@ def test_concurrent_approve_and_reject_produce_one_consistent_terminal_state(
             "organization_id": organization_id,
             "items": [
                 {
+                    "usage_company_id": organization_id,
                     "asset_name": "并发审批资产",
                     "category_id": category_id,
                     "unit_id": unit_id,

@@ -6,13 +6,20 @@ from flask import Blueprint, request, send_file
 from flask_jwt_extended import jwt_required
 
 from app.common import Result
-from app.schemas.export import ExportCreateSchema, ExportPageQuerySchema
+from app.schemas.export import (
+    AssetLabelQuerySchema,
+    AssetLabelUrlQuerySchema,
+    ExportCreateSchema,
+    ExportPageQuerySchema,
+)
 from app.security import current_user_id
 from app.services import export_service
 
 bp = Blueprint("exports", __name__, url_prefix="/api/v1")
 _create_schema = ExportCreateSchema()
 _page_schema = ExportPageQuerySchema()
+_label_ids_schema = AssetLabelQuerySchema()
+_label_url_schema = AssetLabelUrlQuerySchema()
 
 
 @bp.post("/exports")
@@ -33,6 +40,31 @@ def list_exports() -> dict:
             size=query["size"],
         ).to_dict()
     ).to_dict()
+
+
+@bp.get("/exports/labels")
+@jwt_required()
+def preview_labels():
+    query = _label_ids_schema.load({"asset_ids": request.args.getlist("asset_ids")})
+    url_query = _label_url_schema.load(
+        {
+            key: value
+            for key, value in request.args.to_dict().items()
+            if key == "base_url"
+        }
+    )
+    target = export_service.preview_labels(
+        query["asset_ids"],
+        current_user_id(),
+        qr_base_url=url_query.get("base_url"),
+    )
+    return send_file(
+        target.path,
+        mimetype=target.mime_type,
+        as_attachment=False,
+        download_name=target.original_name,
+        conditional=True,
+    )
 
 
 @bp.get("/exports/<int:export_id>/download")

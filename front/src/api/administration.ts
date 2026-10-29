@@ -188,9 +188,9 @@ export const masterDataApi = {
 export const administrationApi = {
   roles: () => http.get<unknown, RoleItem[]>('/roles'),
   permissions: () => http.get<unknown, PermissionItem[]>('/permissions'),
-  users: (page = 0, size = 100) =>
+  users: (page = 0, size = 100, keyword = '') =>
     http.get<unknown, { items: User[]; total: number; page: number; size: number }>('/users', {
-      params: { page, size },
+      params: { page, size, keyword },
     }),
   auditLogs: () => http.get<unknown, AuditLogItem[]>('/audit-logs'),
   securityEvents: (page = 0, size = 100) =>

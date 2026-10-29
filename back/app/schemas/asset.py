@@ -35,6 +35,7 @@ class AssetPageQuerySchema(Schema):
         allow_none=True,
         validate=validate.OneOf([item.value for item in AssetDataCompleteness]),
     )
+    only_my_assets = fields.Boolean(required=False, load_default=False)
 
 
 class _CompletionFieldsSchema(Schema):

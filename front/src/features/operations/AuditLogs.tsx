@@ -5,6 +5,7 @@ import { useMemo, useState } from 'react'
 import { administrationApi } from '@/api/administration'
 import StatePanel from '@/components/ui/StatePanel'
 import { beijingDateKey, formatBeijingDateTime } from '@/utils/dateTime'
+import { auditActionLabel, auditResourceTypeLabel, securityEventLabel } from '@/utils/displayLabels'
 import type { Tone } from './data'
 import {
   GlassPanel,
@@ -81,8 +82,8 @@ export default function AuditLogs() {
     return logs.filter((log) => {
       const matchesModule = module === '全部模块' || log.resource_type === module
       const searchable = [
-        log.action,
-        log.resource_type,
+        auditActionLabel(log.action),
+        auditResourceTypeLabel(log.resource_type),
         String(log.resource_id ?? ''),
         String(log.operator_id),
         String(log.id),
@@ -98,7 +99,7 @@ export default function AuditLogs() {
     const normalized = keyword.trim().toLowerCase()
     return securityEvents.filter((event) => {
       const searchable = [
-        event.event_type,
+        securityEventLabel(event.event_type),
         event.username ?? '',
         event.ip_address ?? '',
         event.detail ?? '',
@@ -134,7 +135,7 @@ export default function AuditLogs() {
         filteredSecurityEvents.map((event) => [
           event.id,
           formatBeijingDateTime(event.created_at),
-          event.event_type,
+          securityEventLabel(event.event_type),
           event.user_id ?? '',
           event.username ?? '',
           event.ip_address ?? '',
@@ -159,8 +160,8 @@ export default function AuditLogs() {
           log.id,
           formatBeijingDateTime(log.created_at),
           log.operator_id,
-          log.action,
-          log.resource_type,
+          auditActionLabel(log.action),
+          auditResourceTypeLabel(log.resource_type),
           log.resource_id ?? '',
           log.reason ?? '',
           log.before_data ?? '',
@@ -257,7 +258,10 @@ export default function AuditLogs() {
                 value={module}
                 style={{ width: 170 }}
                 suffixIcon={<Filter size={14} />}
-                options={['全部模块', ...modules].map((value) => ({ value, label: value }))}
+                options={['全部模块', ...modules].map((value) => ({
+                  value,
+                  label: value === '全部模块' ? value : auditResourceTypeLabel(value),
+                }))}
                 onChange={setModule}
               />
             ) : null}
@@ -298,7 +302,7 @@ export default function AuditLogs() {
                     </span>
                     <div className="operations-log__content">
                       <strong>
-                        {event.event_type}
+                        {securityEventLabel(event.event_type)}
                         <StatusPill label={risk.label} tone={risk.tone} />
                       </strong>
                       <span>
@@ -333,12 +337,12 @@ export default function AuditLogs() {
                   </span>
                   <div className="operations-log__content">
                     <strong>
-                      {log.action}
+                      {auditActionLabel(log.action)}
                       <StatusPill label={risk.label} tone={risk.tone} />
                     </strong>
                     <span>
-                      操作人 #{log.operator_id} · {log.resource_type} · 对象 #
-                      {log.resource_id ?? '—'}
+                      操作人 #{log.operator_id} · {auditResourceTypeLabel(log.resource_type)} · 对象
+                      #{log.resource_id ?? '—'}
                     </span>
                     <span>
                       日志 #{log.id}

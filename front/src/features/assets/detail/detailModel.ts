@@ -1,5 +1,6 @@
 export type AssetDetailTabKey =
   | 'basic'
+  | 'finance'
   | 'attachments'
   | 'relations'
   | 'history'
@@ -15,6 +16,7 @@ export interface AssetDetailTab {
 
 export const assetDetailTabs: readonly AssetDetailTab[] = Object.freeze([
   { key: 'basic', labelKey: 'assets.detail.tabs.basic' },
+  { key: 'finance', labelKey: 'assets.detail.tabs.finance' },
   { key: 'attachments', labelKey: 'assets.detail.tabs.attachments' },
   { key: 'relations', labelKey: 'assets.detail.tabs.relations' },
   { key: 'history', labelKey: 'assets.detail.tabs.history' },

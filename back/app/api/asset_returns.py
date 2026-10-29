@@ -7,9 +7,11 @@ from flask_jwt_extended import jwt_required
 
 from app.common import Result
 from app.schemas.asset_usage_return import (
+    PersonalDirectReturnCreateSchema,
     PersonalReturnCreateSchema,
     PublicReturnCreateSchema,
     ReturnConfirmSchema,
+    ReturnHandoverSchema,
     UsageReturnPageQuerySchema,
 )
 from app.security import current_user_id
@@ -22,8 +24,10 @@ bp = Blueprint(
 )
 
 _personal_schema = PersonalReturnCreateSchema()
+_personal_direct_schema = PersonalDirectReturnCreateSchema()
 _public_schema = PublicReturnCreateSchema()
 _confirm_schema = ReturnConfirmSchema()
+_handover_schema = ReturnHandoverSchema()
 _page_schema = UsageReturnPageQuerySchema()
 
 
@@ -35,11 +39,31 @@ def submit_personal() -> dict:
     return Result.success(data).to_dict()
 
 
+@bp.post("/personal-direct")
+@jwt_required()
+def submit_personal_direct() -> dict:
+    payload = _personal_direct_schema.load(request.get_json(silent=True) or {})
+    data = asset_return_service.submit_personal_direct(payload, current_user_id())
+    return Result.success(data).to_dict()
+
+
 @bp.post("/public")
 @jwt_required()
 def submit_public() -> dict:
     payload = _public_schema.load(request.get_json(silent=True) or {})
     data = asset_return_service.submit_public(payload, current_user_id())
+    return Result.success(data).to_dict()
+
+
+@bp.post("/<int:operation_request_id>/handover")
+@jwt_required()
+def handover(operation_request_id: int) -> dict:
+    payload = _handover_schema.load(request.get_json(silent=True) or {})
+    data = asset_return_service.handover(
+        operation_request_id,
+        current_user_id(),
+        payload.get("remark"),
+    )
     return Result.success(data).to_dict()
 
 

@@ -15,7 +15,16 @@ from werkzeug.utils import secure_filename
 
 from app.common import BusinessException, ResultCode
 from app.extensions import db
-from app.models import AssetAttachment
+from app.models import (
+    Asset,
+    AssetAttachment,
+    AssetRepairRecord,
+    AssetScrapRecord,
+    AssetTransferHandover,
+    AssetUsageRequest,
+    OperationRequest,
+    OperationRequestAsset,
+)
 from app.models.mixins import utc_now
 from app.services import asset_access_service, audit_service, permission_service
 
@@ -74,6 +83,8 @@ def _serialize(row: AssetAttachment) -> dict:
         "id": row.id,
         "asset_id": row.asset_id,
         "business_type": row.business_type,
+        "business_id": row.business_id,
+        "document_type": row.document_type,
         "original_name": row.original_name,
         "mime_type": row.mime_type,
         "size_bytes": row.size_bytes,
@@ -106,24 +117,162 @@ def _require_attachment(attachment_id: int) -> AssetAttachment:
     return attachment
 
 
-def _active_count(asset_id: int, business_type: str) -> int:
+_EVIDENCE_TYPES = {
+    "USAGE_SIGN",
+    "RETURN_HANDOVER",
+    "RETURN_INSPECTION",
+    "TRANSFER_RECEIPT",
+}
+
+
+def _is_manager(actor_id: int) -> bool:
+    return permission_service.has_permission(actor_id, "asset:usage:manage")
+
+
+def _require_evidence_access(
+    *, asset_id: int, business_type: str, business_id: int | None, actor_id: int
+) -> None:
+    """Validate the asset-to-workflow link and the participant allowed to use evidence."""
+    if business_type not in _EVIDENCE_TYPES:
+        return
+    if business_id is None:
+        raise BusinessException("履约证据必须关联申请或交接单")
+    asset = db.session.get(Asset, asset_id)
+    if asset is None:
+        raise BusinessException("资产不存在", result_code=ResultCode.NOT_FOUND)
+    allowed = _is_manager(actor_id)
+    if business_type == "TRANSFER_RECEIPT":
+        handover = db.session.get(AssetTransferHandover, business_id)
+        if handover is None or not any(
+            int(item.get("asset_id", 0)) == asset_id for item in (handover.items or [])
+        ):
+            raise BusinessException("交接单不存在或不包含该资产")
+        allowed = allowed or handover.receiver_user_id == actor_id
+    else:
+        operation = db.session.get(OperationRequest, business_id)
+        if operation is None:
+            raise BusinessException("业务申请不存在", result_code=ResultCode.NOT_FOUND)
+        linked = db.session.scalar(
+            select(OperationRequestAsset.id).where(
+                OperationRequestAsset.operation_request_id == business_id,
+                OperationRequestAsset.asset_id == asset_id,
+            )
+        )
+        if linked is None:
+            raise BusinessException("业务申请不存在或不包含该资产")
+        if business_type == "USAGE_SIGN":
+            detail = db.session.scalar(
+                select(AssetUsageRequest).where(
+                    AssetUsageRequest.operation_request_id == business_id
+                )
+            )
+            allowed = allowed or (
+                detail is not None and detail.target_user_id == actor_id
+            )
+        else:
+            allowed = allowed or operation.applicant_id == actor_id
+    if not allowed:
+        raise BusinessException(
+            "当前账号无权操作该履约证据", result_code=ResultCode.FORBIDDEN
+        )
+
+
+def _require_attachment_access(row: AssetAttachment, actor_id: int) -> None:
+    if row.business_type in _EVIDENCE_TYPES:
+        _require_evidence_access(
+            asset_id=row.asset_id,
+            business_type=row.business_type,
+            business_id=row.business_id,
+            actor_id=actor_id,
+        )
+        return
+    asset_access_service.get_accessible(row.asset_id, actor_id)
+
+
+def _require_business_access(
+    *, asset_id: int, business_type: str, business_id: int | None, actor_id: int
+) -> None:
+    if business_type in _EVIDENCE_TYPES:
+        _require_evidence_access(
+            asset_id=asset_id,
+            business_type=business_type,
+            business_id=business_id,
+            actor_id=actor_id,
+        )
+        return
+    if business_type not in {"REPAIR", "SCRAP"}:
+        if business_id is not None:
+            raise BusinessException("普通资产附件不能关联业务记录")
+        return
+    if business_id is None:
+        raise BusinessException("维修或报废附件必须关联业务记录")
+    if business_type == "REPAIR":
+        repair_record = db.session.get(AssetRepairRecord, business_id)
+        record_asset_id = repair_record.asset_id if repair_record is not None else None
+    else:
+        scrap_record = db.session.get(AssetScrapRecord, business_id)
+        record_asset_id = scrap_record.asset_id if scrap_record is not None else None
+    if record_asset_id != asset_id:
+        raise BusinessException("附件关联的业务记录不存在或不属于该资产")
+    permission_service.require_permission(
+        actor_id, "asset:repair" if business_type == "REPAIR" else "asset:scrap"
+    )
+
+
+def _require_sensitive_download_permission(row: AssetAttachment, actor_id: int) -> None:
+    if row.document_type in {
+        "REPAIR_QUOTE",
+        "REPAIR_INVOICE",
+        "DISPOSAL_VOUCHER",
+    }:
+        permission_service.require_permission(actor_id, "asset:amount:view")
+
+
+def _active_count(
+    asset_id: int, business_type: str, business_id: int | None = None
+) -> int:
     return len(
         db.session.scalars(
             select(AssetAttachment.id).where(
                 AssetAttachment.asset_id == asset_id,
                 AssetAttachment.business_type == business_type,
+                AssetAttachment.business_id == business_id,
                 AssetAttachment.status == _ACTIVE,
             )
         ).all()
     )
 
 
-def list_for_asset(asset_id: int, actor_id: int) -> list[dict]:
-    asset_access_service.get_accessible(asset_id, actor_id)
+def list_for_asset(
+    asset_id: int,
+    actor_id: int,
+    *,
+    business_type: str | None = None,
+    business_id: int | None = None,
+) -> list[dict]:
+    if business_type in _EVIDENCE_TYPES:
+        _require_evidence_access(
+            asset_id=asset_id,
+            business_type=business_type,
+            business_id=business_id,
+            actor_id=actor_id,
+        )
+    else:
+        asset_access_service.get_accessible(asset_id, actor_id)
+    if business_type is not None:
+        _require_business_access(
+            asset_id=asset_id,
+            business_type=business_type,
+            business_id=business_id,
+            actor_id=actor_id,
+        )
+    statement = select(AssetAttachment).where(AssetAttachment.asset_id == asset_id)
+    if business_type is not None:
+        statement = statement.where(AssetAttachment.business_type == business_type)
+    if business_id is not None:
+        statement = statement.where(AssetAttachment.business_id == business_id)
     rows = db.session.scalars(
-        select(AssetAttachment)
-        .where(AssetAttachment.asset_id == asset_id)
-        .order_by(
+        statement.order_by(
             AssetAttachment.status.asc(),
             AssetAttachment.is_cover.desc(),
             AssetAttachment.created_at.desc(),
@@ -138,12 +287,31 @@ def upload(
     asset_id: int,
     actor_id: int,
     business_type: str,
+    business_id: int | None,
+    document_type: str,
     original_name: str,
     mime_type: str,
     content: bytes,
 ) -> dict:
-    asset = asset_access_service.get_accessible(asset_id, actor_id)
-    permission_service.require_permission(actor_id, "asset:attachment:manage")
+    if business_type in _EVIDENCE_TYPES:
+        _require_evidence_access(
+            asset_id=asset_id,
+            business_type=business_type,
+            business_id=business_id,
+            actor_id=actor_id,
+        )
+        asset = db.session.get(Asset, asset_id)
+        if asset is None:
+            raise BusinessException("资产不存在", result_code=ResultCode.NOT_FOUND)
+    else:
+        asset = asset_access_service.get_accessible(asset_id, actor_id)
+        permission_service.require_permission(actor_id, "asset:attachment:manage")
+    _require_business_access(
+        asset_id=asset_id,
+        business_type=business_type,
+        business_id=business_id,
+        actor_id=actor_id,
+    )
     normalized_name = original_name.strip()
     if not normalized_name:
         raise BusinessException(
@@ -158,7 +326,7 @@ def upload(
             raise BusinessException("资产照片仅支持 JPG、PNG、WebP")
         if len(content) > _MAX_PHOTO_BYTES:
             raise BusinessException("单张资产照片不能超过 10MB")
-        if _active_count(asset_id, business_type) >= _MAX_PHOTOS_PER_ASSET:
+        if _active_count(asset_id, business_type, business_id) >= _MAX_PHOTOS_PER_ASSET:
             raise BusinessException("每项资产最多保留 5 张有效照片")
     else:
         suffix = (_IMAGE_TYPES | _DOCUMENT_TYPES).get(mime_type)
@@ -166,18 +334,24 @@ def upload(
             raise BusinessException("业务附件仅支持图片、PDF、Word 或 Excel 文件")
         if len(content) > _MAX_DOCUMENT_BYTES:
             raise BusinessException("单个业务附件不能超过 20MB")
-        if _active_count(asset_id, business_type) >= _MAX_FILES_PER_ASSET_AND_TYPE:
+        if (
+            _active_count(asset_id, business_type, business_id)
+            >= _MAX_FILES_PER_ASSET_AND_TYPE
+        ):
             raise BusinessException("同类有效附件最多保留 20 个")
 
     safe_stem = secure_filename(Path(normalized_name).stem)[:80] or "file"
     storage_key = f"assets/{asset_id}/{uuid4().hex}-{safe_stem}{suffix}"
     _storage().write(storage_key, content)
     first_photo = (
-        business_type == "PHOTO" and _active_count(asset_id, business_type) == 0
+        business_type == "PHOTO"
+        and _active_count(asset_id, business_type, business_id) == 0
     )
     row = AssetAttachment(
         asset_id=asset_id,
         business_type=business_type,
+        business_id=business_id,
+        document_type=document_type,
         original_name=normalized_name[:255],
         storage_key=storage_key,
         mime_type=mime_type,
@@ -310,9 +484,10 @@ class DownloadTarget:
 
 def download_target(attachment_id: int, actor_id: int) -> DownloadTarget:
     attachment = _require_attachment(attachment_id)
-    asset_access_service.get_accessible(attachment.asset_id, actor_id)
+    _require_attachment_access(attachment, actor_id)
     if attachment.status != _ACTIVE:
         raise BusinessException("附件已作废，不能下载")
+    _require_sensitive_download_permission(attachment, actor_id)
     path = _storage().resolve(attachment.storage_key)
     if not path.is_file():
         raise BusinessException("附件文件不存在", result_code=ResultCode.NOT_FOUND)

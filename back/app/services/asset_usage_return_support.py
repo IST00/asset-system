@@ -10,6 +10,7 @@ from app.enums import AssetStatus, RecordStatus, UsageType
 from app.extensions import db
 from app.models import (
     Asset,
+    AssetCategory,
     AssetLocation,
     OperationRequest,
     OperationRequestAsset,
@@ -82,9 +83,12 @@ def require_public_assets(assets: Sequence[Asset]) -> None:
 
 def require_personal_target(user_id: int) -> User:
     user = db.session.get(User, user_id)
-    if user is None or not user.enabled or user.organization_id is None:
-        raise BusinessException("领用人不存在、已停用或未归属部门")
-    organization_service.require_enabled(user.organization_id)
+    if user is None:
+        raise BusinessException("用户不存在")
+    if not user.enabled:
+        raise BusinessException("用户已停用")
+    if user.organization_id is not None:
+        organization_service.require_enabled(user.organization_id)
     return user
 
 
@@ -108,7 +112,7 @@ def build_user_snapshot(user: User) -> dict[str, str | int]:
 
 
 def build_named_snapshot(
-    value: Organization | PublicUsageObject | AssetLocation,
+    value: Organization | PublicUsageObject | AssetLocation | AssetCategory,
 ) -> dict[str, str | int]:
     return {"id": value.id, "code": value.code, "name": value.name}
 
@@ -222,6 +226,7 @@ def serialize_operation(
     allowed_actions: Sequence[str] = (),
     assets: Sequence[OperationRequestAsset] | None = None,
     can_view_amount: bool | None = None,
+    include_asset_codes: bool = True,
 ) -> dict[str, Any]:
     """Build an authorized DTO; JSON arrays must be lists, never tuples."""
     include_amount = (
@@ -252,7 +257,7 @@ def serialize_operation(
         "assets": [
             {
                 "asset_id": item.asset_id,
-                "asset_code": item.asset_code_snapshot,
+                "asset_code": item.asset_code_snapshot if include_asset_codes else None,
                 "asset_name": item.asset_name_snapshot,
                 "asset_status": item.asset_status_snapshot,
                 "asset_version": item.asset_version_snapshot,

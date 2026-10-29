@@ -1,4 +1,4 @@
-export type AssetStatus = 'IDLE' | 'IN_USE' | 'REPAIRING' | 'SCRAPPED'
+export type AssetStatus = 'IDLE' | 'PENDING_RECEIPT' | 'IN_USE' | 'REPAIRING' | 'SCRAPPED'
 
 export type AssetTone = 'brand' | 'success' | 'warning' | 'danger' | 'slate'
 
@@ -23,6 +23,11 @@ export interface AssetSummary {
   purchase_date: string
   purchase_amount: number
   information_complete: boolean
+  organization_id?: number
+  usage_company_id?: number
+  usage_company_name?: string
+  usage_department_id?: number
+  usage_department_name?: string
   parent_asset_id?: number
   holder_user_id?: number
   public_object_id?: number
@@ -30,7 +35,7 @@ export interface AssetSummary {
 }
 
 export interface AssetDetail extends AssetSummary {
-  organization_id?: number
+  rfid_tag?: string
   category_id?: number
   unit_id?: number
   supplier_id?: number
@@ -40,8 +45,6 @@ export interface AssetDetail extends AssetSummary {
   holder_user_id?: number
   usage_department_id?: number
   public_object_id?: number
-  usage_type?: string
-  rfid_tag?: string
   zero_amount_reason?: string
   remark?: string
   created_at: string
@@ -63,6 +66,7 @@ export interface AssetListQuery {
   source_name?: string
   purchase_date_from?: string
   purchase_date_to?: string
+  only_my_assets?: boolean
   page: number
   size: 20 | 50 | 100
 }
@@ -70,6 +74,9 @@ export interface AssetListQuery {
 export interface AssetFormValues {
   asset_name: string
   company_name: string
+  usage_company_name: string
+  usage_department_name?: string
+  holder_user_name?: string
   category_name: string
   source_name: string
   unit_name: string

@@ -20,6 +20,7 @@ const backendOverview: DashboardOverviewResponse = {
   categories: [{ name: '电脑', value: 2 }],
   statuses: [
     { status: 'IDLE', value: 1 },
+    { status: 'PENDING_RECEIPT', value: 0 },
     { status: 'IN_USE', value: 1 },
     { status: 'REPAIRING', value: 0 },
     { status: 'SCRAPPED', value: 0 },

@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { Form, Input, Modal, Radio, Select } from 'antd'
 import type { ReturnCondition, ReturnInspectionItem } from '@/api/assetUsageReturn'
 import type { OperationRequest } from '@/api/operations'
+import WorkflowEvidenceUpload from './WorkflowEvidenceUpload'
 
 interface Option {
   label: string
@@ -9,6 +10,9 @@ interface Option {
 }
 
 interface ReturnConfirmValues {
+  return_company_id: number
+  return_usage_company_id: number
+  return_region_id: number
   return_location_id: number
   conditions: Record<string, ReturnCondition>
   descriptions?: Record<string, string>
@@ -16,21 +20,32 @@ interface ReturnConfirmValues {
 
 interface ReturnConfirmModalProps {
   target: OperationRequest | null
-  locations: Option[]
+  organizations: Option[]
+  locationRegions: Option[]
+  locationsByRegion: Record<number, Option[]>
   loading: boolean
   onCancel: () => void
-  onSubmit: (payload: { return_location_id: number; items: ReturnInspectionItem[] }) => void
+  onSubmit: (payload: {
+    return_company_id: number
+    return_usage_company_id: number
+    return_region_id: number
+    return_location_id: number
+    items: ReturnInspectionItem[]
+  }) => void
 }
 
 export default function ReturnConfirmModal({
   target,
-  locations,
+  organizations,
+  locationRegions,
+  locationsByRegion,
   loading,
   onCancel,
   onSubmit,
 }: ReturnConfirmModalProps) {
   const [form] = Form.useForm<ReturnConfirmValues>()
   const conditions = Form.useWatch('conditions', form) ?? {}
+  const selectedRegionId = Form.useWatch('return_region_id', form)
 
   useEffect(() => {
     if (!target) return
@@ -46,6 +61,9 @@ export default function ReturnConfirmModal({
     if (!target) return
     const values = await form.validateFields()
     onSubmit({
+      return_company_id: values.return_company_id,
+      return_usage_company_id: values.return_usage_company_id,
+      return_region_id: values.return_region_id,
       return_location_id: values.return_location_id,
       items: target.assets.map((asset) => {
         const key = String(asset.asset_id)
@@ -71,13 +89,51 @@ export default function ReturnConfirmModal({
       onOk={() => void submit()}
     >
       <Form form={form} layout="vertical" requiredMark={false}>
-        <Form.Item
-          name="return_location_id"
-          label="退回闲置地点"
-          rules={[{ required: true, message: '请选择退回地点' }]}
-        >
-          <Select showSearch optionFilterProp="label" options={locations} />
-        </Form.Item>
+        <div className="usage-return-destination-grid">
+          <Form.Item
+            name="return_company_id"
+            label="退库后所属公司"
+            rules={[{ required: true, message: '请选择退库后所属公司' }]}
+          >
+            <Select
+              showSearch
+              optionFilterProp="label"
+              options={organizations}
+              onChange={() => form.setFieldValue('return_region_id', undefined)}
+            />
+          </Form.Item>
+          <Form.Item
+            name="return_usage_company_id"
+            label="退库后使用公司"
+            rules={[{ required: true, message: '请选择退库后使用公司' }]}
+          >
+            <Select showSearch optionFilterProp="label" options={organizations} />
+          </Form.Item>
+          <Form.Item
+            name="return_region_id"
+            label="退库后区域"
+            rules={[{ required: true, message: '请选择退库后区域' }]}
+          >
+            <Select
+              showSearch
+              optionFilterProp="label"
+              options={locationRegions}
+              onChange={() => form.setFieldValue('return_location_id', undefined)}
+            />
+          </Form.Item>
+          <Form.Item
+            name="return_location_id"
+            label="退库后存放地点"
+            rules={[{ required: true, message: '请选择退库后存放地点' }]}
+          >
+            <Select
+              showSearch
+              optionFilterProp="label"
+              options={locationsByRegion[selectedRegionId] ?? []}
+              disabled={!selectedRegionId}
+            />
+          </Form.Item>
+        </div>
         <div className="usage-return-inspections">
           <div className="usage-return-inspections__heading">
             <strong>逐件验收</strong>
@@ -114,8 +170,17 @@ export default function ReturnConfirmModal({
             )
           })}
         </div>
+        {target ? (
+          <WorkflowEvidenceUpload
+            businessId={target.id}
+            businessType="RETURN_INSPECTION"
+            documentType="INSPECTION_PHOTO"
+            assets={target.assets}
+            label="验收证据（可选）"
+          />
+        ) : null}
         <p className="operations-modal-note">
-          只有个人退库审批通过后才能验收。确认后资产由后端统一退回闲置；如发现损坏，系统会记录验收说明并按业务规则处理状态。
+          只有个人退库审批通过后才能验收。确认后资产由后端统一退回闲置；如发现损坏，系统会记录验收说明并按业务规则处理状态。验收照片会绑定到对应资产和退库申请，便于后续追溯。
         </p>
       </Form>
     </Modal>

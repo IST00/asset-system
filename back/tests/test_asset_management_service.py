@@ -25,9 +25,11 @@ from app.extensions import db
 from app.models import (
     Asset,
     AssetBusinessLock,
+    PublicUsageObject,
     AssetCategory,
     AssetLifecycleRecord,
     AssetLocation,
+    AssetScrapRecord,
     AssetSource,
     OperationLog,
     OperationRequest,
@@ -303,6 +305,211 @@ def test_batch_update_recomputes_expiry_completeness_and_audit(app) -> None:
     assert {item.asset_id for item in lifecycle} == {first.id, second.id}
 
 
+def test_batch_update_directly_assigns_personal_asset(app) -> None:
+    context = _seed_context()
+    asset = context.assets[0]
+
+    result = asset_management_service.update_batch(
+        {
+            "items": [{"asset_id": asset.id, "version": asset.version}],
+            "changes": {
+                "status": AssetStatus.IN_USE.value,
+                "holder_user_id": context.holder.id,
+            },
+            "reason": "管理员直接维护资产归属",
+        },
+        context.actor.id,
+    )
+
+    assert result["updated_count"] == 1
+    db.session.expire_all()
+    updated = db.session.get(Asset, asset.id)
+    assert updated is not None
+    assert updated.status == AssetStatus.IN_USE.value
+    assert updated.usage_type == "PERSONAL"
+    assert updated.holder_user_id == context.holder.id
+    assert updated.public_object_id is None
+    assert updated.usage_department_id == context.holder.organization_id
+
+
+def test_batch_update_clearing_owner_returns_asset_to_idle(app) -> None:
+    context = _seed_context()
+    asset = context.assets[0]
+    asset.status = AssetStatus.IN_USE.value
+    asset.usage_type = "PERSONAL"
+    asset.holder_user_id = context.holder.id
+    asset.usage_department_id = context.holder.organization_id
+    db.session.commit()
+
+    asset_management_service.update_batch(
+        {
+            "items": [{"asset_id": asset.id, "version": asset.version}],
+            "changes": {
+                "holder_user_id": None,
+                "public_object_id": None,
+                "usage_department_id": None,
+            },
+            "reason": "清空使用归属后退回闲置",
+        },
+        context.actor.id,
+    )
+
+    db.session.expire_all()
+    updated = db.session.get(Asset, asset.id)
+    assert updated is not None
+    assert updated.status == AssetStatus.IDLE.value
+    assert updated.usage_type is None
+    assert updated.holder_user_id is None
+    assert updated.public_object_id is None
+    assert updated.usage_department_id is None
+
+
+def test_batch_update_defaults_usage_department_to_in_use(app) -> None:
+    context = _seed_context()
+    asset = context.assets[0]
+    asset.status = AssetStatus.IDLE.value
+    db.session.commit()
+
+    asset_management_service.update_batch(
+        {
+            "items": [{"asset_id": asset.id, "version": asset.version}],
+            "changes": {"usage_department_id": context.holder.organization_id},
+            "reason": "编辑闲置资产为部门使用",
+        },
+        context.actor.id,
+    )
+
+    db.session.expire_all()
+    updated = db.session.get(Asset, asset.id)
+    assert updated is not None
+    assert updated.status == AssetStatus.IN_USE.value
+    assert updated.usage_department_id == context.holder.organization_id
+
+
+def test_batch_update_defaults_personal_owner_to_in_use(app) -> None:
+    context = _seed_context()
+    asset = context.assets[0]
+    asset.status = AssetStatus.IDLE.value
+    db.session.commit()
+
+    asset_management_service.update_batch(
+        {
+            "items": [{"asset_id": asset.id, "version": asset.version}],
+            "changes": {
+                "usage_type": "PERSONAL",
+                "holder_user_id": context.holder.id,
+            },
+            "reason": "编辑闲置资产为个人使用",
+        },
+        context.actor.id,
+    )
+
+    db.session.expire_all()
+    updated = db.session.get(Asset, asset.id)
+    assert updated is not None
+    assert updated.status == AssetStatus.IN_USE.value
+    assert updated.usage_type == "PERSONAL"
+    assert updated.holder_user_id == context.holder.id
+
+
+def test_batch_update_directly_resets_asset_to_idle(app) -> None:
+    context = _seed_context()
+    asset = context.assets[0]
+    asset.status = AssetStatus.IN_USE.value
+    asset.usage_type = "PERSONAL"
+    asset.holder_user_id = context.holder.id
+    asset.usage_department_id = context.holder.organization_id
+    db.session.commit()
+
+    asset_management_service.update_batch(
+        {
+            "items": [{"asset_id": asset.id, "version": asset.version}],
+            "changes": {
+                "status": AssetStatus.IDLE.value,
+                "usage_type": None,
+                "holder_user_id": None,
+                "public_object_id": None,
+            },
+            "reason": "管理员直接维护退库状态",
+        },
+        context.actor.id,
+    )
+
+    db.session.expire_all()
+    updated = db.session.get(Asset, asset.id)
+    assert updated is not None
+    assert updated.status == AssetStatus.IDLE.value
+    assert updated.usage_type is None
+    assert updated.holder_user_id is None
+    assert updated.public_object_id is None
+    assert updated.usage_department_id is None
+
+
+def test_batch_update_directly_assigns_public_asset(app) -> None:
+    context = _seed_context()
+    asset = context.assets[0]
+    public_object = PublicUsageObject(code="AM-DIRECT-PUB", name="一号会议室")
+    db.session.add(public_object)
+    db.session.flush()
+
+    asset_management_service.update_batch(
+        {
+            "items": [{"asset_id": asset.id, "version": asset.version}],
+            "changes": {
+                "status": AssetStatus.IN_USE.value,
+                "public_object_id": public_object.id,
+            },
+            "reason": "管理员直接维护公共资产",
+        },
+        context.actor.id,
+    )
+
+    db.session.expire_all()
+    updated = db.session.get(Asset, asset.id)
+    assert updated is not None
+    assert updated.status == AssetStatus.IN_USE.value
+    assert updated.usage_type == "PUBLIC"
+    assert updated.public_object_id == public_object.id
+    assert updated.holder_user_id is None
+    assert updated.usage_department_id is None
+
+
+def test_batch_update_rejects_invalid_personal_in_use_combination(app) -> None:
+    context = _seed_context()
+    asset = context.assets[0]
+
+    with pytest.raises(BusinessException, match="个人在用资产必须选择使用人"):
+        asset_management_service.update_batch(
+            {
+                "items": [{"asset_id": asset.id, "version": asset.version}],
+                "changes": {
+                    "status": AssetStatus.IN_USE.value,
+                    "usage_type": "PERSONAL",
+                },
+                "reason": "非法组合",
+            },
+            context.actor.id,
+        )
+
+
+def test_batch_update_rejects_ownership_fields_for_multiple_assets(app) -> None:
+    context = _seed_context()
+    first, second, _third = context.assets
+
+    with pytest.raises(BusinessException, match="仅支持逐件资产直接维护"):
+        asset_management_service.update_batch(
+            {
+                "items": [
+                    {"asset_id": first.id, "version": first.version},
+                    {"asset_id": second.id, "version": second.version},
+                ],
+                "changes": {"usage_type": None},
+                "reason": "批量直接维护",
+            },
+            context.actor.id,
+        )
+
+
 def test_batch_update_rejects_stale_version_without_partial_mutation(app) -> None:
     context = _seed_context()
     first, second, _third = context.assets
@@ -548,6 +755,34 @@ def test_transfer_execution_expands_direct_children(app) -> None:
     ]
 
 
+def test_transfer_allows_non_root_organization(app) -> None:
+    context = _seed_context()
+    child = Organization(
+        code="AM-CHILD-ORG",
+        name="资产子部门",
+        parent_id=context.organization.id,
+    )
+    db.session.add(child)
+    db.session.commit()
+
+    result = asset_management_service.transfer(
+        {
+            "items": [{"asset_id": context.assets[0].id, "version": 1}],
+            "organization_id": child.id,
+            "usage_company_id": child.id,
+            "reason": "设备可以调拨到子部门所属公司",
+        },
+        context.actor.id,
+    )
+
+    assert result["updated_count"] == 1
+    db.session.expire_all()
+    transferred = db.session.get(Asset, context.assets[0].id)
+    assert transferred is not None
+    assert transferred.organization_id == child.id
+    assert transferred.usage_company_id == child.id
+
+
 def test_repair_execution_restores_each_assets_previous_status(app) -> None:
     context = _seed_context()
     idle, in_use, _third = context.assets
@@ -642,7 +877,10 @@ def test_scrap_execution_blocks_or_detaches_direct_children(app) -> None:
     assert scrapped_main.status == AssetStatus.SCRAPPED.value
     assert scrapped_main.custom_attributes["scrap"] == {
         "scrap_date": "2026-08-11",
+        "disposal_date": "2026-08-11",
         "scrap_amount": "100.00",
+        "disposition": None,
+        "disposition_remark": None,
     }
     assert detached_child.parent_asset_id is None
     assert detached_child.status == AssetStatus.IDLE.value
@@ -658,7 +896,7 @@ def test_scrap_execution_can_include_direct_children(app) -> None:
         {
             "items": [{"asset_id": main.id, "version": main.version}],
             "scrap_date": date(2026, 8, 11),
-            "scrap_amount": Decimal("0.00"),
+            "scrap_amount": Decimal("100.00"),
             "child_action": "SCRAP",
             "reason": "整套设备完成审批后报废",
         },
@@ -670,6 +908,15 @@ def test_scrap_execution_can_include_direct_children(app) -> None:
     assert [db.session.get(Asset, item.id).status for item in (main, child)] == [
         AssetStatus.SCRAPPED.value,
         AssetStatus.SCRAPPED.value,
+    ]
+    records = list(
+        db.session.scalars(
+            select(AssetScrapRecord).order_by(AssetScrapRecord.asset_id.asc())
+        ).all()
+    )
+    assert [record.scrap_amount for record in records] == [
+        Decimal("100.00"),
+        Decimal("0.00"),
     ]
 
 

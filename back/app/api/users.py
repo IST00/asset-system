@@ -6,7 +6,7 @@ from flask import Blueprint, request
 from flask_jwt_extended import get_jwt, jwt_required
 
 from app.common import Result
-from app.schemas import ChangePasswordRequestSchema, PageQuerySchema
+from app.schemas import ChangePasswordRequestSchema, UserPageQuerySchema
 from app.schemas.user import UserPreferenceUpdateSchema
 from app.security import current_user_id
 from app.services import (
@@ -18,7 +18,7 @@ from app.services import (
 
 bp = Blueprint("users", __name__, url_prefix="/api/v1/users")
 
-_page_schema = PageQuerySchema()
+_page_schema = UserPageQuerySchema()
 _change_password_schema = ChangePasswordRequestSchema()
 _preference_schema = UserPreferenceUpdateSchema()
 
@@ -35,7 +35,9 @@ def page_users() -> dict:
     permission_service.require_permission(current_user_id(), "system:user:view")
 
     query = _page_schema.load(request.args.to_dict())
-    result = user_service.page(page_index=query["page"], size=query["size"])
+    result = user_service.page(
+        page_index=query["page"], size=query["size"], keyword=query["keyword"]
+    )
     return Result.success(result.to_dict()).to_dict()
 
 

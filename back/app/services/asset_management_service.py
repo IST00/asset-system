@@ -11,11 +11,13 @@ from uuid import uuid4
 from sqlalchemy import func, select
 
 from app.common import BusinessException, ResultCode
-from app.enums import AssetStatus, RecordStatus
+from app.enums import AssetStatus, RecordStatus, UsageType
 from app.extensions import db
 from app.models import (
     Asset,
     AssetBusinessLock,
+    AssetRepairRecord,
+    AssetScrapRecord,
     PublicUsageObject,
     User,
 )
@@ -41,6 +43,12 @@ _EDIT_FIELDS = {
     "purchase_date",
     "service_life_months",
     "manager_id",
+    "status",
+    "usage_type",
+    "holder_user_id",
+    "public_object_id",
+    "usage_company_id",
+    "usage_department_id",
     "source_id",
     "location_id",
     "specification_model",
@@ -161,6 +169,119 @@ def _validate_changes(changes: dict[str, Any], assets: list[Asset]) -> dict[str,
         supplier_service.require_enabled_supplier(normalized["supplier_id"])
     if "manager_id" in normalized:
         _require_user(normalized["manager_id"])
+    if "usage_company_id" in normalized:
+        organization_service.require_enabled(normalized["usage_company_id"])
+    if "usage_department_id" in normalized:
+        if normalized["usage_department_id"] is None:
+            normalized["usage_department_id"] = None
+        else:
+            organization_service.require_enabled(normalized["usage_department_id"])
+    ownership_fields = {
+        "holder_user_id",
+        "public_object_id",
+        "usage_type",
+        "usage_department_id",
+    }
+    if ownership_fields & normalized.keys() and len(assets) > 1:
+        raise BusinessException("资产状态和使用归属仅支持逐件资产直接维护")
+    holder = None
+    if "holder_user_id" in normalized and normalized["holder_user_id"] is not None:
+        holder = _require_user(normalized["holder_user_id"])
+        if holder.organization_id is None:
+            raise BusinessException("使用人未归属部门，请联系管理员维护")
+        normalized["usage_type"] = UsageType.PERSONAL.value
+        normalized["public_object_id"] = None
+        normalized["usage_department_id"] = holder.organization_id
+    if "public_object_id" in normalized and normalized["public_object_id"] is not None:
+        public_object = db.session.get(
+            PublicUsageObject, normalized["public_object_id"]
+        )
+        if public_object is None or public_object.status != RecordStatus.ENABLED.value:
+            raise BusinessException("公共使用对象不存在或已停用")
+        normalized["usage_type"] = UsageType.PUBLIC.value
+        normalized["holder_user_id"] = None
+        if holder is None:
+            normalized["usage_department_id"] = None
+    if ownership_fields & normalized.keys():
+        asset = assets[0]
+        status = normalized.get("status", asset.status)
+        if "status" not in normalized and (
+            normalized.get("holder_user_id") is not None
+            or normalized.get("public_object_id") is not None
+            or normalized.get("usage_type") is not None
+            or normalized.get("usage_department_id") is not None
+        ):
+            # Editing an idle asset to a personal/public owner means it is now in
+            # use. Pending-receipt assets keep their sign-out state.
+            if status != AssetStatus.PENDING_RECEIPT.value:
+                status = AssetStatus.IN_USE.value
+                normalized["status"] = status
+        target_usage_type = normalized.get("usage_type", asset.usage_type)
+        target_holder_id = normalized.get("holder_user_id", asset.holder_user_id)
+        target_public_object_id = normalized.get(
+            "public_object_id", asset.public_object_id
+        )
+        if (
+            "status" not in normalized
+            and target_holder_id is None
+            and (target_public_object_id is None)
+        ):
+            # Clearing both individual/public ownership returns the asset to the
+            # idle pool. Department-only usage without an owner cannot remain in
+            # use, so clearing the holder clears it as well.
+            normalized["usage_type"] = None
+            normalized["usage_department_id"] = None
+            normalized["status"] = AssetStatus.IDLE.value
+            target_usage_type = None
+            status = AssetStatus.IDLE.value
+        if status == AssetStatus.IN_USE.value:
+            if target_usage_type == UsageType.PERSONAL.value:
+                if target_holder_id is None:
+                    raise BusinessException("个人在用资产必须选择使用人")
+                if target_public_object_id is not None:
+                    raise BusinessException("个人在用资产不能同时选择公共使用对象")
+            elif target_usage_type == UsageType.PUBLIC.value:
+                if target_public_object_id is None:
+                    raise BusinessException("公共在用资产必须选择公共使用对象")
+                if target_holder_id is not None:
+                    raise BusinessException("公共在用资产不能同时选择使用人")
+            # A department-only assignment is also valid: the department keeps
+            # the asset in use without naming an individual holder.
+        elif status not in {
+            AssetStatus.IN_USE.value,
+            AssetStatus.PENDING_RECEIPT.value,
+        } and any(
+            field in normalized
+            for field in ("holder_user_id", "public_object_id", "usage_type")
+        ):
+            normalized["usage_type"] = None
+            normalized["holder_user_id"] = None
+            normalized["public_object_id"] = None
+            normalized["usage_department_id"] = None
+        elif target_holder_id is not None or target_public_object_id is not None:
+            if status != AssetStatus.PENDING_RECEIPT.value:
+                raise BusinessException("只有待签收资产可以保留使用归属")
+            if target_usage_type not in {
+                UsageType.PERSONAL.value,
+                UsageType.PUBLIC.value,
+            }:
+                raise BusinessException("待签收资产必须选择个人或公共使用归属")
+            if (
+                target_usage_type == UsageType.PERSONAL.value
+                and target_holder_id is None
+            ):
+                raise BusinessException("个人待签收资产必须选择使用人")
+            if (
+                target_usage_type == UsageType.PUBLIC.value
+                and target_public_object_id is None
+            ):
+                raise BusinessException("公共待签收资产必须选择公共使用对象")
+        elif normalized.get("usage_type") is not None:
+            if status not in {
+                AssetStatus.PENDING_RECEIPT.value,
+                AssetStatus.IN_USE.value,
+            }:
+                raise BusinessException("当前资产状态不能设置使用方式")
     if "original_amount" in normalized:
         amount = Decimal(normalized["original_amount"])
         if amount < 0:
@@ -590,9 +711,10 @@ def transfer(payload: dict[str, Any], actor_id: int) -> dict[str, Any]:
     permission_service.require_permission(actor_id, "asset:transfer")
     if "organization_id" in payload:
         organization_service.require_enabled(payload["organization_id"])
-        permission_service.require_organization_scope(
-            actor_id, payload["organization_id"]
-        )
+    if "usage_company_id" in payload:
+        organization_service.require_enabled(payload["usage_company_id"])
+    if "usage_department_id" in payload and payload["usage_department_id"] is not None:
+        organization_service.require_enabled(payload["usage_department_id"])
     if "location_id" in payload:
         master_data_service.require_selectable_location(payload["location_id"])
     if "manager_id" in payload:
@@ -617,7 +739,13 @@ def transfer(payload: dict[str, Any], actor_id: int) -> dict[str, Any]:
     ]
     target_fields = {
         key: payload[key]
-        for key in ("organization_id", "location_id", "manager_id")
+        for key in (
+            "organization_id",
+            "usage_company_id",
+            "usage_department_id",
+            "location_id",
+            "manager_id",
+        )
         if key in payload
     }
     if holder is not None:
@@ -668,6 +796,21 @@ def repair_start(payload: dict[str, Any], actor_id: int) -> dict[str, Any]:
         }
         return {"status": AssetStatus.REPAIRING.value, "custom_attributes": custom}
 
+    def create_repair_records(assets: list[Asset], command_no: str) -> None:
+        sent_at = datetime.now(tz=timezone.utc)
+        for asset in assets:
+            db.session.add(
+                AssetRepairRecord(
+                    asset_id=asset.id,
+                    repair_no=command_no,
+                    before_status=asset.status,
+                    fault_description=payload["reason"].strip(),
+                    repair_supplier_name=metadata["vendor"],
+                    repair_cost=payload.get("estimated_cost"),
+                    sent_at=sent_at,
+                )
+            )
+
     return _apply_lifecycle(
         operation_type="REPAIR_START",
         items=payload["items"],
@@ -675,6 +818,7 @@ def repair_start(payload: dict[str, Any], actor_id: int) -> dict[str, Any]:
         reason=payload["reason"],
         changes_factory=changes,
         allowed_statuses={AssetStatus.IDLE.value, AssetStatus.IN_USE.value},
+        before_apply=create_repair_records,
     )
 
 
@@ -698,6 +842,39 @@ def repair_complete(payload: dict[str, Any], actor_id: int) -> dict[str, Any]:
         }
         return {"status": return_status, "custom_attributes": custom}
 
+    def complete_repair_records(assets: list[Asset], command_no: str) -> None:
+        completed_at = datetime.now(tz=timezone.utc)
+        for asset in assets:
+            record = db.session.scalar(
+                select(AssetRepairRecord)
+                .where(
+                    AssetRepairRecord.asset_id == asset.id,
+                    AssetRepairRecord.completed_at.is_(None),
+                )
+                .order_by(AssetRepairRecord.sent_at.desc(), AssetRepairRecord.id.desc())
+            )
+            if record is None:
+                context = dict(asset.custom_attributes).get("repair_context", {})
+                before_status = (
+                    context.get("return_status", AssetStatus.IDLE.value)
+                    if isinstance(context, dict)
+                    else AssetStatus.IDLE.value
+                )
+                record = AssetRepairRecord(
+                    asset_id=asset.id,
+                    repair_no=command_no,
+                    before_status=str(before_status),
+                    fault_description="历史维修记录（完成确认）",
+                    sent_at=completed_at,
+                )
+                db.session.add(record)
+            record.completed_at = completed_at
+            record.repair_result = payload["result"].strip()
+            record.confirmed_by = actor_id
+            record.confirmed_at = completed_at
+            if payload.get("actual_cost") is not None:
+                record.repair_cost = payload["actual_cost"]
+
     return _apply_lifecycle(
         operation_type="REPAIR_COMPLETE",
         items=payload["items"],
@@ -705,12 +882,27 @@ def repair_complete(payload: dict[str, Any], actor_id: int) -> dict[str, Any]:
         reason=payload["result"],
         changes_factory=changes,
         allowed_statuses={AssetStatus.REPAIRING.value},
+        before_apply=complete_repair_records,
     )
 
 
 def scrap(payload: dict[str, Any], actor_id: int) -> dict[str, Any]:
     permission_service.require_permission(actor_id, "asset:scrap")
-    targets = _targets(payload["items"])
+    normalized_items: list[dict[str, Any]] = []
+    for raw_item in payload["items"]:
+        item = dict(raw_item)
+        if "disposal_date" not in item and payload.get("scrap_date") is not None:
+            item["disposal_date"] = payload["scrap_date"]
+        if "scrap_amount" not in item and payload.get("scrap_amount") is not None:
+            item["scrap_amount"] = payload["scrap_amount"]
+        if "disposition" not in item and "disposition" in payload:
+            item["disposition"] = payload.get("disposition")
+        if "disposal_date" not in item or "scrap_amount" not in item:
+            raise BusinessException("报废资产明细不完整")
+        normalized_items.append(item)
+    payload = {**payload, "items": normalized_items}
+    targets = _targets(normalized_items)
+    details = {item["asset_id"]: item for item in normalized_items}
     children = asset_repository.find_direct_children(sorted(targets))
     if children and payload["child_action"] == "BLOCK":
         raise BusinessException("主资产仍有关联附属资产，请选择一并报废或先解除关系")
@@ -719,25 +911,45 @@ def scrap(payload: dict[str, Any], actor_id: int) -> dict[str, Any]:
     )
     if children and payload["child_action"] == "SCRAP":
         for child in children:
-            if child.id not in targets:
-                targets[child.id] = child.version
+            if child.id in targets:
+                continue
+            targets[child.id] = child.version
+            parent_detail = details.get(child.parent_asset_id or 0)
+            if parent_detail is None:
+                parent_detail = next(iter(details.values()))
+            details[child.id] = {
+                "asset_id": child.id,
+                "version": child.version,
+                "scrap_amount": Decimal("0.00"),
+                "disposition": parent_detail.get("disposition"),
+                "disposition_remark": parent_detail.get("disposition_remark"),
+                "disposal_date": parent_detail["disposal_date"],
+            }
         payload = {
             **payload,
-            "items": [
-                {"asset_id": asset_id, "version": version}
-                for asset_id, version in targets.items()
-            ],
+            "items": [details[asset_id] for asset_id in targets],
         }
-    scrap_meta = {
-        "scrap_date": payload["scrap_date"].isoformat()
-        if isinstance(payload["scrap_date"], date)
-        else str(payload["scrap_date"]),
-        "scrap_amount": str(payload["scrap_amount"])
-        if payload.get("scrap_amount") is not None
-        else None,
-    }
+
+    def detail_for(asset_id: int) -> dict[str, Any]:
+        detail = details.get(asset_id)
+        if detail is None:
+            raise BusinessException("报废资产明细不完整")
+        return detail
 
     def changes(asset: Asset, _before: dict[str, Any]) -> dict[str, Any]:
+        detail = detail_for(asset.id)
+        disposal_date = detail["disposal_date"]
+        scrap_meta = {
+            "scrap_date": disposal_date.isoformat()
+            if isinstance(disposal_date, date)
+            else str(disposal_date),
+            "disposal_date": disposal_date.isoformat()
+            if isinstance(disposal_date, date)
+            else str(disposal_date),
+            "scrap_amount": str(detail["scrap_amount"]),
+            "disposition": detail.get("disposition"),
+            "disposition_remark": detail.get("disposition_remark"),
+        }
         custom = dict(asset.custom_attributes)
         custom["scrap"] = scrap_meta
         return {
@@ -748,6 +960,29 @@ def scrap(payload: dict[str, Any], actor_id: int) -> dict[str, Any]:
             "usage_department_id": None,
             "custom_attributes": custom,
         }
+
+    def create_scrap_records(loaded_assets: list[Asset], command_no: str) -> None:
+        confirmed_at = datetime.now(tz=timezone.utc)
+        target_ids = set(targets)
+        for asset in loaded_assets:
+            if asset.id not in target_ids:
+                continue
+            detail = detail_for(asset.id)
+            disposal_date = detail["disposal_date"]
+            db.session.add(
+                AssetScrapRecord(
+                    asset_id=asset.id,
+                    scrap_no=command_no,
+                    scrap_date=disposal_date,
+                    disposal_date=disposal_date,
+                    scrap_amount=detail["scrap_amount"],
+                    reason=payload["reason"].strip(),
+                    disposition=detail.get("disposition"),
+                    disposition_remark=detail.get("disposition_remark"),
+                    confirmed_by=actor_id,
+                    confirmed_at=confirmed_at,
+                )
+            )
 
     def detach_children(loaded_assets: list[Asset], command_no: str) -> None:
         child_ids = {child.id for child in detached_children}
@@ -776,6 +1011,11 @@ def scrap(payload: dict[str, Any], actor_id: int) -> dict[str, Any]:
                 reason="主资产报废时解除主附关系",
             )
 
+    def before_apply(loaded_assets: list[Asset], command_no: str) -> None:
+        create_scrap_records(loaded_assets, command_no)
+        if detached_children:
+            detach_children(loaded_assets, command_no)
+
     return _apply_lifecycle(
         operation_type="SCRAP",
         items=payload["items"],
@@ -788,7 +1028,7 @@ def scrap(payload: dict[str, Any], actor_id: int) -> dict[str, Any]:
             AssetStatus.REPAIRING.value,
         },
         extra_targets={child.id: child.version for child in detached_children},
-        before_apply=detach_children if detached_children else None,
+        before_apply=before_apply,
     )
 
 

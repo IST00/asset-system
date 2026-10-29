@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
 import type { CSSProperties, Key } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { ColumnsType } from 'antd/es/table'
@@ -25,7 +26,6 @@ import {
 import {
   ArrowRightLeft,
   BellRing,
-  Camera,
   CheckCircle2,
   ClipboardCheck,
   Download,
@@ -41,6 +41,7 @@ import {
   UploadCloud,
   UserRoundCog,
 } from 'lucide-react'
+import BarcodeScanner from '@/components/scanner/BarcodeScanner'
 import { administrationApi, masterDataApi, type TreeItem } from '@/api/administration'
 import {
   inventoryApi,
@@ -52,6 +53,7 @@ import {
   type SubmitInventoryPayload,
 } from '@/api/inventory'
 import { useAuthStore } from '@/store/auth'
+import { inventoryVersionActionLabel } from '@/utils/displayLabels'
 import {
   GlassPanel,
   OperationsHero,
@@ -62,22 +64,6 @@ import {
 
 type InventoryTone = 'blue' | 'cyan' | 'green' | 'amber' | 'red' | 'slate' | 'violet'
 
-interface BarcodeResultLike {
-  rawValue: string
-}
-
-interface BarcodeDetectorLike {
-  detect(source: HTMLVideoElement): Promise<BarcodeResultLike[]>
-}
-
-interface BarcodeDetectorConstructorLike {
-  new (options?: { formats?: string[] }): BarcodeDetectorLike
-}
-
-interface BrowserWithBarcodeDetector extends Window {
-  BarcodeDetector?: BarcodeDetectorConstructorLike
-}
-
 interface CreateTaskFormValues {
   name: string
   deadline_at: Dayjs
@@ -87,7 +73,7 @@ interface CreateTaskFormValues {
   category_ids?: number[]
   holder_user_ids?: number[]
   manager_user_ids?: number[]
-  asset_statuses?: Array<'IDLE' | 'IN_USE' | 'REPAIRING'>
+  asset_statuses?: Array<'IDLE' | 'PENDING_RECEIPT' | 'IN_USE' | 'REPAIRING'>
   public_responsible_user_id?: number
   photo_source_mode: 'CAMERA_ONLY' | 'CAMERA_OR_ALBUM'
   min_photo_count: 1 | 2 | 3
@@ -158,96 +144,6 @@ function formatDeadline(value?: string | null): string {
   return value ? dayjs(value).format('YYYY-MM-DD HH:mm') : '暂无截止时间'
 }
 
-function CameraScanner({
-  open,
-  onClose,
-  onDetected,
-  loading,
-}: {
-  open: boolean
-  onClose: () => void
-  onDetected: (value: string) => void
-  loading: boolean
-}) {
-  const videoRef = useRef<HTMLVideoElement>(null)
-  const streamRef = useRef<MediaStream | null>(null)
-  const intervalRef = useRef<number | null>(null)
-  const [scannerError, setScannerError] = useState<string | null>(null)
-  const [running, setRunning] = useState(false)
-
-  const stop = useCallback(() => {
-    if (intervalRef.current !== null) window.clearInterval(intervalRef.current)
-    intervalRef.current = null
-    streamRef.current?.getTracks().forEach((track) => track.stop())
-    streamRef.current = null
-    setRunning(false)
-  }, [])
-
-  useEffect(() => {
-    if (!open) stop()
-    return stop
-  }, [open, stop])
-
-  const start = async () => {
-    setScannerError(null)
-    const Detector = (window as BrowserWithBarcodeDetector).BarcodeDetector
-    if (!Detector) {
-      setScannerError('当前浏览器不支持原生条码识别，请使用最新版手机 Chrome 或 Safari。')
-      return
-    }
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: 'environment' } },
-        audio: false,
-      })
-      streamRef.current = stream
-      const video = videoRef.current
-      if (!video) return
-      video.srcObject = stream
-      await video.play()
-      setRunning(true)
-      const detector = new Detector({ formats: ['qr_code', 'code_128', 'code_39'] })
-      intervalRef.current = window.setInterval(() => {
-        void detector.detect(video).then((results) => {
-          const value = results[0]?.rawValue
-          if (!value || loading) return
-          stop()
-          onDetected(value)
-        })
-      }, 550)
-    } catch (error) {
-      setScannerError(error instanceof Error ? error.message : '无法启用摄像头')
-      stop()
-    }
-  }
-
-  return (
-    <Modal title="扫码盘点" open={open} onCancel={onClose} footer={null} destroyOnHidden>
-      <div className="inventory-scanner">
-        <video ref={videoRef} muted playsInline className={running ? 'is-running' : ''} />
-        {!running ? (
-          <div className="inventory-scanner__placeholder">
-            <ScanLine size={38} />
-            <strong>扫描资产二维码或条形码</strong>
-            <span>识别成功后会自动匹配本次任务中的资产。</span>
-          </div>
-        ) : null}
-        {scannerError ? <Alert type="warning" showIcon message={scannerError} /> : null}
-        <Button
-          type="primary"
-          size="large"
-          icon={<Camera size={18} />}
-          onClick={running ? stop : () => void start()}
-          loading={loading}
-          block
-        >
-          {running ? '停止扫描' : '打开摄像头'}
-        </Button>
-      </div>
-    </Modal>
-  )
-}
-
 async function prepareInventoryPhoto(
   file: File,
   taskName: string,
@@ -304,6 +200,8 @@ async function prepareInventoryPhoto(
 
 export default function Inventory() {
   const queryClient = useQueryClient()
+  const location = useLocation()
+  const navigate = useNavigate()
   const currentUser = useAuthStore((state) => state.user)
   const canCreate = currentUser?.permissions?.includes('inventory:create') ?? false
   const [createOpen, setCreateOpen] = useState(false)
@@ -330,14 +228,54 @@ export default function Inventory() {
   const [createForm] = Form.useForm<CreateTaskFormValues>()
   const [submitForm] = Form.useForm<SubmitFormValues>()
 
+  const quickAction = location.state as { createTask?: boolean; scanInventory?: boolean } | null
+
+  useEffect(() => {
+    if (!quickAction?.createTask || !canCreate) return
+    setCreateOpen(true)
+    createForm.setFieldsValue({
+      deadline_at: dayjs().add(7, 'day'),
+      admin_user_ids: currentUser ? [currentUser.id] : [],
+      photo_source_mode: 'CAMERA_OR_ALBUM',
+      min_photo_count: 1,
+      publish: true,
+    })
+    navigate(location.pathname, { replace: true, state: null })
+  }, [canCreate, createForm, currentUser, location.pathname, navigate, quickAction?.createTask])
+
   const overviewQuery = useQuery({
     queryKey: ['inventory-overview'],
     queryFn: inventoryApi.overview,
+  })
+  const myPendingItemsQuery = useQuery({
+    queryKey: ['inventory-my-pending-items', currentUser?.id],
+    queryFn: inventoryApi.myPendingItems,
+    enabled: currentUser !== null,
   })
   const tasksQuery = useQuery({
     queryKey: ['inventory-tasks'],
     queryFn: () => inventoryApi.tasks(),
   })
+  useEffect(() => {
+    if (!quickAction?.scanInventory || tasksQuery.isLoading) return
+
+    const target = tasksQuery.data?.items.find((task) =>
+      ['IN_PROGRESS', 'OVERDUE'].includes(task.status),
+    )
+    if (target) {
+      setSelectedTaskId(target.id)
+      setScannerOpen(true)
+    } else {
+      void message.info('当前没有可提交的进行中盘点任务')
+    }
+    navigate(location.pathname, { replace: true, state: null })
+  }, [
+    location.pathname,
+    navigate,
+    quickAction?.scanInventory,
+    tasksQuery.data,
+    tasksQuery.isLoading,
+  ])
   const selectedTask = useMemo(
     () => tasksQuery.data?.items.find((task) => task.id === selectedTaskId) ?? null,
     [selectedTaskId, tasksQuery.data],
@@ -382,6 +320,7 @@ export default function Inventory() {
       queryClient.invalidateQueries({ queryKey: ['inventory-overview'] }),
       queryClient.invalidateQueries({ queryKey: ['inventory-tasks'] }),
       queryClient.invalidateQueries({ queryKey: ['inventory-items'] }),
+      queryClient.invalidateQueries({ queryKey: ['inventory-my-pending-items'] }),
       queryClient.invalidateQueries({ queryKey: ['inventory-scan-events'] }),
       queryClient.invalidateQueries({ queryKey: ['asset-dashboard'] }),
     ])
@@ -624,7 +563,7 @@ export default function Inventory() {
             versions.map((version) => (
               <div key={version.id}>
                 <strong>
-                  V{version.version_no} · {version.action}
+                  V{version.version_no} · {inventoryVersionActionLabel(version.action)}
                 </strong>
                 <span>
                   {version.changed_by_name || `用户 ${version.changed_by}`} ·{' '}
@@ -652,6 +591,7 @@ export default function Inventory() {
   )
   const overview = overviewQuery.data
   const taskItems = itemsQuery.data?.items ?? []
+  const myPendingItems = myPendingItemsQuery.data ?? []
   const locationOptions = flattenTree(locationsQuery.data ?? [])
 
   const startScan = (task?: InventoryTask | null) => {
@@ -1061,6 +1001,70 @@ export default function Inventory() {
         ]}
       />
 
+      <GlassPanel className="inventory-my-assets-panel">
+        <SectionHeading
+          eyebrow="MY ASSETS"
+          title="我需要盘点的资产"
+          description="汇总所有进行中盘点任务里指派给当前账号的待盘点资产，可逐件扫码提交，也可报盘亏。"
+          action={
+            <Button
+              type="primary"
+              icon={<QrCode size={16} />}
+              disabled={!myPendingItems.length}
+              onClick={() => startScan()}
+            >
+              扫码我的资产
+            </Button>
+          }
+        />
+        {myPendingItemsQuery.isError ? (
+          <Alert type="error" showIcon message="我的待盘点资产加载失败" />
+        ) : null}
+        {myPendingItemsQuery.isLoading ? (
+          <div className="operations-loading">正在加载我的待盘点资产…</div>
+        ) : !myPendingItems.length ? (
+          <Empty description="当前没有指派给您的待盘点资产" />
+        ) : (
+          <div className="inventory-my-assets-list">
+            {myPendingItems.map((item) => {
+              const task = tasksQuery.data?.items.find((value) => value.id === item.task_id)
+              return (
+                <article key={`${item.task_id}-${item.id}`} className="inventory-my-asset">
+                  <div className="inventory-my-asset__content">
+                    <strong>{item.asset_name}</strong>
+                    <span>
+                      {item.asset_code} · {item.category_name || '未分类'} ·{' '}
+                      {item.ledger_location_name || '地点未登记'}
+                    </span>
+                    <span>
+                      {task ? `${task.name} · ${task.task_no}` : `盘点任务 ${item.task_id}`}
+                      {task ? ` · 截止 ${formatDeadline(task.deadline_at)}` : ''}
+                    </span>
+                  </div>
+                  <div className="inventory-my-asset__actions">
+                    <Tag color="blue">待盘点</Tag>
+                    <Button size="small" onClick={() => startScan(task)}>
+                      扫码盘点
+                    </Button>
+                    <Button
+                      size="small"
+                      danger
+                      onClick={() => {
+                        setSelectedTaskId(item.task_id)
+                        setSubmission({ item })
+                        submitForm.setFieldsValue({ result: 'LOSS' })
+                      }}
+                    >
+                      报盘亏
+                    </Button>
+                  </div>
+                </article>
+              )
+            })}
+          </div>
+        )}
+      </GlassPanel>
+
       <div className="operations-split inventory-main-grid">
         <GlassPanel>
           <SectionHeading
@@ -1129,7 +1133,10 @@ export default function Inventory() {
                 <FileWarning size={21} />
               </span>
               <h3>地点差异独立处理</h3>
-              <p>资产已找到仍记为 FOUND，地点不同或临时地点单独进入异常清单，不直接修改台账。</p>
+              <p>
+                资产已找到仍记为“已找到 /
+                在场”，地点不同或临时地点单独进入异常清单，不直接修改台账。
+              </p>
             </div>
             <div className="operations-card operations-tone--green">
               <span className="operations-card__icon">
@@ -1240,6 +1247,7 @@ export default function Inventory() {
                 placeholder="不选表示全部可盘状态"
                 options={[
                   { value: 'IDLE', label: '闲置' },
+                  { value: 'PENDING_RECEIPT', label: '领用待确认' },
                   { value: 'IN_USE', label: '使用中' },
                   { value: 'REPAIRING', label: '维修中' },
                 ]}
@@ -1436,7 +1444,7 @@ export default function Inventory() {
         ) : null}
       </Drawer>
 
-      <CameraScanner
+      <BarcodeScanner
         open={scannerOpen}
         onClose={() => setScannerOpen(false)}
         loading={scanMutation.isPending}

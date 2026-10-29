@@ -195,8 +195,8 @@ def seed_http_context(
     client: FlaskClient,
 ) -> tuple[UsageReturnContext, HttpHeaders]:
     context = seed_usage_return_context()
-    grant_permissions(context.manager, "asset:usage:manage")
-    grant_permissions(context.employee, "asset:return:self")
+    grant_permissions(context.manager, "asset:usage:manage", "asset:return:self")
+    grant_permissions(context.employee, "asset:usage:self", "asset:return:self")
     context.manager.password = hash_password(_HTTP_PASSWORD, rounds=4)
     context.employee.password = hash_password(_HTTP_PASSWORD, rounds=4)
     db.session.commit()

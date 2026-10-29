@@ -54,8 +54,18 @@ const toOptions = (items: Array<{ name: string; status?: string; enabled?: boole
     .map((item) => ({ label: item.name, value: item.name }))
 
 function buildOptions(references: AssetReferenceData): AssetFormOptions {
+  const organizations = flattenTree(references.organizations)
   return {
-    companies: toOptions(flattenTree(references.organizations)),
+    companies: toOptions(organizations),
+    usageCompanies: toOptions(organizations),
+    usageDepartments: toOptions(organizations),
+    holders: toOptions(references.holders),
+    holderDepartmentNames: Object.fromEntries(
+      references.holders.map((holder) => [
+        holder.name,
+        organizationNameById(organizations, holder.organization_id),
+      ]),
+    ),
     categories: toOptions(flattenTree(references.categories)),
     sources: toOptions(references.sources),
     units: toOptions(references.units),
@@ -71,6 +81,11 @@ function nameById<T extends { id: number; name: string }>(
 ): string | undefined {
   if (id === null || id === undefined) return undefined
   return items.find((item) => item.id === id)?.name
+}
+
+function organizationNameById(items: TreeItem[], id: number | null | undefined): string {
+  if (id === null || id === undefined) return ''
+  return items.find((item) => item.id === id)?.name ?? ''
 }
 
 function prepareResubmit(
@@ -90,15 +105,19 @@ function prepareResubmit(
   const categories = flattenTree(references.categories)
   const locations = flattenTree(references.locations)
   const companyName = nameById(organizations, request.organization_id)
+  const usageCompanyName = nameById(organizations, item.usage_company_id)
+  const usageDepartmentName = nameById(organizations, item.usage_department_id)
   const categoryName = nameById(categories, item.category_id)
   const unitName = nameById(references.units, item.unit_id)
   const sourceName = nameById(references.sources, item.source_id)
   const locationName = nameById(locations, item.location_id)
   const managerName = nameById(references.managers, item.manager_id)
+  const holderUserName = nameById(references.holders, item.holder_user_id)
   const supplierName = nameById(references.suppliers, item.supplier_id)
   const amount = item.original_amount === undefined ? Number.NaN : Number(item.original_amount)
   if (
     !companyName ||
+    !usageCompanyName ||
     !categoryName ||
     !unitName ||
     !sourceName ||
@@ -112,6 +131,9 @@ function prepareResubmit(
     values: {
       asset_name: item.asset_name,
       company_name: companyName,
+      usage_company_name: usageCompanyName,
+      usage_department_name: usageDepartmentName ?? '',
+      holder_user_name: holderUserName ?? '',
       category_name: categoryName,
       source_name: sourceName,
       unit_name: unitName,
@@ -153,8 +175,10 @@ export default function AssetForm() {
   const [submitFailed, setSubmitFailed] = useState(false)
   const {
     control,
+    getValues,
     handleSubmit,
     reset,
+    setValue,
     formState: { errors, isDirty },
   } = useForm<AssetFormInput>({
     resolver: zodResolver(assetFormSchema),
@@ -393,6 +417,8 @@ export default function AssetForm() {
         asset={asset}
         control={control}
         errors={errors}
+        getValues={getValues}
+        setValue={setValue}
         isEdit={isEdit}
         isResubmit={isResubmit}
         isSubmitting={mutation.isPending}

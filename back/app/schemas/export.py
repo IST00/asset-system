@@ -33,7 +33,8 @@ class AssetExportFilterSchema(Schema):
 
 class ExportCreateSchema(Schema):
     job_type = fields.String(
-        required=True, validate=validate.OneOf(["ASSET_CSV", "LABEL_PDF"])
+        required=True,
+        validate=validate.OneOf(["ASSET_CSV", "REPAIR_CSV", "SCRAP_CSV", "LABEL_PDF"]),
     )
     asset_ids = fields.List(
         fields.Integer(strict=True),
@@ -50,9 +51,31 @@ class ExportCreateSchema(Schema):
             raise ValidationError("标签 PDF 必须明确选择资产")
 
 
+class AssetLabelQuerySchema(Schema):
+    asset_ids = fields.List(
+        fields.Integer(required=True),
+        required=True,
+        validate=validate.Length(min=1, max=100),
+    )
+
+
+class AssetLabelUrlQuerySchema(Schema):
+    base_url = fields.Url(
+        required=False,
+        allow_none=True,
+        relative=True,
+        validate=validate.Length(max=2048),
+    )
+
+
 class ExportPageQuerySchema(Schema):
     page = fields.Integer(load_default=0, validate=validate.Range(min=0))
     size = fields.Integer(load_default=20, validate=validate.Range(min=1, max=100))
 
 
-__all__ = ["AssetExportFilterSchema", "ExportCreateSchema", "ExportPageQuerySchema"]
+__all__ = [
+    "AssetExportFilterSchema",
+    "AssetLabelQuerySchema",
+    "ExportCreateSchema",
+    "ExportPageQuerySchema",
+]

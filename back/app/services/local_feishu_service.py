@@ -12,9 +12,6 @@ from app.common import BusinessException, ResultCode
 from app.enums import ApprovalChannel, ApprovalStatus, OperationType
 from app.extensions import db
 from app.models import ExternalApprovalEvent, OperationRequest
-from app.repositories.asset_usage_return_repository import (
-    asset_usage_request_repository,
-)
 from app.repositories.operation_repository import (
     external_approval_event_repository,
     operation_request_asset_repository,
@@ -104,20 +101,6 @@ def _require_operation(operation_request_id: int) -> OperationRequest:
 
 
 def _authorize_decision(operation: OperationRequest, actor_id: int) -> None:
-    if operation.operation_type in _USAGE_TYPES:
-        detail = asset_usage_request_repository.find_by_operation(operation.id)
-        if detail is None:
-            raise BusinessException(
-                "领用申请详情不存在",
-                result_code=ResultCode.NOT_FOUND,
-            )
-        if detail.target_user_id != actor_id:
-            raise BusinessException(
-                "只有目标员工可以处理领用审批",
-                result_code=ResultCode.FORBIDDEN,
-            )
-        return
-
     permission_service.require_permission(actor_id, _MANAGE_PERMISSION)
     for snapshot in operation_request_asset_repository.find_by_request(operation.id):
         permission_service.require_organization_scope(

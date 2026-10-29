@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from sqlalchemy import Boolean, ForeignKey, Integer, String, UniqueConstraint
+from datetime import datetime
+
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.enums import RecordStatus
@@ -25,6 +27,12 @@ class Organization(TimestampMixin, db.Model):  # type: ignore[misc,name-defined]
         String(16), nullable=False, default=RecordStatus.ENABLED.value, index=True
     )
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    feishu_department_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, unique=True, index=True
+    )
+    feishu_synced_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 class Unit(TimestampMixin, db.Model):  # type: ignore[misc,name-defined]

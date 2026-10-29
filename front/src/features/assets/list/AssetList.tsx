@@ -11,6 +11,7 @@ import {
   Popover,
   Select,
   Skeleton,
+  QRCode,
   Table,
   message,
 } from 'antd'
@@ -25,22 +26,26 @@ import {
   Filter,
   History,
   ListFilter,
+  PackageMinus,
   PencilLine,
   Plus,
   Printer,
   RotateCcw,
   Search,
   SlidersHorizontal,
+  UserRoundCog,
 } from 'lucide-react'
 import type { Key } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Link } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { authApi } from '@/api'
 import { assetManagementApi } from '@/api/assetManagement'
+import { assetUsageReturnApi } from '@/api/assetUsageReturn'
 import { assetQueryToExportFilters, exportsApi, type ExportJob } from '@/api/exports'
+import http from '@/api/http'
 import type { TreeItem } from '@/api/administration'
-import { listAssets, loadAssetReferences } from '@/api/assets'
+import { getAsset, listAssets, loadAssetReferences } from '@/api/assets'
 import PageHeader from '@/components/ui/PageHeader'
 import StatePanel from '@/components/ui/StatePanel'
 import { getAssetStatusMeta } from '@/features/assets/assetModel'
@@ -96,6 +101,9 @@ interface BatchEditFormValues {
   location_id?: number
   manager_id?: number
   supplier_id?: number
+  holder_user_id?: number
+  public_object_id?: number
+  usage_department_id?: number
   remark?: string
   reason: string
 }
@@ -127,7 +135,11 @@ export default function AssetList() {
   const { i18n, t } = useTranslation()
   const isMobile = useMobileViewport()
   const permissions = useAuthStore((state) => state.user?.permissions)
+  const currentUserId = useAuthStore((state) => state.user?.id)
   const canCreate = canCreateAsset(permissions)
+  const canSelfReturn = permissions?.includes('asset:return:self') ?? false
+  const canViewAllAssets = permissions?.includes('asset:usage:manage') ?? false
+  const canTransferHandover = canViewAllAssets
   const canExport = permissions?.includes('asset:export') ?? false
   const canPrintLabels = permissions?.includes('asset:label:print') ?? false
   const locale = i18n.resolvedLanguage || i18n.language || 'zh-CN'
@@ -144,11 +156,22 @@ export default function AssetList() {
   )
   const [selectedRowKeys, setSelectedRowKeys] = useState<Key[]>([])
   const [batchEditOpen, setBatchEditOpen] = useState(false)
+  const [returnConfirmOpen, setReturnConfirmOpen] = useState(false)
+  const [handoverOpen, setHandoverOpen] = useState(false)
+  const [handoverResult, setHandoverResult] = useState<{
+    handoverNo: string
+    handoverToken: string
+    assetCount: number
+  } | null>(null)
+  const [batchEditAsset, setBatchEditAsset] = useState<AssetSummary | null>(null)
   const [exportJobsOpen, setExportJobsOpen] = useState(false)
   const [batchForm] = Form.useForm<BatchEditFormValues>()
+  const [handoverForm] = Form.useForm<{ reason?: string }>()
   const [queryRevision, setQueryRevision] = useState(0)
   const preferenceAppliedRef = useRef(false)
   const queryClient = useQueryClient()
+  const location = useLocation()
+  const navigate = useNavigate()
 
   const preferenceQuery = useQuery({
     queryKey: ['auth', 'preferences'],
@@ -162,6 +185,13 @@ export default function AssetList() {
     },
     onError: (error: Error) => void message.error(error.message || '列表偏好保存失败'),
   })
+
+  useEffect(() => {
+    const locationState = location.state as { transferHandoverCompleted?: boolean } | null
+    if (!locationState?.transferHandoverCompleted) return
+    void message.success('资产交接已完成，资产已归属当前账号')
+    navigate(location.pathname, { replace: true, state: null })
+  }, [location.pathname, location.state, navigate])
 
   useEffect(() => {
     if (!preferenceQuery.data || preferenceAppliedRef.current) return
@@ -187,7 +217,46 @@ export default function AssetList() {
   const referenceQuery = useQuery({
     queryKey: ['asset-form', 'references'],
     queryFn: loadAssetReferences,
-    enabled: batchEditOpen,
+    enabled: batchEditOpen || handoverOpen,
+  })
+
+  const selectedAssets = useMemo(
+    () => (assetsQuery.data?.records ?? []).filter((asset) => selectedRowKeys.includes(asset.id)),
+    [assetsQuery.data?.records, selectedRowKeys],
+  )
+  useEffect(() => {
+    if (!batchEditOpen || selectedAssets.length !== 1) return
+    let cancelled = false
+    void getAsset(selectedAssets[0].id)
+      .then((detail) => {
+        if (cancelled) return
+        batchForm.setFieldsValue({
+          category_id: detail.category_id,
+          unit_id: detail.unit_id,
+          source_id: detail.source_id,
+          location_id: detail.location_id,
+          manager_id: detail.manager_id,
+          supplier_id: detail.supplier_id,
+          holder_user_id: detail.holder_user_id,
+          usage_department_id: detail.usage_department_id,
+          public_object_id: detail.public_object_id,
+          remark: detail.remark,
+        })
+      })
+      .catch((error: unknown) => {
+        if (!cancelled)
+          void message.error(error instanceof Error ? error.message : '资产信息加载失败')
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [batchEditOpen, batchForm, selectedAssets])
+
+  const publicObjectQuery = useQuery({
+    queryKey: ['public-usage-objects', 'asset-list-edit-enabled'],
+    queryFn: () => assetManagementApi.publicObjects(false),
+    enabled: batchEditOpen && selectedRowKeys.length === 1,
+    staleTime: 60_000,
   })
 
   const exportJobsQuery = useQuery({
@@ -213,6 +282,40 @@ export default function AssetList() {
     onSuccess: () => void message.success('文件已开始下载'),
     onError: (error: Error) => void message.error(error.message),
   })
+  const openLabelPdfMutation = useMutation({
+    mutationFn: async ({
+      assetIds,
+      previewWindow,
+    }: {
+      assetIds: number[]
+      previewWindow: Window | null
+    }) => {
+      const fallbackWindow = previewWindow ?? window.open('', '_blank')
+      try {
+        const qrBaseUrl = `${window.location.origin}${import.meta.env.BASE_URL}`.replace(/\/$/, '')
+        const blob = await http.getBlob('/exports/labels', {
+          params: { asset_ids: assetIds, base_url: qrBaseUrl },
+          paramsSerializer: { indexes: null },
+        })
+        const url = URL.createObjectURL(blob)
+        window.setTimeout(() => URL.revokeObjectURL(url), 10 * 60 * 1000)
+        return { url, previewWindow: fallbackWindow }
+      } catch (error) {
+        fallbackWindow?.close()
+        throw error
+      }
+    },
+    onSuccess: ({ url, previewWindow }) => {
+      if (previewWindow) {
+        previewWindow.location.replace(url)
+      } else {
+        void message.error('浏览器拦截了预览窗口，请允许新窗口后重试')
+      }
+    },
+    onError: (error: Error) => {
+      void message.error(error.message || '条码标签 PDF 打开失败')
+    },
+  })
   const batchMutation = useMutation({
     mutationFn: async (values: BatchEditFormValues) => {
       const selected = (assetsQuery.data?.records ?? []).filter((asset) =>
@@ -220,6 +323,14 @@ export default function AssetList() {
       )
       if (!selected.length) throw new Error('请先选择要修改的资产')
       const changes: Record<string, string | number | null> = {}
+      if (selected.length === 1) {
+        // Single-asset editing always submits the complete ownership tuple. This
+        // makes clearing any field unambiguous for the backend: `null` means
+        // clear it, while omitted fields would mean "keep the original value".
+        changes.holder_user_id = values.holder_user_id ?? null
+        changes.public_object_id = values.public_object_id ?? null
+        changes.usage_department_id = values.usage_department_id ?? null
+      }
       const fieldNames = [
         'category_id',
         'unit_id',
@@ -250,7 +361,73 @@ export default function AssetList() {
     onError: (error: Error) => void message.error(error.message),
   })
 
+  const createHandoverMutation = useMutation({
+    mutationFn: async (values: { reason?: string }) => {
+      const selected = (assetsQuery.data?.records ?? []).filter((asset) =>
+        selectedRowKeys.includes(asset.id),
+      )
+      if (!selected.length) throw new Error('请先选择要交接的资产')
+      const invalidAsset = selected.find(
+        (asset) => asset.status !== 'IDLE' && asset.status !== 'IN_USE',
+      )
+      if (invalidAsset) {
+        throw new Error(`资产 ${invalidAsset.asset_code} 当前状态不允许交接`)
+      }
+      return assetManagementApi.transferHandover({
+        items: selected.map((asset) => ({ asset_id: asset.id, version: asset.version })),
+        reason: values.reason?.trim() || '资产台账发起扫码交接',
+      })
+    },
+    onSuccess: async (result) => {
+      if (!result.handover_token) throw new Error('交接二维码生成失败')
+      setHandoverResult({
+        handoverNo: result.handover_no,
+        handoverToken: result.handover_token,
+        assetCount: result.items.length,
+      })
+      await queryClient.invalidateQueries({ queryKey: ['transfer-handovers'] })
+    },
+    onError: (error: Error) => void message.error(error.message || '交接单创建失败'),
+  })
+
   const selectedAssetIds = selectedRowKeys.map((key) => Number(key))
+
+  const personalReturnMutation = useMutation({
+    mutationFn: () =>
+      assetUsageReturnApi.submit({
+        action: 'PERSONAL_RETURN',
+        asset_ids: selectedAssetIds,
+      }),
+    onSuccess: async (result) => {
+      setReturnConfirmOpen(false)
+      setSelectedRowKeys([])
+      await message.success(`退库申请已提交，单号 ${result.request_no}`)
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['assets'] }),
+        queryClient.invalidateQueries({ queryKey: ['operation-requests'] }),
+        queryClient.invalidateQueries({ queryKey: ['asset-usage', 'my-assets'] }),
+        queryClient.invalidateQueries({ queryKey: ['dashboard'] }),
+        queryClient.invalidateQueries({ queryKey: ['workbench'] }),
+        queryClient.invalidateQueries({ queryKey: ['todo-center'] }),
+      ])
+    },
+    onError: (error: Error) => void message.error(error.message || '退库申请提交失败'),
+  })
+
+  const openReturnConfirm = () => {
+    const invalidAsset = selectedAssets.find(
+      (asset) =>
+        asset.status !== 'IN_USE' ||
+        asset.usage_type !== 'PERSONAL' ||
+        asset.holder_user_id !== currentUserId ||
+        asset.public_object_id != null,
+    )
+    if (invalidAsset) {
+      void message.warning('仅本人个人领用且在用的资产可发起退库')
+      return
+    }
+    setReturnConfirmOpen(true)
+  }
 
   const exportCurrentResult = () => {
     createExportMutation.mutate({
@@ -262,6 +439,11 @@ export default function AssetList() {
   const exportSelected = (jobType: 'ASSET_CSV' | 'LABEL_PDF') => {
     if (!selectedAssetIds.length) {
       void message.warning('请先选择资产')
+      return
+    }
+    if (jobType === 'LABEL_PDF') {
+      const previewWindow = window.open('', '_blank')
+      openLabelPdfMutation.mutate({ assetIds: selectedAssetIds, previewWindow })
       return
     }
     createExportMutation.mutate({ job_type: jobType, asset_ids: selectedAssetIds })
@@ -278,6 +460,16 @@ export default function AssetList() {
     setAssetCodesText('')
     setSelectedRowKeys([])
     setQuery(buildAssetListQuery(emptyFilters, query.size))
+  }
+
+  const toggleMyAssets = () => {
+    setSelectedRowKeys([])
+    setDraft((current) => {
+      const next = { ...current, only_my_assets: !current.only_my_assets }
+      setQuery(buildAssetListQuery(next, query.size))
+      setQueryRevision(getNextQueryRevision)
+      return next
+    })
   }
 
   const openAssetCodes = () => {
@@ -419,6 +611,18 @@ export default function AssetList() {
         title: t('assets.list.columns.company_name'),
         dataIndex: 'company_name',
         width: 220,
+      },
+      usage_company_name: {
+        title: t('assets.list.columns.usage_company_name'),
+        dataIndex: 'usage_company_name',
+        width: 220,
+        render: valueOrDash,
+      },
+      usage_department_name: {
+        title: t('assets.list.columns.usage_department_name'),
+        dataIndex: 'usage_department_name',
+        width: 160,
+        render: valueOrDash,
       },
       supplier_name: {
         title: t('assets.list.columns.supplier_name'),
@@ -650,7 +854,7 @@ export default function AssetList() {
         title={t('assets.list.title')}
         description={t('assets.list.description')}
         actions={
-          canCreate || canExport || canPrintLabels ? (
+          canCreate || canExport || canPrintLabels || canTransferHandover ? (
             <div className="asset-list__header-actions">
               {canExport || canPrintLabels ? (
                 <Button
@@ -667,6 +871,22 @@ export default function AssetList() {
                   onClick={exportCurrentResult}
                 >
                   导出当前结果
+                </Button>
+              ) : null}
+              {canTransferHandover ? (
+                <Button
+                  icon={<UserRoundCog aria-hidden="true" size={16} />}
+                  onClick={() => {
+                    if (!selectedRowKeys.length) {
+                      void message.warning('请先选择要交接的资产')
+                      return
+                    }
+                    handoverForm.resetFields()
+                    setHandoverResult(null)
+                    setHandoverOpen(true)
+                  }}
+                >
+                  交接资产
                 </Button>
               ) : null}
               {canCreate ? (
@@ -749,6 +969,15 @@ export default function AssetList() {
           </div>
 
           <div className="asset-list__filter-actions">
+            {canViewAllAssets ? (
+              <Button
+                type={draft.only_my_assets ? 'primary' : 'default'}
+                aria-pressed={draft.only_my_assets}
+                onClick={toggleMyAssets}
+              >
+                {draft.only_my_assets ? '显示全部资产' : '显示我名下资产'}
+              </Button>
+            ) : null}
             <Button
               icon={<SlidersHorizontal aria-hidden="true" size={17} />}
               onClick={() => setMoreFiltersOpen(true)}
@@ -791,10 +1020,19 @@ export default function AssetList() {
             {canPrintLabels ? (
               <Button
                 icon={<Printer aria-hidden="true" size={16} />}
-                loading={createExportMutation.isPending}
+                loading={createExportMutation.isPending || openLabelPdfMutation.isPending}
                 onClick={() => exportSelected('LABEL_PDF')}
               >
                 条码标签 PDF
+              </Button>
+            ) : null}
+            {canSelfReturn ? (
+              <Button
+                type={canExport || canPrintLabels ? 'default' : 'primary'}
+                icon={<PackageMinus aria-hidden="true" size={16} />}
+                onClick={openReturnConfirm}
+              >
+                退库申请
               </Button>
             ) : null}
             {(permissions?.includes('asset:edit') ?? false) ? (
@@ -803,10 +1041,17 @@ export default function AssetList() {
                 icon={<PencilLine aria-hidden="true" size={16} />}
                 onClick={() => {
                   batchForm.resetFields()
+                  const currentAsset =
+                    selectedRowKeys.length === 1
+                      ? ((assetsQuery.data?.records ?? []).find(
+                          (item) => item.id === selectedRowKeys[0],
+                        ) ?? null)
+                      : null
+                  setBatchEditAsset(currentAsset)
                   setBatchEditOpen(true)
                 }}
               >
-                批量编辑
+                {selectedRowKeys.length === 1 ? '编辑' : '批量编辑'}
               </Button>
             ) : null}
           </div>
@@ -814,6 +1059,101 @@ export default function AssetList() {
       ) : null}
 
       <section className="asset-list__results">{renderResults()}</section>
+
+      <Modal
+        className="asset-list__modal"
+        open={handoverOpen}
+        title={handoverResult ? '交接二维码已生成' : '发起资产交接'}
+        okText={handoverResult ? '完成' : '生成交接二维码'}
+        cancelText={handoverResult ? '关闭' : '取消'}
+        confirmLoading={createHandoverMutation.isPending}
+        afterClose={() => createHandoverMutation.reset()}
+        onOk={() => {
+          if (handoverResult) {
+            setHandoverOpen(false)
+            setSelectedRowKeys([])
+            return
+          }
+          void handoverForm.submit()
+        }}
+        onCancel={() => setHandoverOpen(false)}
+        footer={handoverResult ? null : undefined}
+      >
+        {handoverResult ? (
+          <div className="asset-list__handover-result">
+            <div className="asset-list__handover-meta">
+              <strong>{handoverResult.handoverNo}</strong>
+              <span>共 {handoverResult.assetCount} 件资产</span>
+            </div>
+            <QRCode
+              size={216}
+              errorLevel="M"
+              value={`${window.location.origin}${import.meta.env.BASE_URL}asset-transfer?handover_token=${handoverResult.handoverToken}&handover_no=${encodeURIComponent(handoverResult.handoverNo)}`}
+            />
+            <div className="asset-list__handover-tip">
+              接收员工在「业务流程 → 扫码领用 / 借用」中扫描此二维码，确认后即完成交接。
+            </div>
+            <Button
+              type="primary"
+              block
+              onClick={() => {
+                setHandoverOpen(false)
+                setSelectedRowKeys([])
+              }}
+            >
+              完成
+            </Button>
+          </div>
+        ) : (
+          <Form
+            form={handoverForm}
+            layout="vertical"
+            onFinish={(values) => createHandoverMutation.mutate(values)}
+          >
+            <div className="asset-list__batch-note">
+              将为已选择的 {selectedRowKeys.length} 件生成交接二维码，接收人扫码确认后变为使用人。
+            </div>
+            <Form.Item
+              name="reason"
+              label="交接原因"
+              rules={[{ required: true, whitespace: true, message: '请填写交接原因' }]}
+            >
+              <Input.TextArea
+                rows={3}
+                maxLength={200}
+                showCount
+                placeholder="例如：设备责任人调整"
+              />
+            </Form.Item>
+            <Button htmlType="submit" className="asset-list__hidden-submit" aria-hidden="true">
+              提交
+            </Button>
+          </Form>
+        )}
+      </Modal>
+
+      <Modal
+        className="asset-list__modal"
+        open={returnConfirmOpen}
+        title="提交个人退库申请"
+        okText="提交退库申请"
+        cancelText="取消"
+        confirmLoading={personalReturnMutation.isPending}
+        onOk={() => personalReturnMutation.mutate()}
+        onCancel={() => setReturnConfirmOpen(false)}
+      >
+        <div className="asset-list__batch-note">
+          将提交 {selectedAssets.length} 件本人资产的个人退库申请，提交后等待管理员验收。
+        </div>
+        <ul className="asset-list__return-preview">
+          {selectedAssets.map((asset) => (
+            <li key={asset.id}>
+              <strong>{asset.asset_name}</strong>
+              <span>{asset.asset_code}</span>
+            </li>
+          ))}
+        </ul>
+      </Modal>
 
       <Modal
         className="asset-list__modal"
@@ -912,7 +1252,7 @@ export default function AssetList() {
         <div className="asset-list__export-intro">
           <div>
             <strong>服务端生成 · 24 小时有效</strong>
-            <span>台账按当前账号的数据范围和金额权限生成；条码标签固定为 80 × 30 mm。</span>
+            <span>台账按当前账号的数据范围和金额权限生成；条码标签固定为 65 × 30 mm。</span>
           </div>
           <Button
             icon={<RotateCcw aria-hidden="true" size={16} />}
@@ -987,7 +1327,13 @@ export default function AssetList() {
       <Modal
         className="asset-list__modal asset-list__batch-modal"
         open={batchEditOpen}
-        title={`批量编辑 ${selectedRowKeys.length} 件资产`}
+        title={
+          selectedRowKeys.length === 1 && batchEditAsset?.asset_name
+            ? `编辑 · ${batchEditAsset.asset_name}`
+            : selectedRowKeys.length === 1
+              ? `编辑 ${selectedRowKeys.length} 件资产`
+              : `批量编辑 ${selectedRowKeys.length} 件资产`
+        }
         okText="确认批量修改"
         cancelText="取消"
         width={680}
@@ -996,7 +1342,7 @@ export default function AssetList() {
         onCancel={() => setBatchEditOpen(false)}
       >
         <p className="asset-list__batch-note">
-          只填写需要统一修改的字段；未填写的字段会保持原值。序列号与 RFID 不支持批量设置。
+          只填写需要修改的字段；未填写的字段会保持原值。添加使用人、使用部门或公共使用对象后，资产会自动转为「在用」，无需再选择状态和使用方式。
         </p>
         <Form
           form={batchForm}
@@ -1082,6 +1428,49 @@ export default function AssetList() {
                 placeholder="保持原供应商"
               />
             </Form.Item>
+            {selectedRowKeys.length === 1 ? (
+              <>
+                <Form.Item name="holder_user_id" label="使用人">
+                  <Select
+                    allowClear
+                    showSearch
+                    optionFilterProp="label"
+                    loading={referenceQuery.isLoading}
+                    options={(referenceQuery.data?.holders ?? []).map((item) => ({
+                      value: item.id,
+                      label: item.name,
+                    }))}
+                    placeholder="选择使用人后自动转为个人使用并在用"
+                  />
+                </Form.Item>
+                <Form.Item name="usage_department_id" label="使用部门">
+                  <Select
+                    allowClear
+                    showSearch
+                    optionFilterProp="label"
+                    loading={referenceQuery.isLoading}
+                    options={flattenTree(referenceQuery.data?.organizations ?? []).map((item) => ({
+                      value: item.id,
+                      label: item.name,
+                    }))}
+                    placeholder="选择使用部门后自动转为在用"
+                  />
+                </Form.Item>
+                <Form.Item name="public_object_id" label="公共使用对象">
+                  <Select
+                    allowClear
+                    showSearch
+                    optionFilterProp="label"
+                    loading={publicObjectQuery.isLoading}
+                    options={(publicObjectQuery.data ?? []).map((item) => ({
+                      value: item.id,
+                      label: `${item.name} · ${item.code}`,
+                    }))}
+                    placeholder="选择公共对象后自动转为公共使用并在用"
+                  />
+                </Form.Item>
+              </>
+            ) : null}
           </div>
           <Form.Item name="remark" label="统一备注">
             <Input.TextArea rows={3} maxLength={2000} showCount placeholder="不填写则保持原备注" />

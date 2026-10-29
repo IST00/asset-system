@@ -2,6 +2,7 @@ import type { AssetPayload, AssetStatus, AssetTone } from './types.ts'
 
 export type AssetStatusLabelKey =
   | 'assets.status.idle'
+  | 'assets.status.pendingReceipt'
   | 'assets.status.inUse'
   | 'assets.status.repairing'
   | 'assets.status.scrapped'
@@ -14,13 +15,18 @@ export interface AssetStatusMeta {
 
 const assetStatusMeta = Object.freeze({
   IDLE: Object.freeze({ labelKey: 'assets.status.idle', tone: 'brand', order: 1 }),
-  IN_USE: Object.freeze({ labelKey: 'assets.status.inUse', tone: 'success', order: 2 }),
+  PENDING_RECEIPT: Object.freeze({
+    labelKey: 'assets.status.pendingReceipt',
+    tone: 'warning',
+    order: 2,
+  }),
+  IN_USE: Object.freeze({ labelKey: 'assets.status.inUse', tone: 'success', order: 3 }),
   REPAIRING: Object.freeze({
     labelKey: 'assets.status.repairing',
     tone: 'warning',
-    order: 3,
+    order: 4,
   }),
-  SCRAPPED: Object.freeze({ labelKey: 'assets.status.scrapped', tone: 'slate', order: 4 }),
+  SCRAPPED: Object.freeze({ labelKey: 'assets.status.scrapped', tone: 'slate', order: 5 }),
 } satisfies Record<AssetStatus, AssetStatusMeta>)
 
 const orderedAssetStatuses: readonly AssetStatus[] = Object.freeze(
@@ -78,6 +84,9 @@ export function normalizeAssetPayload(values: AssetPayload): AssetPayload {
   return {
     asset_name: values.asset_name.trim(),
     company_name: values.company_name.trim(),
+    usage_company_name: values.usage_company_name.trim(),
+    usage_department_name: trimOptional(values.usage_department_name),
+    holder_user_name: trimOptional(values.holder_user_name),
     category_name: values.category_name.trim(),
     source_name: values.source_name.trim(),
     unit_name: values.unit_name.trim(),

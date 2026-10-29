@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from collections.abc import Mapping, Sequence
+import json
 from datetime import date, datetime, timezone
 from typing import Any
 
@@ -26,6 +27,7 @@ from app.models import (
     AssetCategory,
     AssetLifecycleRecord,
     AssetLocation,
+    PublicUsageObject,
     AssetSource,
     InventoryItem,
     InventoryTask,
@@ -95,6 +97,9 @@ def stock_in_request(operation_request_id: int, actor_id: int) -> None:
             asset_name=item.asset_name,
             status=AssetStatus.IDLE.value,
             organization_id=stock_in.organization_id,
+            usage_company_id=item.usage_company_id,
+            usage_department_id=item.usage_department_id,
+            holder_user_id=item.holder_user_id,
             category_id=item.category_id,
             unit_id=item.unit_id,
             original_amount=item.original_amount,
@@ -127,6 +132,10 @@ def stock_in_request(operation_request_id: int, actor_id: int) -> None:
                 "asset_name": asset.asset_name,
                 "status": asset.status,
                 "organization_id": asset.organization_id,
+                "usage_company_id": asset.usage_company_id,
+                "usage_department_id": asset.usage_department_id,
+                "holder_user_id": asset.holder_user_id,
+                "original_amount": str(asset.original_amount),
             },
         )
     stock_in_item_repository.release_identifier_reservations(stock_in.id)
@@ -140,7 +149,163 @@ def _entity_name(model: type[Any], entity_id: int | None) -> str | None:
         return None
     if isinstance(entity, User):
         return entity.nickname or entity.username
+    if isinstance(entity, Asset):
+        return entity.asset_name or entity.asset_code
     return str(entity.name)
+
+
+_LIFECYCLE_FIELD_LABELS: dict[str, tuple[str, type[Any] | None]] = {
+    "asset_name": ("资产名称", None),
+    "status": ("资产状态", None),
+    "usage_type": ("使用类型", None),
+    "organization_id": ("所属公司", Organization),
+    "usage_company_id": ("使用公司", Organization),
+    "usage_department_id": ("使用部门", Organization),
+    "holder_user_id": ("使用人", User),
+    "manager_id": ("责任管理员", User),
+    "public_object_id": ("公共使用对象", PublicUsageObject),
+    "category_id": ("资产分类", AssetCategory),
+    "unit_id": ("计量单位", Unit),
+    "supplier_id": ("供应商", Supplier),
+    "source_id": ("资产来源", AssetSource),
+    "location_id": ("存放地点", AssetLocation),
+    "specification_model": ("规格型号", None),
+    "serial_number": ("序列号", None),
+    "receipt_no": ("收货单号", None),
+    "rfid_tag": ("RFID", None),
+    "remark": ("备注", None),
+    "original_amount": ("金额", None),
+    "zero_amount_reason": ("零金额原因", None),
+    "purchase_date": ("购入日期", None),
+    "service_life_months": ("使用期限（月）", None),
+    "warranty_supplier_id": ("保修供应商", Supplier),
+    "warranty_contact": ("保修联系人", None),
+    "warranty_phone": ("保修电话", None),
+    "warranty_expiry_date": ("保修到期日", None),
+    "warranty_description": ("保修说明", None),
+    "parent_asset_id": ("主资产", Asset),
+    "data_completeness": ("资料完整状态", None),
+    "return_condition": ("归还状况", None),
+    "condition_description": ("状况说明", None),
+}
+
+_ASSET_STATUS_LABELS = {
+    "IDLE": "闲置",
+    "PENDING_RECEIPT": "领用待确认",
+    "IN_USE": "在用",
+    "REPAIRING": "维修中",
+    "SCRAPPED": "已报废",
+}
+_USAGE_TYPE_LABELS = {"PERSONAL": "个人", "PUBLIC": "公共"}
+_DATA_COMPLETENESS_LABELS = {"COMPLETE": "资料完整", "INCOMPLETE": "资料待补充"}
+_INVENTORY_STATUS_LABELS = {
+    "FOUND": "正常",
+    "LOSS": "盘亏",
+    "EXEMPTED": "无需盘点",
+    "UNSUBMITTED": "未提交",
+}
+
+
+def _plain_value(value: Any) -> Any:
+    if value is None or value == "":
+        return None
+    return value
+
+
+def _lifecycle_field_value(field: str, value: Any) -> str:
+    normalized = _plain_value(value)
+    if normalized is None:
+        return "<空>"
+    if field == "status" and isinstance(normalized, str):
+        return _ASSET_STATUS_LABELS.get(normalized, normalized)
+    if field == "usage_type" and isinstance(normalized, str):
+        return _USAGE_TYPE_LABELS.get(normalized, normalized)
+    if field in {"data_completeness"} and isinstance(normalized, str):
+        return _DATA_COMPLETENESS_LABELS.get(normalized, normalized)
+    if isinstance(normalized, int):
+        model = _LIFECYCLE_FIELD_LABELS[field][1]
+        if model is not None:
+            return _entity_name(model, normalized) or f"#{normalized}"
+    if isinstance(normalized, (dict, list)):
+        return json.dumps(normalized, ensure_ascii=False, sort_keys=True)
+    return str(normalized)
+
+
+def _users_by_ids(user_ids: set[int]) -> dict[int, str]:
+    if not user_ids:
+        return {}
+    rows = db.session.scalars(select(User).where(User.id.in_(user_ids))).all()
+    return {user.id: user.nickname or user.username for user in rows}
+
+
+def _format_lifecycle_changes(
+    before: Mapping[str, Any] | None, after: Mapping[str, Any] | None
+) -> list[str]:
+    if before is None or after is None:
+        return []
+    fields = [field for field in after if field in _LIFECYCLE_FIELD_LABELS]
+    return [
+        f"【{_LIFECYCLE_FIELD_LABELS[field][0]}】字段由"
+        f"【{_lifecycle_field_value(field, before.get(field))}】变更为"
+        f"【{_lifecycle_field_value(field, after.get(field))}】"
+        for field in fields
+        if not (
+            field in before
+            and _plain_value(before[field]) == _plain_value(after[field])
+        )
+        or field not in before
+    ]
+
+
+def _lifecycle_change_summary(record: AssetLifecycleRecord) -> str:
+    before = record.before_data if isinstance(record.before_data, Mapping) else None
+    after = record.after_data if isinstance(record.after_data, Mapping) else None
+
+    if record.operation_type == "INVENTORY_PROCESS":
+        task_no = (after or {}).get("task_no") if after is not None else None
+        task_name = (after or {}).get("task_name") if after is not None else None
+        status = (after or {}).get("status") if after is not None else None
+        status_label = (
+            _INVENTORY_STATUS_LABELS.get(status, str(status))
+            if status is not None
+            else "未知"
+        )
+        return (
+            f"盘点单号: {task_no or record.operation_no}（{status_label}）; "
+            f"盘点单名称: {task_name or '未命名盘点'}"
+        )
+
+    if record.operation_type == "STOCK_IN":
+        values = after or {}
+        organization_id = values.get("organization_id")
+        organization_name = (
+            _entity_name(Organization, organization_id)
+            if isinstance(organization_id, int)
+            else None
+        ) or "未指定公司"
+        department_id = values.get("usage_department_id")
+        department_name = (
+            _entity_name(Organization, department_id)
+            if isinstance(department_id, int)
+            else None
+        ) or "未指定部门"
+        amount = values.get("original_amount", "0.00")
+        import_type = values.get("import_type")
+        suffix = "（历史导入）" if import_type == "HISTORICAL_IMPORT" else ""
+        return (
+            f"入账到 “{organization_name}” 公司，“{department_name}” 部门，"
+            f"金额：{amount}{suffix}"
+        )
+
+    changes = _format_lifecycle_changes(before, after)
+    if record.operation_type == "PERSONAL_USE" and record.remark == "员工签收":
+        return "签字"
+    if changes:
+        change_text = ";".join(changes)
+        if record.remark:
+            return f"{change_text}；原因：{record.remark}"
+        return change_text
+    return record.remark or "该操作未记录变更明细"
 
 
 def _serialize(asset: Asset, include_amount: bool) -> dict[str, Any]:
@@ -151,6 +316,8 @@ def _serialize(asset: Asset, include_amount: bool) -> dict[str, Any]:
         "status": asset.status,
         "version": asset.version,
         "organization_id": asset.organization_id,
+        "usage_company_id": asset.usage_company_id,
+        "usage_company_name": _entity_name(Organization, asset.usage_company_id),
         "company_name": _entity_name(Organization, asset.organization_id),
         "category_id": asset.category_id,
         "category_name": _entity_name(AssetCategory, asset.category_id),
@@ -167,6 +334,7 @@ def _serialize(asset: Asset, include_amount: bool) -> dict[str, Any]:
         "user_name": _entity_name(User, asset.holder_user_id),
         "usage_department_id": asset.usage_department_id,
         "department_name": _entity_name(Organization, asset.usage_department_id),
+        "usage_department_name": _entity_name(Organization, asset.usage_department_id),
         "source_id": asset.source_id,
         "source_name": _entity_name(AssetSource, asset.source_id),
         "location_id": asset.location_id,
@@ -400,6 +568,7 @@ def _build_asset_filters(
     name_filters = (
         ("company_name", Asset.organization_id, Organization),
         ("category_name", Asset.category_id, AssetCategory),
+        ("usage_company_name", Asset.usage_company_id, Organization),
         ("department_name", Asset.usage_department_id, Organization),
         ("location_name", Asset.location_id, AssetLocation),
         ("supplier_name", Asset.supplier_id, Supplier),
@@ -429,6 +598,8 @@ def _build_asset_filters(
     purchase_date_to = filters.get("purchase_date_to")
     if isinstance(purchase_date_to, date):
         conditions.append(Asset.purchase_date <= purchase_date_to)
+    if filters.get("only_my_assets") is True:
+        conditions.append(Asset.holder_user_id == actor_id)
     return conditions
 
 
@@ -470,6 +641,7 @@ def page(
     purchase_date_from: date | None = None,
     purchase_date_to: date | None = None,
     data_completeness: str | None = None,
+    only_my_assets: bool = False,
 ) -> PageResult:
     permission_service.require_permission(actor_id, "asset:view")
     filters = _build_asset_filters(
@@ -492,12 +664,13 @@ def page(
             "purchase_date_from": purchase_date_from,
             "purchase_date_to": purchase_date_to,
             "data_completeness": data_completeness,
+            "only_my_assets": only_my_assets,
         },
     )
     result = asset_repository.page(
         QuerySpec(
             filters=filters,
-            order_by=[Asset.id.asc()],
+            order_by=[Asset.id.desc()],
             page=page_index,
             size=size,
         )
@@ -520,18 +693,24 @@ def get(asset_id: int, actor_id: int) -> dict[str, Any]:
 
 def lifecycle(asset_id: int, actor_id: int) -> list[dict[str, Any]]:
     get(asset_id, actor_id)
+    records = asset_lifecycle_repository.find_by_asset(asset_id)
+    operator_names = _users_by_ids({record.operator_id for record in records})
     return [
         {
-            "id": item.id,
-            "operation_type": item.operation_type,
-            "operation_no": item.operation_no,
-            "operator_id": item.operator_id,
-            "before_data": item.before_data,
-            "after_data": item.after_data,
-            "remark": item.remark,
-            "created_at": item.created_at,
+            "id": record.id,
+            "operation_type": record.operation_type,
+            "operation_no": record.operation_no,
+            "operator_id": record.operator_id,
+            "operator_name": operator_names.get(
+                record.operator_id, f"用户 #{record.operator_id}"
+            ),
+            "before_data": record.before_data,
+            "after_data": record.after_data,
+            "remark": record.remark,
+            "change_summary": _lifecycle_change_summary(record),
+            "created_at": record.created_at,
         }
-        for item in asset_lifecycle_repository.find_by_asset(asset_id)
+        for record in records
     ]
 
 

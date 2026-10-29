@@ -94,6 +94,7 @@ class AssetCodeStatus(StringEnum):
 
 class AssetStatus(StringEnum):
     IDLE = "IDLE"
+    PENDING_RECEIPT = "PENDING_RECEIPT"
     IN_USE = "IN_USE"
     REPAIRING = "REPAIRING"
     SCRAPPED = "SCRAPPED"
@@ -107,6 +108,18 @@ class AssetDataCompleteness(StringEnum):
 class UsageType(StringEnum):
     PERSONAL = "PERSONAL"
     PUBLIC = "PUBLIC"
+
+
+class UsageMode(StringEnum):
+    USE = "USE"
+    BORROW = "BORROW"
+
+
+class FulfillmentStatus(StringEnum):
+    PENDING_ISSUE = "PENDING_ISSUE"
+    PENDING_SIGN = "PENDING_SIGN"
+    COMPLETED = "COMPLETED"
+    SIGN_REFUSED = "SIGN_REFUSED"
 
 
 class InventoryTaskStatus(StringEnum):
@@ -159,6 +172,9 @@ class OperationType(StringEnum):
     SCRAP = "SCRAP"
     REPAIR_START = "REPAIR_START"
     REPAIR_COMPLETE = "REPAIR_COMPLETE"
+    PHYSICAL_INFO_CHANGE = "PHYSICAL_INFO_CHANGE"
+    FINANCIAL_INFO_CHANGE = "FINANCIAL_INFO_CHANGE"
+    WARRANTY_INFO_CHANGE = "WARRANTY_INFO_CHANGE"
 
 
 class ApprovalAction(StringEnum):
@@ -180,6 +196,7 @@ __all__ = [
     "ExecutionStatus",
     "ExecutionTriggerType",
     "FlowStatus",
+    "FulfillmentStatus",
     "InventoryItemStatus",
     "InventoryLocationResult",
     "InventoryPhotoSourceMode",
@@ -191,5 +208,6 @@ __all__ = [
     "RuntimeTaskStatus",
     "SignMode",
     "StringEnum",
+    "UsageMode",
     "UsageType",
 ]

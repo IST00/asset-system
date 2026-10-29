@@ -7,11 +7,16 @@ from app.models.asset import (
     PublicUsageObject,
 )
 from app.models.attachment import AssetAttachment
+from app.models.asset_information_change import AssetInformationChangeRequest
+from app.models.asset_borrow_extension import AssetBorrowExtensionRequest
+from app.models.asset_repair import AssetRepairRecord
+from app.models.asset_scrap import AssetScrapRecord
 from app.models.asset_lifecycle_request import (
     AssetScrapRequest,
     AssetScrapRequestItem,
     AssetTransferRequest,
 )
+from app.models.asset_transfer_handover import AssetTransferHandover
 from app.models.asset_usage_return import (
     AssetReturnItem,
     AssetReturnRequest,
@@ -27,6 +32,7 @@ from app.models.approval_flow import (
 from app.models.audit import AssetLifecycleRecord, OperationLog
 from app.models.export import ExportJob
 from app.models.import_job import ImportJob
+from app.models.notification import UserNotification
 from app.models.inventory import (
     InventoryItem,
     InventoryPhoto,
@@ -77,6 +83,7 @@ from app.models.workflow import (
 )
 
 __all__ = [
+    "AssetInformationChangeRequest",
     "Organization",
     "ApprovalFlowAssigneeRule",
     "ApprovalFlowDefinition",
@@ -88,13 +95,17 @@ __all__ = [
     "ApprovalTaskEvent",
     "Asset",
     "AssetAttachment",
+    "AssetRepairRecord",
+    "AssetScrapRecord",
     "AssetBusinessLock",
     "AssetCodeReservation",
     "AssetCodeSequence",
     "AssetLifecycleRecord",
     "AssetScrapRequest",
     "AssetScrapRequestItem",
+    "AssetBorrowExtensionRequest",
     "AssetTransferRequest",
+    "AssetTransferHandover",
     "AssetReturnItem",
     "AssetReturnRequest",
     "AssetUsageRequest",
@@ -129,6 +140,7 @@ __all__ = [
     "User",
     "UserPreference",
     "UserRole",
+    "UserNotification",
     "Unit",
     "StockInItem",
     "StockInRequest",

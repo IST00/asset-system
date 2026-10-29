@@ -197,7 +197,7 @@ def test_logout_and_idle_timeout_revoke_server_session(client, app) -> None:
         )
     )
     assert session is not None
-    session.last_seen_at = datetime.now(tz=timezone.utc) - timedelta(hours=3)
+    session.last_seen_at = datetime.now(tz=timezone.utc) - timedelta(hours=13)
     db.session.commit()
     idle_rejected = client.get("/api/v1/users/me", headers=_auth(second["token"]))
     assert idle_rejected.status_code == 401

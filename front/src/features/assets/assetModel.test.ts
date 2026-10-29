@@ -25,6 +25,7 @@ test('parses pasted asset codes, removes blanks, and preserves first occurrence 
 
 test('returns stable metadata for every supported status', () => {
   assert.equal(getAssetStatusMeta('IDLE').labelKey, 'assets.status.idle')
+  assert.equal(getAssetStatusMeta('PENDING_RECEIPT').labelKey, 'assets.status.pendingReceipt')
   assert.equal(getAssetStatusMeta('IN_USE').labelKey, 'assets.status.inUse')
   assert.equal(getAssetStatusMeta('REPAIRING').labelKey, 'assets.status.repairing')
   assert.equal(getAssetStatusMeta('SCRAPPED').labelKey, 'assets.status.scrapped')
@@ -35,7 +36,7 @@ test('returns stable metadata for every supported status', () => {
 test('returns every status in strictly increasing shared metadata order', () => {
   const statuses = getOrderedAssetStatuses()
 
-  assert.deepEqual(statuses, ['IDLE', 'IN_USE', 'REPAIRING', 'SCRAPPED'])
+  assert.deepEqual(statuses, ['IDLE', 'PENDING_RECEIPT', 'IN_USE', 'REPAIRING', 'SCRAPPED'])
   assert.equal(Object.isFrozen(statuses), true)
   for (let index = 1; index < statuses.length; index += 1) {
     const previousStatus = statuses[index - 1]
@@ -64,6 +65,9 @@ test('normalizes optional form values without changing snake_case fields', () =>
     normalizeAssetPayload({
       asset_name: '  MacBook Pro  ',
       company_name: '总部',
+      usage_company_name: '上海公司',
+      usage_department_name: '研发部',
+      holder_user_name: undefined,
       category_name: '电脑设备',
       source_name: '采购',
       unit_name: '台',
@@ -80,6 +84,9 @@ test('normalizes optional form values without changing snake_case fields', () =>
     {
       asset_name: 'MacBook Pro',
       company_name: '总部',
+      usage_company_name: '上海公司',
+      usage_department_name: '研发部',
+      holder_user_name: undefined,
       category_name: '电脑设备',
       source_name: '采购',
       unit_name: '台',

@@ -160,6 +160,15 @@ class StockInItem(TimestampMixin, db.Model):  # type: ignore[misc,name-defined]
         nullable=False,
         index=True,
     )
+    usage_company_id: Mapped[int | None] = mapped_column(
+        ForeignKey("organizations.id", ondelete="RESTRICT"), nullable=True, index=True
+    )
+    usage_department_id: Mapped[int | None] = mapped_column(
+        ForeignKey("organizations.id", ondelete="RESTRICT"), nullable=True, index=True
+    )
+    holder_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=True, index=True
+    )
     specification_model: Mapped[str | None] = mapped_column(String(255), nullable=True)
     serial_number: Mapped[str | None] = mapped_column(String(191), nullable=True)
     normalized_serial: Mapped[str | None] = mapped_column(

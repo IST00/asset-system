@@ -70,6 +70,14 @@ def tasks() -> dict:
     return Result.success(result.to_dict()).to_dict()
 
 
+@bp.get("/my-pending-items")
+@jwt_required()
+def my_pending_items() -> dict:
+    return Result.success(
+        inventory_service.list_my_pending_items(current_user_id())
+    ).to_dict()
+
+
 @bp.post("/tasks")
 @jwt_required()
 def create_task() -> dict:

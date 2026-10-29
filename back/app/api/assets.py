@@ -11,14 +11,26 @@ from app.schemas import (
     CompleteAssetDataRequestSchema,
 )
 from app.schemas.asset import AssetPageQuerySchema
+from app.schemas.asset_scan import (
+    AssetScanIntentLookupSchema,
+    AssetScanLookupSchema,
+    AssetUsageCandidateLookupSchema,
+)
 from app.security import current_user_id
-from app.services import asset_data_completion_service, asset_service
+from app.services import (
+    asset_data_completion_service,
+    asset_scan_service,
+    asset_service,
+)
 
 bp = Blueprint("assets", __name__, url_prefix="/api/v1")
 
 _page_schema = AssetPageQuerySchema()
 _complete_data_schema = CompleteAssetDataRequestSchema()
 _batch_complete_data_schema = BatchCompleteAssetDataRequestSchema()
+_scan_lookup_schema = AssetScanLookupSchema()
+_usage_candidate_schema = AssetUsageCandidateLookupSchema()
+_scan_intent_schema = AssetScanIntentLookupSchema()
 
 
 @bp.get("/assets")
@@ -46,6 +58,7 @@ def page() -> dict:
         purchase_date_from=query.get("purchase_date_from"),
         purchase_date_to=query.get("purchase_date_to"),
         data_completeness=query.get("data_completeness"),
+        only_my_assets=query.get("only_my_assets", False),
     )
     return Result.success(result.to_dict()).to_dict()
 
@@ -54,6 +67,45 @@ def page() -> dict:
 @jwt_required()
 def dashboard() -> dict:
     return Result.success(asset_service.dashboard(current_user_id())).to_dict()
+
+
+@bp.get("/assets/scan-lookup")
+@jwt_required()
+def scan_lookup() -> dict:
+    query = _scan_lookup_schema.load(request.args.to_dict())
+    return Result.success(
+        asset_scan_service.lookup(
+            current_user_id(),
+            asset_code=query.get("asset_code"),
+            rfid_tag=query.get("rfid_tag"),
+        )
+    ).to_dict()
+
+
+@bp.get("/assets/usage-candidate")
+@jwt_required()
+def usage_candidate() -> dict:
+    query = _usage_candidate_schema.load(request.args.to_dict())
+    return Result.success(
+        asset_scan_service.usage_candidate(
+            current_user_id(),
+            asset_code=query.get("asset_code"),
+            rfid_tag=query.get("rfid_tag"),
+        )
+    ).to_dict()
+
+
+@bp.get("/assets/scan-intent")
+@jwt_required()
+def scan_intent() -> dict:
+    query = _scan_intent_schema.load(request.args.to_dict())
+    return Result.success(
+        asset_scan_service.scan_intent(
+            current_user_id(),
+            asset_code=query.get("asset_code"),
+            rfid_tag=query.get("rfid_tag"),
+        )
+    ).to_dict()
 
 
 @bp.get("/assets/<int:asset_id>")

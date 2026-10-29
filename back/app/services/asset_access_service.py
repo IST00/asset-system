@@ -18,9 +18,9 @@ def access_filter(actor_id: int) -> ColumnElement[bool]:
     if organization_ids:
         conditions.append(Asset.organization_id.in_(organization_ids))
     if DataScope.SELF.value in permission_service.get_data_scopes(actor_id):
-        conditions.append(
-            or_(Asset.manager_id == actor_id, Asset.holder_user_id == actor_id)
-        )
+        # For employee-facing asset views, SELF means assets held by the actor.
+        # Managed assets remain visible only through broader administrative scopes.
+        conditions.append(Asset.holder_user_id == actor_id)
     return or_(*conditions) if conditions else false()
 
 

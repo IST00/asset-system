@@ -10,6 +10,7 @@ export interface ImportPreviewRow {
   values: Record<string, string>
   errors: string[]
   warnings: string[]
+  auto_actions?: string[]
 }
 
 export interface ImportJob {

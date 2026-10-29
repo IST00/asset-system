@@ -1,10 +1,12 @@
-import { Button, Segmented, Spin } from 'antd'
-import { useQuery } from '@tanstack/react-query'
-import { Bell, ClipboardCheck, RefreshCw, ScanLine, ShieldAlert } from 'lucide-react'
+import { Button, Segmented, Spin, message } from 'antd'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Bell, ClipboardCheck, PackageCheck, RefreshCw, ScanLine, ShieldAlert } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { inventoryApi } from '@/api/inventory'
+import { workbenchApi } from '@/api/workbench'
 import { operationApi } from '@/api/operations'
+import { notificationsApi, type UserNotification } from '@/api/notifications'
 import StatePanel from '@/components/ui/StatePanel'
 import { formatBeijingDateTime } from '@/utils/dateTime'
 import type { Tone } from './data'
@@ -15,9 +17,9 @@ interface TodoItem {
   title: string
   detail: string
   meta: string
-  type: '审批待办' | '盘点待办' | '盘点异常'
+  type: '审批待办' | '盘点待办' | '盘点异常' | '资产待处理'
   tone: Tone
-  target: '/approvals' | '/inventory'
+  target: '/approvals' | '/inventory' | '/workflows'
   icon: typeof ClipboardCheck
 }
 
@@ -33,16 +35,43 @@ const operationLabels: Record<string, string> = {
 export default function Notifications() {
   const [filter, setFilter] = useState('全部')
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const query = useQuery({
     queryKey: ['todo-center'],
     queryFn: async () => {
-      const [approvalTasks, inventoryTasks] = await Promise.all([
-        operationApi.myTasks(),
-        inventoryApi.tasks(),
-      ])
-      return { approvalTasks, inventoryTasks: inventoryTasks.items }
+      const [approvalTasks, inventoryTasks, workbenchSummary, notifications, unreadCount] =
+        await Promise.all([
+          operationApi.myTasks(),
+          inventoryApi.tasks(),
+          workbenchApi.summary(),
+          notificationsApi.page({ page: 0, size: 50 }),
+          notificationsApi.unreadCount(),
+        ])
+      return {
+        approvalTasks,
+        inventoryTasks: inventoryTasks.items,
+        workbenchSummary,
+        notifications: notifications.items,
+        unreadCount,
+      }
     },
     refetchInterval: 60_000,
+  })
+
+  const markReadMutation = useMutation({
+    mutationFn: (id: number) => notificationsApi.markRead(id),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['todo-center'] })
+      await queryClient.invalidateQueries({ queryKey: ['notifications'] })
+    },
+  })
+  const markAllReadMutation = useMutation({
+    mutationFn: notificationsApi.markAllRead,
+    onSuccess: async () => {
+      await message.success('全部通知已标为已读')
+      await queryClient.invalidateQueries({ queryKey: ['todo-center'] })
+      await queryClient.invalidateQueries({ queryKey: ['notifications'] })
+    },
   })
 
   const items = useMemo<TodoItem[]>(() => {
@@ -89,7 +118,69 @@ export default function Notifications() {
         }
         return result
       })
-    return [...approvalItems, ...inventoryItems]
+    const summary = query.data?.workbenchSummary
+    const assetItems: TodoItem[] = []
+    if (summary?.pending_issue) {
+      assetItems.push({
+        id: 'workbench-pending-issue',
+        title: `有 ${summary.pending_issue} 项资产待管理员发放`,
+        detail: '审批通过后仍需选择具体资产并完成发放。',
+        meta: '资产任务中心',
+        type: '资产待处理',
+        tone: 'amber',
+        target: '/workflows',
+        icon: PackageCheck,
+      })
+    }
+    if (summary?.pending_return_inspection) {
+      assetItems.push({
+        id: 'workbench-pending-inspection',
+        title: `有 ${summary.pending_return_inspection} 项退库待管理员验收`,
+        detail: '请验收资产并选择退库后公司、使用公司、区域和存放地点。',
+        meta: '资产任务中心',
+        type: '资产待处理',
+        tone: 'amber',
+        target: '/workflows',
+        icon: PackageCheck,
+      })
+    }
+    if (summary?.pending_sign) {
+      assetItems.push({
+        id: 'workbench-pending-sign',
+        title: `有 ${summary.pending_sign} 项资产待本人签收`,
+        detail: '管理员已发放资产，请在工作台确认收到或拒收。',
+        meta: '资产任务中心',
+        type: '资产待处理',
+        tone: 'blue',
+        target: '/workflows',
+        icon: PackageCheck,
+      })
+    }
+    if (summary?.overdue) {
+      assetItems.push({
+        id: 'workbench-overdue',
+        title: `有 ${summary.overdue} 项借用资产已逾期`,
+        detail: '请尽快发起退库，或联系管理员确认归还安排。',
+        meta: '资产任务中心',
+        type: '资产待处理',
+        tone: 'red',
+        target: '/workflows',
+        icon: ShieldAlert,
+      })
+    }
+    const notificationItems: TodoItem[] = (query.data?.notifications ?? []).map(
+      (notification: UserNotification) => ({
+        id: `notification-${notification.id}`,
+        title: notification.title,
+        detail: notification.content,
+        meta: notification.read_at ? '系统通知 · 已读' : '系统通知 · 未读',
+        type: '资产待处理',
+        tone: notification.notification_type.includes('OVERDUE') ? 'red' : 'blue',
+        target: notification.notification_type === 'APPROVAL' ? '/approvals' : '/workflows',
+        icon: Bell,
+      }),
+    )
+    return [...approvalItems, ...inventoryItems, ...assetItems, ...notificationItems]
   }, [query.data])
 
   const visibleItems = items.filter((item) => filter === '全部' || item.type === filter)
@@ -100,19 +191,29 @@ export default function Notifications() {
       <OperationsHero
         eyebrow="TODO CENTER"
         title="只呈现真实待办，不再用演示消息制造繁忙"
-        description="本页实时汇总当前账号的审批任务与盘点事项。系统尚未建设持久化消息收件箱，因此不提供假的未读和已读状态。"
+        description="本页实时汇总当前账号的审批、盘点和资产履约待办；点击后进入对应业务页面处理。当前仍是实时任务视图，不伪造未读消息。"
         icon={Bell}
         tone="blue"
         actions={
-          <Button
-            type="primary"
-            size="large"
-            icon={<RefreshCw size={17} />}
-            loading={query.isFetching}
-            onClick={() => void query.refetch()}
-          >
-            刷新待办
-          </Button>
+          <div className="operations-toolbar">
+            <Button
+              type="primary"
+              size="large"
+              icon={<RefreshCw size={17} />}
+              loading={query.isFetching}
+              onClick={() => void query.refetch()}
+            >
+              刷新待办
+            </Button>
+            <Button
+              size="large"
+              disabled={!query.data?.unreadCount}
+              loading={markAllReadMutation.isPending}
+              onClick={() => markAllReadMutation.mutate()}
+            >
+              全部标为已读{query.data?.unreadCount ? `（${query.data.unreadCount}）` : ''}
+            </Button>
+          </div>
         }
         aside={
           <div className="operations-hero__aside-card">
@@ -133,7 +234,7 @@ export default function Notifications() {
           action={
             <Segmented
               value={filter}
-              options={['全部', '审批待办', '盘点待办', '盘点异常']}
+              options={['全部', '审批待办', '资产待处理', '盘点待办', '盘点异常']}
               onChange={(value) => setFilter(String(value))}
             />
           }
@@ -145,7 +246,7 @@ export default function Notifications() {
         ) : query.isError ? (
           <StatePanel
             mode="error"
-            message="待办加载失败，请确认审批和盘点接口可访问"
+            message="待办加载失败，请确认审批、盘点和资产任务接口可访问"
             retryLabel="重新加载"
             onRetry={() => void query.refetch()}
           />
@@ -158,7 +259,13 @@ export default function Notifications() {
                   key={item.id}
                   type="button"
                   className={`operations-approval operations-tone--${item.tone}`}
-                  onClick={() => navigate(item.target)}
+                  onClick={() => {
+                    if (item.id.startsWith('notification-')) {
+                      const notificationId = Number(item.id.replace('notification-', ''))
+                      if (Number.isInteger(notificationId)) markReadMutation.mutate(notificationId)
+                    }
+                    navigate(item.target)
+                  }}
                 >
                   <span className="operations-approval__icon">
                     <Icon size={20} />

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from flask import current_app
 from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm.attributes import set_committed_value
@@ -15,17 +16,26 @@ from app.enums import (
     ApprovalChannel,
     ApprovalExecutionMode,
     ApprovalStatus,
+    AssigneeType,
     AssetStatus,
     ExecutionStatus,
+    FlowStatus,
     OperationType,
+    RecordStatus,
+    SignMode,
     UsageType,
 )
 from app.extensions import db
 from app.models import (
+    ApprovalFlowAssigneeRule,
+    ApprovalFlowDefinition,
+    ApprovalFlowLayer,
+    ApprovalFlowVersion,
     AssetLocation,
     OperationActionIdempotency,
     OperationRequest,
     OperationRequestAsset,
+    Organization,
     User,
 )
 from app.models.asset_usage_return import AssetReturnItem, AssetReturnRequest
@@ -35,12 +45,15 @@ from app.repositories.asset_usage_return_repository import (
     asset_return_request_repository,
     find_operation_assets,
 )
+from app.repositories import approval_flow_repository
 from app.repositories.operation_repository import (
     operation_action_idempotency_repository,
 )
 from app.repositories.workflow_repository import operation_request_repository
 from app.services import (
+    approval_engine,
     approval_provider_service,
+    audit_service,
     operation_executor,
     operation_service,
     permission_service,
@@ -51,7 +64,6 @@ from app.services.asset_usage_return_support import (
     expand_assets,
     operation_assets,
     require_assets_in_scope,
-    require_location,
     require_personal_assets,
     require_public_assets,
     serialize_operation,
@@ -72,7 +84,26 @@ _PERSONAL_TARGET_FIELDS = frozenset(
         "usage_department_id",
     }
 )
-_PUBLIC_TARGET_FIELDS = frozenset({*_PERSONAL_TARGET_FIELDS, "location_id"})
+_COMPLETED_TARGET_FIELDS = frozenset(
+    {
+        *_PERSONAL_TARGET_FIELDS,
+        "location_id",
+        "organization_id",
+        "usage_company_id",
+    }
+)
+
+
+@dataclass(frozen=True)
+class _ReturnDestination:
+    company: Organization
+    usage_company: Organization
+    region: AssetLocation
+    location: AssetLocation
+    company_id: int
+    usage_company_id: int
+    region_id: int
+    location_id: int
 
 
 @dataclass(frozen=True)
@@ -131,19 +162,96 @@ def _asset_ids(payload: dict[str, Any]) -> list[int]:
     return values
 
 
-def _return_location_id(payload: dict[str, Any]) -> int:
-    value = payload.get("return_location_id")
-    if type(value) is not int:
+def _return_destination(
+    payload: dict[str, Any], *, for_replay: bool = False
+) -> _ReturnDestination:
+    required_ids = {
+        "return_company_id": "退库后所属公司",
+        "return_usage_company_id": "退库后使用公司",
+        "return_region_id": "退库后区域",
+        "return_location_id": "退库后存放地点",
+    }
+    values: dict[str, int] = {}
+    for field_name, label in required_ids.items():
+        value = payload.get(field_name)
+        if type(value) is not int:
+            raise BusinessException(
+                f"{label}格式无效",
+                result_code=ResultCode.BAD_REQUEST,
+            )
+        values[field_name] = value
+
+    company = db.session.get(Organization, values["return_company_id"])
+    usage_company = db.session.get(Organization, values["return_usage_company_id"])
+    region = db.session.get(AssetLocation, values["return_region_id"])
+    location = db.session.get(AssetLocation, values["return_location_id"])
+    if company is None or usage_company is None or region is None or location is None:
         raise BusinessException(
-            "退回地点格式无效",
-            result_code=ResultCode.BAD_REQUEST,
+            "退库目的地不存在",
+            result_code=ResultCode.NOT_FOUND,
         )
-    return value
+    if for_replay:
+        destination_ids = {
+            "company": company.id,
+            "usage_company": usage_company.id,
+            "region": region.id,
+            "location": location.id,
+        }
+    else:
+        if company.status != RecordStatus.ENABLED.value:
+            raise BusinessException(
+                "退库后所属公司已停用", result_code=ResultCode.NOT_FOUND
+            )
+        if usage_company.status != RecordStatus.ENABLED.value:
+            raise BusinessException(
+                "退库后使用公司已停用", result_code=ResultCode.NOT_FOUND
+            )
+        if region.status != RecordStatus.ENABLED.value:
+            raise BusinessException(
+                "退库后区域不存在或已停用",
+                result_code=ResultCode.NOT_FOUND,
+            )
+        if (
+            location.status != RecordStatus.ENABLED.value
+            or location.is_selectable is not True
+        ):
+            raise BusinessException(
+                "退库后存放地点不存在或已停用",
+                result_code=ResultCode.NOT_FOUND,
+            )
+        if location.parent_id != region.id and not (
+            location.parent_id is None and location.id == region.id
+        ):
+            raise BusinessException("退库后存放地点不属于所选区域")
+        destination_ids = {
+            "company": company.id,
+            "usage_company": usage_company.id,
+            "region": region.id,
+            "location": location.id,
+        }
+    return _ReturnDestination(
+        company=company,
+        usage_company=usage_company,
+        region=region,
+        location=location,
+        company_id=destination_ids["company"],
+        usage_company_id=destination_ids["usage_company"],
+        region_id=destination_ids["region"],
+        location_id=destination_ids["location"],
+    )
 
 
-def _return_location(payload: dict[str, Any]) -> AssetLocation:
-    return_location_id = _return_location_id(payload)
-    return require_location(return_location_id)
+def _return_target(destination: _ReturnDestination) -> dict[str, object]:
+    return {
+        "status": AssetStatus.IDLE.value,
+        "usage_type": None,
+        "holder_user_id": None,
+        "public_object_id": None,
+        "usage_department_id": None,
+        "organization_id": destination.company.id,
+        "usage_company_id": destination.usage_company.id,
+        "location_id": destination.location.id,
+    }
 
 
 def _require_actor(actor_id: int) -> User:
@@ -238,20 +346,34 @@ def _expected_target(
     operation_type: str,
     detail: AssetReturnRequest,
 ) -> tuple[dict[str, object], frozenset[str]]:
-    target: dict[str, object] = {
-        "status": AssetStatus.IDLE.value,
-        "usage_type": None,
-        "holder_user_id": None,
-        "public_object_id": None,
-        "usage_department_id": None,
-    }
-    if operation_type == OperationType.PERSONAL_RETURN.value:
-        return target, _PERSONAL_TARGET_FIELDS
-    if type(detail.return_location_id) is not int:
-        raise BusinessException("公共退回申请详情与目标快照不匹配")
+    is_confirmed = (
+        type(detail.return_company_id) is int
+        and type(detail.return_usage_company_id) is int
+        and type(detail.return_region_id) is int
+        and type(detail.return_location_id) is int
+    )
+    if operation_type == OperationType.PERSONAL_RETURN.value and not is_confirmed:
+        return {
+            "status": AssetStatus.IDLE.value,
+            "usage_type": None,
+            "holder_user_id": None,
+            "public_object_id": None,
+            "usage_department_id": None,
+        }, _PERSONAL_TARGET_FIELDS
+    if not is_confirmed:
+        raise BusinessException("退回申请验收详情不完整")
     return (
-        {**target, "location_id": detail.return_location_id},
-        _PUBLIC_TARGET_FIELDS,
+        {
+            "status": AssetStatus.IDLE.value,
+            "usage_type": None,
+            "holder_user_id": None,
+            "public_object_id": None,
+            "usage_department_id": None,
+            "organization_id": detail.return_company_id,
+            "usage_company_id": detail.return_usage_company_id,
+            "location_id": detail.return_location_id,
+        },
+        _COMPLETED_TARGET_FIELDS,
     )
 
 
@@ -272,14 +394,37 @@ def _validate_feature_integrity(
     detail: AssetReturnRequest,
     items: list[AssetReturnItem],
 ) -> None:
+    handover_values = (detail.handed_over_by, detail.handed_over_at)
+    handover_empty = all(value is None for value in handover_values)
+    handover_complete = type(detail.handed_over_by) is int and isinstance(
+        detail.handed_over_at, datetime
+    )
+    if not handover_empty and not handover_complete:
+        raise BusinessException("退回申请交还详情不完整")
+    if operation_type == OperationType.PUBLIC_RETURN.value and not handover_empty:
+        raise BusinessException("公共退回申请不能包含员工交还详情")
+    validate_user_snapshot(
+        detail.handed_over_by_snapshot,
+        detail.handed_over_by,
+        "交还人",
+    )
+    if handover_empty and detail.handover_remark is not None:
+        raise BusinessException("退回申请交还备注与交还状态不匹配")
+
     confirmation_values = (
+        detail.return_company_id,
+        detail.return_usage_company_id,
+        detail.return_region_id,
         detail.return_location_id,
         detail.confirmed_by,
         detail.confirmed_at,
     )
     is_empty = all(value is None for value in confirmation_values)
     is_confirmed = (
-        type(detail.return_location_id) is int
+        type(detail.return_company_id) is int
+        and type(detail.return_usage_company_id) is int
+        and type(detail.return_region_id) is int
+        and type(detail.return_location_id) is int
         and type(detail.confirmed_by) is int
         and isinstance(detail.confirmed_at, datetime)
     )
@@ -375,7 +520,13 @@ def _validate_snapshot_integrity(
         valid_feature_state = (
             _same_scalar(before_data["status"], AssetStatus.IN_USE.value)
             and _same_scalar(before_data["usage_type"], UsageType.PERSONAL.value)
-            and _same_scalar(before_data["holder_user_id"], operation.applicant_id)
+            and (
+                (
+                    operation.approval_channel == ApprovalChannel.DIRECT.value
+                    and type(before_data["holder_user_id"]) is int
+                )
+                or _same_scalar(before_data["holder_user_id"], operation.applicant_id)
+            )
             and before_data["public_object_id"] is None
             and before_data["public_object_name"] is None
         )
@@ -433,9 +584,14 @@ def _load_aggregate(
         raise BusinessException("退回申请类型不匹配")
     if operation_type == OperationType.PERSONAL_RETURN.value:
         valid_operation_contract = (
-            operation.approval_channel == ApprovalChannel.FEISHU.value
+            operation.approval_channel
+            in {ApprovalChannel.FEISHU.value, ApprovalChannel.INTERNAL.value}
             and operation.approval_execution_mode
             == ApprovalExecutionMode.MANUAL_CONFIRM.value
+        ) or (
+            operation.approval_channel == ApprovalChannel.DIRECT.value
+            and operation.approval_execution_mode
+            == ApprovalExecutionMode.AUTO_ON_APPROVAL.value
         )
     else:
         valid_operation_contract = (
@@ -496,7 +652,17 @@ def _load_aggregate(
 
 def _feature_data(aggregate: _ReturnAggregate) -> dict[str, Any]:
     confirmed_at = aggregate.detail.confirmed_at
+    handed_over_at = aggregate.detail.handed_over_at
     return {
+        "handed_over_by": aggregate.detail.handed_over_by,
+        "handed_over_by_snapshot": aggregate.detail.handed_over_by_snapshot,
+        "handed_over_at": (
+            handed_over_at.isoformat() if handed_over_at is not None else None
+        ),
+        "handover_remark": aggregate.detail.handover_remark,
+        "return_company_id": aggregate.detail.return_company_id,
+        "return_usage_company_id": aggregate.detail.return_usage_company_id,
+        "return_region_id": aggregate.detail.return_region_id,
         "return_location_id": aggregate.detail.return_location_id,
         "return_location_snapshot": aggregate.detail.return_location_snapshot,
         "confirmed_by": aggregate.detail.confirmed_by,
@@ -529,9 +695,9 @@ def _allowed_actions(
         or operation.execution_status != ExecutionStatus.NOT_STARTED.value
         or operation.approval_execution_mode
         != ApprovalExecutionMode.MANUAL_CONFIRM.value
-        or operation.applicant_id == actor_id
-        or not can_manage
     ):
+        return ()
+    if not can_manage:
         return ()
     if organization_ids is not None and any(
         snapshot.organization_id_snapshot not in organization_ids
@@ -674,8 +840,12 @@ def _replay_submission(
     )
     if operation is None:
         return None
-    if operation_type == OperationType.PUBLIC_RETURN.value:
-        return _serialize_or_recover_public_return(operation, actor_id)
+    if operation.approval_channel == ApprovalChannel.DIRECT.value:
+        return _serialize_or_recover_direct_return(
+            operation,
+            actor_id,
+            operation_type,
+        )
     return _serialize(operation, actor_id, operation_type)
 
 
@@ -685,6 +855,10 @@ def _add_empty_return_rows(operation: OperationRequest) -> None:
             operation_request_id=operation.id,
             return_location_id=None,
             return_location_snapshot=None,
+            handed_over_by=None,
+            handed_over_at=None,
+            handover_remark=None,
+            handed_over_by_snapshot=None,
             confirmed_by=None,
             confirmed_by_snapshot=None,
             confirmed_at=None,
@@ -723,7 +897,7 @@ def submit_personal(payload: dict[str, Any], actor_id: int) -> dict[str, Any]:
     created = operation_service.create_request(
         operation_type=OperationType.PERSONAL_RETURN.value,
         applicant_id=actor_id,
-        approval_channel=ApprovalChannel.FEISHU.value,
+        approval_channel=ApprovalChannel.INTERNAL.value,
         approval_execution_mode=ApprovalExecutionMode.MANUAL_CONFIRM.value,
         assets=assets,
         target_data_by_asset_id={asset.id: target for asset in assets},
@@ -737,8 +911,93 @@ def submit_personal(payload: dict[str, Any], actor_id: int) -> dict[str, Any]:
         )
 
     _add_empty_return_rows(created.operation)
-    operation = approval_provider_service.submit(created.operation.id, actor_id)
-    return _serialize(operation, actor_id, OperationType.PERSONAL_RETURN.value)
+    _initialize_internal_approval(
+        created.operation,
+        operation_assets(created.operation.id),
+    )
+    return _serialize(
+        created.operation,
+        actor_id,
+        OperationType.PERSONAL_RETURN.value,
+    )
+
+
+def _return_approval_candidates(
+    organization_ids: set[int],
+) -> list[int]:
+    candidates: list[int] = []
+    for organization_id in sorted(organization_ids):
+        candidates.extend(
+            permission_service.find_approval_candidates(
+                _MANAGE_PERMISSION,
+                organization_id,
+            )
+        )
+    return sorted(set(candidates))
+
+
+def _return_flow(candidates: list[int]) -> ApprovalFlowVersion:
+    operation_type = OperationType.PERSONAL_RETURN.value
+    published = approval_flow_repository.find_published(operation_type)
+    if published is not None:
+        return published
+    if approval_flow_repository.find_definition(operation_type) is not None:
+        raise BusinessException("资产退库审批流尚未发布")
+    if not current_app.testing:
+        raise BusinessException("资产退库审批流尚未发布")
+
+    definition = approval_flow_repository.add_definition(
+        ApprovalFlowDefinition(
+            operation_type=operation_type,
+            name="资产退库审批",
+            status=FlowStatus.PUBLISHED.value,
+        )
+    )
+    version = approval_flow_repository.add_version(
+        ApprovalFlowVersion(
+            flow_definition_id=definition.id,
+            version_no=1,
+            status=FlowStatus.PUBLISHED.value,
+            published_at=utc_now(),
+        )
+    )
+    layer = ApprovalFlowLayer(
+        flow_version_id=version.id,
+        level_no=1,
+        sign_mode=SignMode.OR_SIGN.value,
+        allow_self_approval=True,
+    )
+    db.session.add(layer)
+    db.session.flush()
+    db.session.add_all(
+        ApprovalFlowAssigneeRule(
+            layer_id=layer.id,
+            assignee_type=AssigneeType.USER.value,
+            assignee_id=candidate_id,
+        )
+        for candidate_id in candidates
+    )
+    db.session.flush()
+    return approval_flow_repository.load_version_graph(version.id) or version
+
+
+def _initialize_internal_approval(
+    operation: OperationRequest,
+    snapshots: list[OperationRequestAsset],
+) -> None:
+    organization_ids = {
+        snapshot.organization_id_snapshot
+        for snapshot in snapshots
+        if snapshot.organization_id_snapshot is not None
+    }
+    if not organization_ids:
+        raise BusinessException("申请资产缺少所属公司")
+    candidates = _return_approval_candidates(organization_ids)
+    if not candidates:
+        raise BusinessException("未找到符合条件的资产退库审批人")
+    flow = _return_flow(candidates)
+    approval_engine.initialize(operation, flow.id, min(organization_ids))
+    db.session.commit()
 
 
 def _scope_snapshots(
@@ -790,26 +1049,27 @@ def _restart_read_transaction_and_lock_return(
     return operation, aggregate
 
 
-def _serialize_or_recover_public_return(
+def _serialize_or_recover_direct_return(
     operation: OperationRequest,
     actor_id: int,
+    operation_type: str,
 ) -> dict[str, Any]:
-    _serialize(operation, actor_id, OperationType.PUBLIC_RETURN.value)
+    _serialize(operation, actor_id, operation_type)
     operation, _aggregate = _restart_read_transaction_and_lock_return(
         operation.id,
-        OperationType.PUBLIC_RETURN.value,
+        operation_type,
     )
     serialized = _serialize(
         operation,
         actor_id,
-        OperationType.PUBLIC_RETURN.value,
+        operation_type,
     )
     if (
         operation.approval_status == ApprovalStatus.APPROVED.value
         and operation.execution_status == ExecutionStatus.NOT_STARTED.value
     ):
         operation = operation_executor.execute_after_approval(operation.id, actor_id)
-        return _serialize(operation, actor_id, OperationType.PUBLIC_RETURN.value)
+        return _serialize(operation, actor_id, operation_type)
     db.session.rollback()
     db.session.remove()
     return serialized
@@ -929,9 +1189,8 @@ def _claim_confirmation_action(
 def _claim_and_apply_inspection(
     aggregate: _ReturnAggregate,
     inspections: list[_Inspection],
-    return_location_id: int,
+    destination: _ReturnDestination,
     actor_id: int,
-    return_location_snapshot: dict[str, str | int],
     confirmed_by_snapshot: dict[str, str | int],
 ) -> bool:
     confirmed_at = utc_now()
@@ -939,6 +1198,9 @@ def _claim_and_apply_inspection(
         update(AssetReturnRequest)
         .where(
             AssetReturnRequest.id == aggregate.detail.id,
+            AssetReturnRequest.return_company_id.is_(None),
+            AssetReturnRequest.return_usage_company_id.is_(None),
+            AssetReturnRequest.return_region_id.is_(None),
             AssetReturnRequest.return_location_id.is_(None),
             AssetReturnRequest.return_location_snapshot.is_(None),
             AssetReturnRequest.confirmed_by.is_(None),
@@ -946,8 +1208,11 @@ def _claim_and_apply_inspection(
             AssetReturnRequest.confirmed_at.is_(None),
         )
         .values(
-            return_location_id=return_location_id,
-            return_location_snapshot=return_location_snapshot,
+            return_company_id=destination.company.id,
+            return_usage_company_id=destination.usage_company.id,
+            return_region_id=destination.region.id,
+            return_location_id=destination.location.id,
+            return_location_snapshot=build_named_snapshot(destination.location),
             confirmed_by=actor_id,
             confirmed_by_snapshot=confirmed_by_snapshot,
             confirmed_at=confirmed_at,
@@ -956,11 +1221,26 @@ def _claim_and_apply_inspection(
     )
     if result.rowcount != 1:
         return False
-    set_committed_value(aggregate.detail, "return_location_id", return_location_id)
+    set_committed_value(
+        aggregate.detail,
+        "return_company_id",
+        destination.company.id,
+    )
+    set_committed_value(
+        aggregate.detail,
+        "return_usage_company_id",
+        destination.usage_company.id,
+    )
+    set_committed_value(aggregate.detail, "return_region_id", destination.region.id)
+    set_committed_value(
+        aggregate.detail,
+        "return_location_id",
+        destination.location.id,
+    )
     set_committed_value(
         aggregate.detail,
         "return_location_snapshot",
-        return_location_snapshot,
+        build_named_snapshot(destination.location),
     )
     set_committed_value(aggregate.detail, "confirmed_by", actor_id)
     set_committed_value(
@@ -970,23 +1250,48 @@ def _claim_and_apply_inspection(
     )
     set_committed_value(aggregate.detail, "confirmed_at", confirmed_at)
     by_asset_id = {item.asset_id: item for item in inspections}
+    completed_target = _return_target(destination)
     for snapshot in aggregate.snapshots:
         inspection = by_asset_id[snapshot.asset_id]
         item = aggregate.items_by_request_asset_id[snapshot.id]
         item.condition = inspection.condition
         item.condition_description = inspection.condition_description
+        snapshot.target_data = completed_target
     return True
 
 
 def _inspection_matches_winner(
     aggregate: _ReturnAggregate,
     inspections: list[_Inspection],
-    return_location_id: int,
+    destination: _ReturnDestination,
     actor_id: int,
 ) -> bool:
-    if not _same_scalar(
-        aggregate.detail.return_location_id, return_location_id
-    ) or not _same_scalar(aggregate.detail.confirmed_by, actor_id):
+    requested_company_id = destination.company_id
+    requested_usage_company_id = destination.usage_company_id
+    requested_region_id = destination.region_id
+    requested_location_id = destination.location_id
+    winner_values = (
+        aggregate.detail.return_company_id,
+        aggregate.detail.return_usage_company_id,
+        aggregate.detail.return_region_id,
+        aggregate.detail.return_location_id,
+        aggregate.detail.confirmed_by,
+    )
+    requested_values = (
+        requested_company_id,
+        requested_usage_company_id,
+        requested_region_id,
+        requested_location_id,
+        actor_id,
+    )
+    if any(
+        not _same_scalar(actual, expected)
+        for actual, expected in zip(
+            winner_values,
+            requested_values,
+            strict=True,
+        )
+    ):
         return False
     inspections_by_asset_id = {item.asset_id: item for item in inspections}
     for snapshot in aggregate.snapshots:
@@ -1005,7 +1310,7 @@ def _inspection_matches_winner(
 def _recover_no_key_personal_confirmation(
     operation_request_id: int,
     actor_id: int,
-    return_location_id: int,
+    destination: _ReturnDestination,
     inspections: list[_Inspection],
 ) -> dict[str, Any]:
     operation, aggregate = _restart_read_transaction_and_lock_return(
@@ -1015,7 +1320,7 @@ def _recover_no_key_personal_confirmation(
     if not _inspection_matches_winner(
         aggregate,
         inspections,
-        return_location_id,
+        destination,
         actor_id,
     ):
         db.session.rollback()
@@ -1050,7 +1355,7 @@ def _recover_keyed_personal_confirmation(
     operation_request_id: int,
     actor_id: int,
     idempotency_key: str,
-    return_location_id: int,
+    destination: _ReturnDestination,
     inspections: list[_Inspection],
 ) -> dict[str, Any]:
     operation, aggregate = _restart_read_transaction_and_lock_return(
@@ -1072,13 +1377,74 @@ def _recover_keyed_personal_confirmation(
     if not _inspection_matches_winner(
         aggregate,
         inspections,
-        return_location_id,
+        destination,
         actor_id,
     ):
         db.session.rollback()
         db.session.remove()
         raise BusinessException("退库申请已由其他验收请求确认")
     return _replay_confirmation_action(existing_action, actor_id)
+
+
+def handover(
+    operation_request_id: int,
+    actor_id: int,
+    remark: str | None,
+) -> dict[str, Any]:
+    """Record the employee's physical handover before administrator inspection."""
+
+    _require_clean_entry_unit_of_work()
+    permission_service.require_permission(actor_id, _SELF_RETURN_PERMISSION)
+    operation = operation_request_repository.get(operation_request_id)
+    if operation is None:
+        raise BusinessException("退回申请不存在", result_code=ResultCode.NOT_FOUND)
+    if operation.applicant_id != actor_id:
+        raise BusinessException(
+            "只有退库申请人可以交还资产",
+            result_code=ResultCode.FORBIDDEN,
+        )
+    aggregate = _load_aggregate(
+        operation,
+        OperationType.PERSONAL_RETURN.value,
+        validate_targets=True,
+    )
+    if operation.approval_status != ApprovalStatus.APPROVED.value:
+        raise BusinessException("只有审批通过的个人退库申请可以交还")
+    if (
+        operation.approval_execution_mode != ApprovalExecutionMode.MANUAL_CONFIRM.value
+        or operation.execution_status != ExecutionStatus.NOT_STARTED.value
+    ):
+        raise BusinessException("当前退回申请不能执行员工交还")
+    if aggregate.detail.handed_over_at is not None:
+        return get(operation.id, actor_id)
+
+    normalized = remark.strip() if remark is not None else None
+    if normalized == "":
+        normalized = None
+    actor = _require_actor(actor_id)
+    aggregate.detail.handed_over_by = actor_id
+    aggregate.detail.handed_over_at = utc_now()
+    aggregate.detail.handover_remark = normalized
+    aggregate.detail.handed_over_by_snapshot = build_user_snapshot(actor)
+    audit_service.record_resource_change(
+        action="ASSET_RETURN_HANDED_OVER",
+        resource_type="asset_return_request",
+        resource_id=operation.id,
+        actor_id=actor_id,
+        before_data={
+            "handed_over_by": None,
+            "handed_over_at": None,
+            "handover_remark": None,
+        },
+        after_data={
+            "handed_over_by": actor_id,
+            "handed_over_at": aggregate.detail.handed_over_at.isoformat(),
+            "handover_remark": normalized,
+        },
+        reason=normalized,
+    )
+    db.session.commit()
+    return get(operation.id, actor_id)
 
 
 def confirm(
@@ -1092,11 +1458,6 @@ def confirm(
     operation = operation_request_repository.get(operation_request_id)
     if operation is None:
         raise BusinessException("退回申请不存在", result_code=ResultCode.NOT_FOUND)
-    if operation.applicant_id == actor_id:
-        raise BusinessException(
-            "申请人不能验收自己的退库申请",
-            result_code=ResultCode.FORBIDDEN,
-        )
     snapshots = operation_assets(operation.id)
     _scope_snapshots(actor_id, snapshots)
     aggregate = _load_aggregate(
@@ -1111,7 +1472,19 @@ def confirm(
         raise BusinessException("当前退回申请不支持人工验收")
 
     snapshot_asset_ids = [snapshot.asset_id for snapshot in snapshots]
-    return_location_id = _return_location_id(payload)
+    already_confirmed = (
+        aggregate.detail.return_company_id is not None
+        or aggregate.detail.return_usage_company_id is not None
+        or aggregate.detail.return_region_id is not None
+        or aggregate.detail.return_location_id is not None
+        or operation.execution_status
+        in {
+            ExecutionStatus.SUCCESS.value,
+            ExecutionStatus.FAILED.value,
+            ExecutionStatus.TERMINATED.value,
+        }
+    )
+    destination = _return_destination(payload, for_replay=already_confirmed)
     inspections = _inspections(payload, snapshot_asset_ids)
     terminal_execution = operation.execution_status in {
         ExecutionStatus.SUCCESS.value,
@@ -1134,28 +1507,26 @@ def confirm(
                 operation.id,
                 actor_id,
                 idempotency_key,
-                return_location_id,
+                destination,
                 inspections,
             )
     elif terminal_execution or aggregate.detail.return_location_id is not None:
         return _recover_no_key_personal_confirmation(
             operation.id,
             actor_id,
-            return_location_id,
+            destination,
             inspections,
         )
 
     if operation.execution_status != ExecutionStatus.NOT_STARTED.value:
         raise BusinessException("当前执行状态不能开始退库验收")
 
-    return_location = require_location(return_location_id)
     confirmed_by = _require_actor(actor_id)
     if not _claim_and_apply_inspection(
         aggregate,
         inspections,
-        return_location_id,
+        destination,
         actor_id,
-        build_named_snapshot(return_location),
         build_user_snapshot(confirmed_by),
     ):
         if idempotency_key is not None:
@@ -1163,13 +1534,13 @@ def confirm(
                 operation.id,
                 actor_id,
                 idempotency_key,
-                return_location_id,
+                destination,
                 inspections,
             )
         return _recover_no_key_personal_confirmation(
             operation.id,
             actor_id,
-            return_location_id,
+            destination,
             inspections,
         )
     action_record, replayed = _claim_confirmation_action(
@@ -1199,14 +1570,21 @@ def confirm(
 def _add_confirmed_return_rows(
     operation: OperationRequest,
     inspections: list[_Inspection],
-    return_location: AssetLocation,
+    destination: _ReturnDestination,
     confirmed_by: User,
 ) -> None:
     asset_return_request_repository.add(
         AssetReturnRequest(
             operation_request_id=operation.id,
-            return_location_id=return_location.id,
-            return_location_snapshot=build_named_snapshot(return_location),
+            return_company_id=destination.company.id,
+            return_usage_company_id=destination.usage_company.id,
+            return_region_id=destination.region.id,
+            return_location_id=destination.location.id,
+            return_location_snapshot=build_named_snapshot(destination.location),
+            handed_over_by=None,
+            handed_over_at=None,
+            handover_remark=None,
+            handed_over_by_snapshot=None,
             confirmed_by=confirmed_by.id,
             confirmed_by_snapshot=build_user_snapshot(confirmed_by),
             confirmed_at=utc_now(),
@@ -1222,6 +1600,61 @@ def _add_confirmed_return_rows(
                 condition_description=inspection.condition_description,
             )
         )
+
+
+def submit_personal_direct(payload: dict[str, Any], actor_id: int) -> dict[str, Any]:
+    """Directly return personal in-use assets without an employee request."""
+
+    _require_clean_entry_unit_of_work()
+    permission_service.require_permission(actor_id, _MANAGE_PERMISSION)
+    idempotency_key = _idempotency_key(payload)
+    replayed = _replay_submission(
+        actor_id,
+        OperationType.PERSONAL_RETURN.value,
+        idempotency_key,
+    )
+    if replayed is not None:
+        return replayed
+
+    assets = expand_assets(_asset_ids(payload))
+    require_assets_in_scope(actor_id, assets)
+    if any(
+        asset.status != AssetStatus.IN_USE.value
+        or asset.usage_type != UsageType.PERSONAL.value
+        or asset.holder_user_id is None
+        or asset.public_object_id is not None
+        for asset in assets
+    ):
+        raise BusinessException("管理员只能直接退库员工名下的在用资产")
+    asset_ids = [asset.id for asset in assets]
+    inspections = _inspections(payload, asset_ids)
+    destination = _return_destination(payload)
+    confirmed_by = _require_actor(actor_id)
+    target = _return_target(destination)
+    created = operation_service.create_request(
+        operation_type=OperationType.PERSONAL_RETURN.value,
+        applicant_id=actor_id,
+        approval_channel=ApprovalChannel.DIRECT.value,
+        approval_execution_mode=ApprovalExecutionMode.AUTO_ON_APPROVAL.value,
+        assets=assets,
+        target_data_by_asset_id={asset.id: target for asset in assets},
+        idempotency_key=idempotency_key,
+    )
+    if not created.created:
+        return _serialize_or_recover_direct_return(
+            created.operation,
+            actor_id,
+            OperationType.PERSONAL_RETURN.value,
+        )
+
+    _add_confirmed_return_rows(
+        created.operation,
+        inspections,
+        destination,
+        confirmed_by,
+    )
+    operation = approval_provider_service.confirm_direct(created.operation.id, actor_id)
+    return _serialize(operation, actor_id, OperationType.PERSONAL_RETURN.value)
 
 
 def submit_public(payload: dict[str, Any], actor_id: int) -> dict[str, Any]:
@@ -1241,17 +1674,9 @@ def submit_public(payload: dict[str, Any], actor_id: int) -> dict[str, Any]:
     require_public_assets(assets)
     asset_ids = [asset.id for asset in assets]
     inspections = _inspections(payload, asset_ids)
-    return_location = _return_location(payload)
-    return_location_id = return_location.id
+    destination = _return_destination(payload)
     confirmed_by = _require_actor(actor_id)
-    target = {
-        "status": AssetStatus.IDLE.value,
-        "usage_type": None,
-        "holder_user_id": None,
-        "public_object_id": None,
-        "usage_department_id": None,
-        "location_id": return_location_id,
-    }
+    target = _return_target(destination)
     created = operation_service.create_request(
         operation_type=OperationType.PUBLIC_RETURN.value,
         applicant_id=actor_id,
@@ -1262,16 +1687,28 @@ def submit_public(payload: dict[str, Any], actor_id: int) -> dict[str, Any]:
         idempotency_key=idempotency_key,
     )
     if not created.created:
-        return _serialize_or_recover_public_return(created.operation, actor_id)
+        return _serialize_or_recover_direct_return(
+            created.operation,
+            actor_id,
+            OperationType.PUBLIC_RETURN.value,
+        )
 
     _add_confirmed_return_rows(
         created.operation,
         inspections,
-        return_location,
+        destination,
         confirmed_by,
     )
     operation = approval_provider_service.confirm_direct(created.operation.id, actor_id)
     return _serialize(operation, actor_id, OperationType.PUBLIC_RETURN.value)
 
 
-__all__ = ["confirm", "get", "page", "submit_personal", "submit_public"]
+__all__ = [
+    "confirm",
+    "get",
+    "handover",
+    "page",
+    "submit_personal",
+    "submit_personal_direct",
+    "submit_public",
+]

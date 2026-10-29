@@ -9,12 +9,23 @@ from sqlalchemy.dialects import mysql
 
 import app.services as services
 from app.common import BusinessException, ResultCode
-from app.enums import AssetDataCompleteness, AssetStatus, DataScope
+from app.enums import (
+    ApprovalChannel,
+    ApprovalExecutionMode,
+    ApprovalStatus,
+    ExecutionStatus,
+    AssetDataCompleteness,
+    AssetStatus,
+    DataScope,
+)
 from app.extensions import db
 from app.models import (
     Asset,
+    AssetBusinessLock,
     AssetCategory,
     AssetLifecycleRecord,
+    AssetRepairRecord,
+    AssetScrapRecord,
     AssetLocation,
     AssetSource,
     ApprovalStep,
@@ -70,12 +81,23 @@ def _reader(
 def _asset_fixture():
     organization = Organization(code="ASSET-ORG", name="资产公司")
     other_organization = Organization(code="OTHER-ORG", name="其他公司")
+    usage_department = Organization(
+        code="ASSET-USAGE-DEPT", name="使用部门", parent_id=organization.id
+    )
     unit = Unit(code="ASSET-UNIT", name="台")
     source = AssetSource(code="ASSET-SOURCE", name="采购")
     location = AssetLocation(code="ASSET-LOC", name="仓库", is_selectable=True)
     manager = User(username="asset-owner", password="x", enabled=True)
     db.session.add_all(
-        [organization, other_organization, unit, source, location, manager]
+        [
+            organization,
+            other_organization,
+            usage_department,
+            unit,
+            source,
+            location,
+            manager,
+        ]
     )
     db.session.flush()
     manager.organization_id = organization.id
@@ -92,6 +114,7 @@ def _asset_fixture():
         asset_name="MacBook Air",
         status=AssetStatus.IDLE.value,
         organization_id=organization.id,
+        usage_department_id=usage_department.id,
         category_id=category.id,
         unit_id=unit.id,
         original_amount=Decimal("8999.00"),
@@ -190,7 +213,7 @@ def test_asset_list_applies_scope_and_amount_field_permission(client) -> None:
         ["asset:view"],
         organization,
     )
-    asset.manager_id = self_user.id
+    asset.holder_user_id = self_user.id
     db.session.commit()
 
     all_result = client.get("/api/v1/assets", headers=all_headers).get_json()["data"]
@@ -201,6 +224,34 @@ def test_asset_list_applies_scope_and_amount_field_permission(client) -> None:
     assert self_result["total"] == 1
     assert "original_amount" not in self_result["items"][0]
     assert self_result["items"][0]["asset_code"] == asset.asset_code
+
+
+def test_asset_page_only_my_assets_filters_current_holder(client) -> None:
+    organization, _other, _manager, asset = _asset_fixture()
+    admin, headers = _reader(
+        client,
+        "all-scope-holder",
+        DataScope.ALL.value,
+        ["asset:view"],
+    )
+    other = _copy_asset(
+        asset,
+        asset_code="ASSET-OTHER-HOLDER",
+        organization_id=organization.id,
+        manager_id=asset.manager_id,
+    )
+    asset.holder_user_id = admin.id
+    db.session.commit()
+
+    result = client.get(
+        "/api/v1/assets",
+        headers=headers,
+        query_string={"only_my_assets": "true"},
+    ).get_json()["data"]
+
+    assert result["total"] == 1
+    assert [item["id"] for item in result["items"]] == [asset.id]
+    assert other.id not in {item["id"] for item in result["items"]}
 
 
 def test_asset_dashboard_returns_real_scoped_aggregates(client) -> None:
@@ -266,6 +317,10 @@ def test_asset_detail_lifecycle_and_audit_require_permissions(client) -> None:
         f"/api/v1/assets/{asset.id}/lifecycle", headers=headers
     ).get_json()["data"]
     assert lifecycle[0]["operation_no"] == "STI-ASSET"
+    assert lifecycle[0]["operator_name"] == "asset-owner"
+    assert lifecycle[0]["change_summary"] == (
+        "入账到 “未指定公司” 公司，“未指定部门” 部门，金额：0.00"
+    )
     audit = client.get("/api/v1/audit-logs", headers=headers).get_json()["data"]
     assert audit[0]["action"] == "STOCK_IN"
 
@@ -308,7 +363,7 @@ def test_asset_data_service_is_exported_with_completeness_helpers() -> None:
     assert "missing_fields" in services.asset_data_service.__all__
 
 
-def test_self_scope_includes_holder_and_manager_but_hides_other_assets(client) -> None:
+def test_self_scope_includes_only_holder_assets_for_employee_views(client) -> None:
     organization, _other, manager, asset = _asset_fixture()
     self_user, headers = _reader(
         client,
@@ -328,7 +383,7 @@ def test_self_scope_includes_holder_and_manager_but_hides_other_assets(client) -
     asset.manager_id = self_user.id
     db.session.commit()
     managed = client.get("/api/v1/assets", headers=headers).get_json()["data"]
-    assert [item["id"] for item in managed["items"]] == [asset.id]
+    assert managed["total"] == 0
 
     asset.manager_id = manager.id
     db.session.commit()
@@ -371,8 +426,8 @@ def test_department_and_self_scopes_are_combined_with_or(client) -> None:
     result = client.get("/api/v1/assets", headers=headers).get_json()["data"]
 
     assert [item["id"] for item in result["items"]] == [
-        department_asset.id,
         self_asset.id,
+        department_asset.id,
     ]
     assert hidden_asset.id not in {item["id"] for item in result["items"]}
 
@@ -404,7 +459,7 @@ def test_all_scope_sees_everything_and_empty_usable_scope_sees_nothing(client) -
         "data"
     ]
 
-    assert [item["id"] for item in all_result["items"]] == [asset.id, second.id]
+    assert [item["id"] for item in all_result["items"]] == [second.id, asset.id]
     assert empty_result["total"] == 0
     assert empty_result["items"] == []
 
@@ -518,6 +573,8 @@ def test_asset_outputs_include_data_fields_and_copy_custom_attributes(client) ->
         "data"
     ]
     expected = {
+        "usage_department_name": "使用部门",
+        "department_name": "使用部门",
         "supplier_id": supplier.id,
         "service_life_months": 36,
         "expected_expiry_date": "2029-01-01",
@@ -828,6 +885,29 @@ def test_repair_and_scrap_reasons_are_persisted_in_asset_lifecycle(client) -> No
     assert repair_completed["code"] == 200
     repaired_asset = repair_completed["data"]["items"][0]
 
+    repair_record = db.session.scalar(
+        db.select(AssetRepairRecord).where(AssetRepairRecord.asset_id == asset.id)
+    )
+    assert repair_record is not None
+    assert repair_record.repair_no == repair_started["data"]["request_no"]
+    assert repair_record.before_status == AssetStatus.IDLE.value
+    assert repair_record.fault_description == "设备无法正常启动"
+    assert repair_record.repair_supplier_name == "苹果授权维修中心"
+    assert repair_record.repair_cost == Decimal("620.00")
+    assert repair_record.completed_at is not None
+    assert repair_record.repair_result == "更换主板后测试通过"
+    assert repair_record.confirmed_by is not None
+
+    repair_history = client.get(
+        f"/api/v1/assets/{asset.id}/repair-records", headers=headers
+    ).get_json()
+    assert repair_history["code"] == 200
+    assert (
+        repair_history["data"][0]["repair_no"] == repair_started["data"]["request_no"]
+    )
+    assert repair_history["data"][0]["repair_result"] == "更换主板后测试通过"
+    assert "repair_cost" not in repair_history["data"][0]
+
     scrapped = client.post(
         "/api/v1/asset-actions/scrap",
         headers=headers,
@@ -840,6 +920,24 @@ def test_repair_and_scrap_reasons_are_persisted_in_asset_lifecycle(client) -> No
         },
     ).get_json()
     assert scrapped["code"] == 200
+
+    scrap_record = db.session.scalar(
+        db.select(AssetScrapRecord).where(AssetScrapRecord.asset_id == asset.id)
+    )
+    assert scrap_record is not None
+    assert scrap_record.scrap_no == scrapped["data"]["request_no"]
+    assert scrap_record.scrap_date == date(2026, 8, 3)
+    assert scrap_record.scrap_amount == Decimal("300.00")
+    assert scrap_record.reason == "设备超过维修价值，批准报废"
+    assert scrap_record.confirmed_by is not None
+
+    scrap_history = client.get(
+        f"/api/v1/assets/{asset.id}/scrap-records", headers=headers
+    ).get_json()
+    assert scrap_history["code"] == 200
+    assert scrap_history["data"][0]["scrap_no"] == scrapped["data"]["request_no"]
+    assert scrap_history["data"][0]["reason"] == "设备超过维修价值，批准报废"
+    assert "scrap_amount" not in scrap_history["data"][0]
 
     lifecycle = db.session.scalars(
         select(AssetLifecycleRecord)
@@ -857,3 +955,185 @@ def test_repair_and_scrap_reasons_are_persisted_in_asset_lifecycle(client) -> No
         ("REPAIR_COMPLETE", "更换主板后测试通过"),
         ("SCRAP", "设备超过维修价值，批准报废"),
     ]
+
+
+def test_scrap_accepts_distinct_per_asset_disposal_details(client) -> None:
+    organization, _other, manager, first = _asset_fixture()
+    second = _copy_asset(
+        first,
+        asset_code="ASSET-ORG-ASSET-CATEGORY-0002",
+        organization_id=organization.id,
+        manager_id=manager.id,
+    )
+    db.session.commit()
+    _, headers = _reader(
+        client,
+        "asset-scrap-detail-operator",
+        DataScope.ALL.value,
+        ["asset:view", "asset:scrap", "asset:amount:view"],
+    )
+
+    response = client.post(
+        "/api/v1/asset-actions/scrap",
+        headers=headers,
+        json={
+            "items": [
+                {
+                    "asset_id": first.id,
+                    "version": first.version,
+                    "scrap_amount": "360.00",
+                    "disposition": "出售",
+                    "disposition_remark": "交由回收商甲处置",
+                    "disposal_date": "2026-09-02",
+                },
+                {
+                    "asset_id": second.id,
+                    "version": second.version,
+                    "scrap_amount": "20.00",
+                    "disposition": "环保销毁",
+                    "disposition_remark": "由服务商乙出具销毁证明",
+                    "disposal_date": "2026-09-03",
+                },
+            ],
+            "child_action": "BLOCK",
+            "reason": "两项资产已分别完成残值评估",
+        },
+    ).get_json()
+
+    assert response["code"] == 200
+    records = list(
+        db.session.scalars(
+            select(AssetScrapRecord).order_by(AssetScrapRecord.asset_id.asc())
+        ).all()
+    )
+    assert [record.scrap_amount for record in records] == [
+        Decimal("360.00"),
+        Decimal("20.00"),
+    ]
+    assert [record.disposition for record in records] == ["出售", "环保销毁"]
+    assert [record.disposition_remark for record in records] == [
+        "交由回收商甲处置",
+        "由服务商乙出具销毁证明",
+    ]
+    assert [record.disposal_date for record in records] == [
+        date(2026, 9, 2),
+        date(2026, 9, 3),
+    ]
+
+    first_history = client.get(
+        f"/api/v1/assets/{first.id}/scrap-records", headers=headers
+    ).get_json()["data"][0]
+    second_history = client.get(
+        f"/api/v1/assets/{second.id}/scrap-records", headers=headers
+    ).get_json()["data"][0]
+    assert first_history["scrap_amount"] == "360.00"
+    assert first_history["disposition_remark"] == "交由回收商甲处置"
+    assert first_history["disposal_date"] == "2026-09-02"
+    assert second_history["scrap_amount"] == "20.00"
+    assert second_history["disposition"] == "环保销毁"
+    assert second_history["disposal_date"] == "2026-09-03"
+
+
+def test_usage_candidate_lookup_supports_scan_to_use(client) -> None:
+    organization, _other, manager, asset = _asset_fixture()
+    _user, headers = _reader(
+        client,
+        "usage-scan-reader",
+        DataScope.ALL.value,
+        ["asset:view"],
+    )
+
+    result = client.get(
+        "/api/v1/assets/usage-candidate",
+        headers=headers,
+        query_string={"asset_code": f" {asset.asset_code} "},
+    )
+    assert result.status_code == 200
+    assert result.get_json()["data"] == {
+        "id": asset.id,
+        "asset_code": asset.asset_code,
+        "asset_name": "MacBook Air",
+        "status": AssetStatus.IDLE.value,
+        "category_id": asset.category_id,
+        "category_name": "电脑",
+        "organization_id": organization.id,
+        "organization_name": organization.name,
+        "location_id": asset.location_id,
+        "location_name": "仓库",
+    }
+
+
+def test_usage_candidate_lookup_rejects_locked_asset(client) -> None:
+    _organization, _other, manager, asset = _asset_fixture()
+    _user, headers = _reader(
+        client,
+        "usage-lock-reader",
+        DataScope.ALL.value,
+        ["asset:view"],
+    )
+    operation = OperationRequest(
+        request_no="USAGE-SCAN-LOCK-001",
+        operation_type="TRANSFER",
+        applicant_id=manager.id,
+        approval_channel=ApprovalChannel.INTERNAL.value,
+        approval_execution_mode=ApprovalExecutionMode.AUTO_ON_APPROVAL.value,
+        approval_status=ApprovalStatus.PENDING.value,
+        execution_status=ExecutionStatus.NOT_STARTED.value,
+    )
+    db.session.add(operation)
+    db.session.flush()
+    db.session.add(
+        AssetBusinessLock(
+            asset_id=asset.id,
+            operation_request_id=operation.id,
+            operation_type=operation.operation_type,
+            applicant_id=manager.id,
+        )
+    )
+    db.session.commit()
+
+    result = client.get(
+        "/api/v1/assets/usage-candidate",
+        headers=headers,
+        query_string={"asset_code": asset.asset_code},
+    )
+
+    assert result.status_code == 200
+    assert result.get_json()["code"] == ResultCode.BUSINESS_ERROR.code
+    assert result.get_json()["message"] == "资产正在处理其它申请"
+
+
+def test_usage_candidate_lookup_requires_idle_visible_asset(client) -> None:
+    organization, _other, manager, asset = _asset_fixture()
+    scoped_user, scoped_headers = _reader(
+        client,
+        "usage-scope-reader",
+        DataScope.DEPARTMENT.value,
+        ["asset:view"],
+        organization,
+    )
+    hidden_asset = _copy_asset(
+        asset,
+        asset_code="ASSET-SCAN-HIDDEN",
+        organization_id=organization.id,
+        manager_id=manager.id,
+    )
+    hidden_asset.status = AssetStatus.IN_USE.value
+    db.session.commit()
+
+    not_idle = client.get(
+        "/api/v1/assets/usage-candidate",
+        headers=scoped_headers,
+        query_string={"asset_code": hidden_asset.asset_code},
+    )
+    not_found = client.get(
+        "/api/v1/assets/usage-candidate",
+        headers=scoped_headers,
+        query_string={"asset_code": "ASSET-MISSING"},
+    )
+
+    assert not_idle.status_code == 200
+    assert not_idle.get_json()["message"] == "只有空闲资产可以发起领用"
+    assert not_found.status_code == 200
+    assert not_found.get_json()["code"] == ResultCode.NOT_FOUND.code
+    assert not_found.get_json()["message"] == "未找到对应资产"

@@ -50,6 +50,46 @@ _ALLOWED_PHOTO_TYPES = {
     "image/heif": ".heif",
 }
 _MAX_PHOTO_BYTES = 10 * 1024 * 1024
+_INVENTORY_LIFECYCLE_STATUS_LABELS = {
+    InventoryItemStatus.FOUND.value: "正常",
+    InventoryItemStatus.LOSS.value: "盘亏",
+    InventoryItemStatus.EXEMPTED.value: "无需盘点",
+    InventoryItemStatus.UNSUBMITTED.value: "未提交",
+}
+
+
+def _inventory_lifecycle_status(item: InventoryItem) -> str:
+    return _INVENTORY_LIFECYCLE_STATUS_LABELS.get(item.status, item.status)
+
+
+def _record_inventory_lifecycle_rows(task: InventoryTask, actor_id: int) -> None:
+    items = list(
+        db.session.scalars(
+            select(InventoryItem).where(InventoryItem.task_id == task.id)
+        ).all()
+    )
+    for item in items:
+        status_label = _inventory_lifecycle_status(item)
+        audit_service.record_asset_lifecycle(
+            asset_id=item.asset_id,
+            operation_type="INVENTORY_PROCESS",
+            request_no=task.task_no,
+            actor_id=actor_id,
+            before_data={},
+            after_data={
+                "task_no": task.task_no,
+                "task_name": task.name,
+                "status": item.status,
+                "physical_result": item.physical_result,
+                "location_result": item.location_result,
+                "actual_location_text": item.actual_location_text,
+                "resolution": item.resolution,
+            },
+            remark=(
+                f"盘点单号: {task.task_no}（{status_label}）; "
+                f"盘点单名称: {task.name}"
+            ),
+        )
 
 
 def _now() -> datetime:
@@ -695,6 +735,26 @@ def list_items(
         page=page_index,
         size=size,
     )
+
+
+def list_my_pending_items(actor_id: int) -> list[dict[str, Any]]:
+    permission_service.require_permission(actor_id, "inventory:view")
+    rows = list(
+        db.session.execute(
+            select(InventoryItem, InventoryTask)
+            .join(InventoryTask, InventoryTask.id == InventoryItem.task_id)
+            .where(
+                InventoryTask.status == InventoryTaskStatus.IN_PROGRESS.value,
+                InventoryItem.responsible_user_id == actor_id,
+                InventoryItem.status == InventoryItemStatus.PENDING.value,
+            )
+            .order_by(
+                InventoryTask.deadline_at.asc(),
+                InventoryItem.id.asc(),
+            )
+        ).all()
+    )
+    return [_item_to_dict(item, task, actor_id) for item, task in rows]
 
 
 def _normalize_asset_code(scanned_value: str) -> str:
@@ -1346,6 +1406,7 @@ def complete_task(task_id: int, actor_id: int) -> dict[str, Any]:
     task.status = InventoryTaskStatus.COMPLETED.value
     task.completed_at = _now()
     task.version += 1
+    _record_inventory_lifecycle_rows(task, actor_id)
     audit_service.record_resource_change(
         action="INVENTORY_TASK_COMPLETE",
         resource_type="inventory_task",
@@ -1860,6 +1921,7 @@ __all__ = [
     "get_photo",
     "get_task",
     "list_items",
+    "list_my_pending_items",
     "list_tasks",
     "overview",
     "publish_task",

@@ -8,6 +8,9 @@ export const assetFormSchema = z
   .object({
     asset_name: requiredString('assets.form.errors.assetNameRequired'),
     company_name: requiredString('assets.form.errors.companyRequired'),
+    usage_company_name: requiredString('assets.form.errors.usageCompanyRequired'),
+    usage_department_name: optionalString,
+    holder_user_name: optionalString,
     category_name: requiredString('assets.form.errors.categoryRequired'),
     source_name: requiredString('assets.form.errors.sourceRequired'),
     unit_name: requiredString('assets.form.errors.unitRequired'),

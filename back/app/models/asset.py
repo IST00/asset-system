@@ -94,6 +94,9 @@ class Asset(TimestampMixin, db.Model):  # type: ignore[misc,name-defined]
     organization_id: Mapped[int] = mapped_column(
         ForeignKey("organizations.id", ondelete="RESTRICT"), nullable=False, index=True
     )
+    usage_company_id: Mapped[int | None] = mapped_column(
+        ForeignKey("organizations.id", ondelete="RESTRICT"), nullable=True, index=True
+    )
     usage_type: Mapped[str | None] = mapped_column(
         String(16), nullable=True, index=True
     )
@@ -148,6 +151,13 @@ class Asset(TimestampMixin, db.Model):  # type: ignore[misc,name-defined]
         String(191), nullable=True, unique=True, index=True
     )
     remark: Mapped[str | None] = mapped_column(Text, nullable=True)
+    warranty_supplier_id: Mapped[int | None] = mapped_column(
+        ForeignKey("suppliers.id", ondelete="RESTRICT"), nullable=True, index=True
+    )
+    warranty_contact: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    warranty_phone: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    warranty_expiry_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    warranty_description: Mapped[str | None] = mapped_column(Text, nullable=True)
     custom_attributes: Mapped[dict[str, Any]] = mapped_column(
         JSON, nullable=False, default=dict
     )

@@ -12,6 +12,9 @@ const datePopupClassNames = { popup: { root: 'asset-form-date-popup' } }
 type TextFieldName = 'asset_name' | 'model' | 'serial_number' | 'rfid_tag' | 'zero_amount_reason'
 type SelectFieldName =
   | 'company_name'
+  | 'usage_company_name'
+  | 'usage_department_name'
+  | 'holder_user_name'
   | 'category_name'
   | 'source_name'
   | 'unit_name'

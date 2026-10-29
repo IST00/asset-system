@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from io import BytesIO
 
@@ -11,6 +11,8 @@ from app.models import (
     AssetAttachment,
     AssetCategory,
     AssetLocation,
+    AssetRepairRecord,
+    AssetScrapRecord,
     AssetSource,
     Organization,
     Permission,
@@ -49,10 +51,16 @@ def _seed(client, storage_dir, *, manage: bool = True):
     )
     permissions = [Permission(code="asset:view", name="查看资产", module="asset")]
     if manage:
-        permissions.append(
-            Permission(
-                code="asset:attachment:manage", name="管理资产附件", module="asset"
-            )
+        permissions.extend(
+            [
+                Permission(
+                    code="asset:attachment:manage",
+                    name="管理资产附件",
+                    module="asset",
+                ),
+                Permission(code="asset:repair", name="维修资产", module="asset"),
+                Permission(code="asset:scrap", name="报废资产", module="asset"),
+            ]
         )
     db.session.add_all(
         [organization, unit, source, location, actor, role, *permissions]
@@ -174,3 +182,163 @@ def test_attachment_rejects_unsupported_photo_and_stale_version(
         json={"version": uploaded["version"] + 1, "reason": "测试版本冲突"},
     )
     assert stale.get_json()["code"] == 1000
+
+
+def test_repair_and_scrap_attachments_link_records_and_protect_amount_files(
+    client, tmp_path
+) -> None:
+    asset, headers = _seed(client, tmp_path)
+    actor = db.session.query(User).filter_by(username="attachment-admin").one()
+    repair = AssetRepairRecord(
+        asset_id=asset.id,
+        repair_no="REP-ATT-001",
+        before_status=AssetStatus.IDLE.value,
+        fault_description="屏幕损坏",
+        sent_at=datetime(2026, 9, 4, 1, 0, tzinfo=timezone.utc),
+    )
+    scrap = AssetScrapRecord(
+        asset_id=asset.id,
+        scrap_no="SCR-ATT-001",
+        scrap_date=date(2026, 9, 4),
+        disposal_date=date(2026, 9, 4),
+        scrap_amount=Decimal("80.00"),
+        reason="无维修价值",
+        disposition="回收",
+        disposition_remark="交由合规回收商",
+        confirmed_by=actor.id,
+        confirmed_at=datetime(2026, 9, 4, 2, 0, tzinfo=timezone.utc),
+    )
+    db.session.add_all([repair, scrap])
+    db.session.commit()
+
+    repair_photo = client.post(
+        f"/api/v1/assets/{asset.id}/attachments",
+        headers=headers,
+        data={
+            "business_type": "REPAIR",
+            "business_id": str(repair.id),
+            "document_type": "REPAIR_PHOTO",
+            "file": (BytesIO(b"repair-photo"), "repair.jpg"),
+        },
+        content_type="multipart/form-data",
+    )
+    assert repair_photo.status_code == 200
+    repair_data = repair_photo.get_json()["data"]
+    assert repair_data["business_type"] == "REPAIR"
+    assert repair_data["business_id"] == repair.id
+    assert repair_data["document_type"] == "REPAIR_PHOTO"
+
+    quote = client.post(
+        f"/api/v1/assets/{asset.id}/attachments",
+        headers=headers,
+        data={
+            "business_type": "REPAIR",
+            "business_id": str(repair.id),
+            "document_type": "REPAIR_QUOTE",
+            "file": (BytesIO(b"repair-quote"), "quote.pdf"),
+        },
+        content_type="multipart/form-data",
+    ).get_json()["data"]
+    voucher = client.post(
+        f"/api/v1/assets/{asset.id}/attachments",
+        headers=headers,
+        data={
+            "business_type": "SCRAP",
+            "business_id": str(scrap.id),
+            "document_type": "DISPOSAL_VOUCHER",
+            "file": (BytesIO(b"disposal-voucher"), "voucher.pdf"),
+        },
+        content_type="multipart/form-data",
+    ).get_json()["data"]
+    assert voucher["business_id"] == scrap.id
+    assert voucher["document_type"] == "DISPOSAL_VOUCHER"
+
+    filtered = client.get(
+        f"/api/v1/assets/{asset.id}/attachments",
+        headers=headers,
+        query_string={"business_type": "REPAIR", "business_id": repair.id},
+    ).get_json()["data"]
+    assert {item["id"] for item in filtered} == {repair_data["id"], quote["id"]}
+
+    assert (
+        client.get(
+            f"/api/v1/attachments/{quote['id']}/download", headers=headers
+        ).get_json()["code"]
+        == 403
+    )
+    assert (
+        client.get(
+            f"/api/v1/attachments/{voucher['id']}/download", headers=headers
+        ).get_json()["code"]
+        == 403
+    )
+
+    amount_permission = Permission(
+        code="asset:amount:view", name="查看资产金额", module="asset"
+    )
+    db.session.add(amount_permission)
+    db.session.flush()
+    role = db.session.query(Role).filter_by(code="ATTACHMENT_ADMIN").one()
+    db.session.add(RolePermission(role_id=role.id, permission_id=amount_permission.id))
+    db.session.commit()
+    quote_download = client.get(
+        f"/api/v1/attachments/{quote['id']}/download", headers=headers
+    )
+    voucher_download = client.get(
+        f"/api/v1/attachments/{voucher['id']}/download", headers=headers
+    )
+    assert quote_download.status_code == 200
+    assert quote_download.data == b"repair-quote"
+    assert voucher_download.status_code == 200
+    assert voucher_download.data == b"disposal-voucher"
+
+
+def test_business_attachment_rejects_record_from_another_asset(
+    client, tmp_path
+) -> None:
+    asset, headers = _seed(client, tmp_path)
+    actor = db.session.query(User).filter_by(username="attachment-admin").one()
+    other = Asset(
+        asset_code="ATT-0002",
+        asset_name="另一项资产",
+        status=AssetStatus.IDLE.value,
+        organization_id=asset.organization_id,
+        category_id=asset.category_id,
+        unit_id=asset.unit_id,
+        original_amount=Decimal("200.00"),
+        purchase_date=date(2026, 9, 4),
+        service_life_months=36,
+        expected_expiry_date=date(2029, 8, 4),
+        manager_id=actor.id,
+        source_id=asset.source_id,
+        location_id=asset.location_id,
+        custom_attributes={},
+        data_completeness=AssetDataCompleteness.COMPLETE.value,
+    )
+    db.session.add(other)
+    db.session.flush()
+    repair = AssetRepairRecord(
+        asset_id=other.id,
+        repair_no="REP-OTHER-001",
+        before_status=AssetStatus.IDLE.value,
+        fault_description="其他资产维修",
+        sent_at=datetime(2026, 9, 4, 3, 0, tzinfo=timezone.utc),
+    )
+    db.session.add(repair)
+    db.session.commit()
+
+    response = client.post(
+        f"/api/v1/assets/{asset.id}/attachments",
+        headers=headers,
+        data={
+            "business_type": "REPAIR",
+            "business_id": str(repair.id),
+            "document_type": "REPAIR_INVOICE",
+            "file": (BytesIO(b"wrong-link"), "invoice.pdf"),
+        },
+        content_type="multipart/form-data",
+    ).get_json()
+
+    assert response["code"] == 1000
+    assert "不属于该资产" in response["message"]
+    assert db.session.query(AssetAttachment).count() == 0

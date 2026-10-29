@@ -2,10 +2,12 @@ import type { CsvAssetImportRow } from '@/api/assets'
 
 export const csvHeaders = [
   '所属公司',
+  '使用公司',
+  '使用部门',
   '资产名称',
   '资产分类',
   '计量单位',
-  '原值',
+  '金额',
   '零金额原因',
   '采购日期',
   '供应商',
@@ -57,17 +59,7 @@ export function parseCsv(text: string): string[][] {
   return rows
 }
 
-const requiredHeaders = [
-  '所属公司',
-  '资产名称',
-  '资产分类',
-  '计量单位',
-  '原值',
-  '采购日期',
-  '责任管理员',
-  '资产来源',
-  '存放地点',
-]
+const requiredHeaders = ['所属公司', '资产名称', '资产分类', '金额', '采购日期']
 
 export function validateImportCsv(text: string): ParsedImportRow[] {
   const rows = parseCsv(text.replace(/^\uFEFF/, ''))
@@ -89,8 +81,8 @@ export function validateImportCsv(text: string): ParsedImportRow[] {
     requiredHeaders.forEach((header) => {
       if (!values[header]) errors.push(`${header}不能为空`)
     })
-    const amount = Number(values['原值'])
-    if (!Number.isFinite(amount) || amount < 0) errors.push('原值必须是大于或等于 0 的数字')
+    const amount = Number(values['金额'])
+    if (!Number.isFinite(amount) || amount < 0) errors.push('金额必须是大于或等于 0 的数字')
     if (amount === 0 && !values['零金额原因']) errors.push('零金额资产必须填写原因')
     if (values['采购日期'] && !/^\d{4}-\d{2}-\d{2}$/.test(values['采购日期'])) {
       errors.push('采购日期必须使用 YYYY-MM-DD 格式')
@@ -114,6 +106,8 @@ export function validateImportCsv(text: string): ParsedImportRow[] {
         ? undefined
         : {
             organization_name: values['所属公司'],
+            usage_company_name: values['使用公司'] || values['所属公司'],
+            usage_department_name: values['使用部门'] || undefined,
             asset_name: values['资产名称'],
             category_name: values['资产分类'],
             unit_name: values['计量单位'],

@@ -1,16 +1,21 @@
-"""Persistent CSV exports and 80×30 mm Code 39 asset label PDFs."""
+"""Persistent CSV exports and 65×30 mm QR/Code 39 asset label PDFs."""
 
 from __future__ import annotations
 
 import csv
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
-from io import StringIO
+from io import BytesIO, StringIO
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 from uuid import uuid4
+from urllib.parse import quote
 
 from flask import current_app
+import qrcode
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.pdfgen.canvas import Canvas
 from sqlalchemy import select
 
 from app.common import BusinessException, PageResult, ResultCode
@@ -19,6 +24,8 @@ from app.models import (
     Asset,
     AssetCategory,
     AssetLocation,
+    AssetRepairRecord,
+    AssetScrapRecord,
     AssetSource,
     ExportJob,
     Organization,
@@ -35,6 +42,8 @@ from app.services import (
 )
 
 _ASSET_CSV = "ASSET_CSV"
+_REPAIR_CSV = "REPAIR_CSV"
+_SCRAP_CSV = "SCRAP_CSV"
 _LABEL_PDF = "LABEL_PDF"
 _PROCESSING = "PROCESSING"
 _SUCCESS = "SUCCESS"
@@ -178,6 +187,21 @@ def _resolve_assets(payload: Mapping[str, Any], actor_id: int) -> list[Asset]:
     )
 
 
+def _resolve_scrapped_assets(payload: Mapping[str, Any], actor_id: int) -> list[Asset]:
+    asset_ids = payload.get("asset_ids")
+    if isinstance(asset_ids, list) and asset_ids:
+        assets = _selected_assets(asset_ids, actor_id)
+        if any(asset.status != "SCRAPPED" for asset in assets):
+            raise BusinessException(
+                "报废资产导出只能选择已报废资产", result_code=ResultCode.BAD_REQUEST
+            )
+        return assets
+    raw_filters = payload.get("filters")
+    filters = dict(raw_filters) if isinstance(raw_filters, Mapping) else {}
+    filters["status"] = "SCRAPPED"
+    return asset_service.list_for_export(actor_id=actor_id, filters=filters)
+
+
 def _name_map(model: type[Any], ids: set[int]) -> dict[int, str]:
     if not ids:
         return {}
@@ -194,6 +218,87 @@ def _user_map(ids: set[int]) -> dict[int, str]:
         row.id: row.nickname or row.username
         for row in db.session.scalars(select(User).where(User.id.in_(ids))).all()
     }
+
+
+def _scrap_csv_bytes(assets: Sequence[Asset], actor_id: int) -> bytes:
+    """Build a disposal ledger from structured records with legacy fallback."""
+    asset_ids = [asset.id for asset in assets]
+    records = list(
+        db.session.scalars(
+            select(AssetScrapRecord)
+            .where(AssetScrapRecord.asset_id.in_(asset_ids))
+            .order_by(AssetScrapRecord.scrap_date.desc(), AssetScrapRecord.id.desc())
+        ).all()
+    )
+    records_by_asset: dict[int, list[AssetScrapRecord]] = {}
+    for record in records:
+        records_by_asset.setdefault(record.asset_id, []).append(record)
+    include_amount = permission_service.has_permission(actor_id, "asset:amount:view")
+    organization_names = _name_map(
+        Organization, {asset.organization_id for asset in assets}
+    )
+    category_names = _name_map(AssetCategory, {asset.category_id for asset in assets})
+    user_names = _user_map(
+        {record.confirmed_by for record in records if record.confirmed_by is not None}
+    )
+    output = StringIO(newline="")
+    writer = csv.writer(output)
+    headers = [
+        "报废单号",
+        "资产编码",
+        "资产名称",
+        "所属公司",
+        "资产分类",
+        "报废日期",
+        "报废原因",
+        "处置方式",
+        "确认人",
+        "确认时间",
+    ]
+    if include_amount:
+        headers.append("回收金额")
+    writer.writerow(headers)
+    for asset in assets:
+        asset_records = records_by_asset.get(asset.id, [])
+        if asset_records:
+            for record in asset_records:
+                row: list[object] = [
+                    record.scrap_no,
+                    asset.asset_code,
+                    asset.asset_name,
+                    organization_names.get(asset.organization_id, ""),
+                    category_names.get(asset.category_id, ""),
+                    record.scrap_date.isoformat(),
+                    record.reason,
+                    record.disposition or "",
+                    user_names.get(record.confirmed_by, ""),
+                    record.confirmed_at.isoformat(),
+                ]
+                if include_amount:
+                    row.append(f"{record.scrap_amount:.2f}")
+                writer.writerow(row)
+            continue
+
+        # Assets created before the structured table was introduced still keep
+        # the original JSON snapshot, so they remain exportable.
+        legacy = asset.custom_attributes.get("scrap", {})
+        legacy_record = legacy if isinstance(legacy, Mapping) else {}
+        row = [
+            "",
+            asset.asset_code,
+            asset.asset_name,
+            organization_names.get(asset.organization_id, ""),
+            category_names.get(asset.category_id, ""),
+            str(legacy_record.get("scrap_date", "")),
+            str(legacy_record.get("reason", "")),
+            str(legacy_record.get("disposition", "")),
+            "",
+            "",
+        ]
+        if include_amount:
+            row.append(str(legacy_record.get("scrap_amount", "")))
+        writer.writerow(row)
+    return ("\ufeff" + output.getvalue()).encode("utf-8")
 
 
 def _csv_bytes(assets: Sequence[Asset], actor_id: int) -> bytes:
@@ -275,8 +380,93 @@ def _csv_bytes(assets: Sequence[Asset], actor_id: int) -> bytes:
     return ("\ufeff" + output.getvalue()).encode("utf-8")
 
 
-def _pdf_text(value: str) -> str:
-    return value.encode("utf-16-be").hex().upper()
+def _repair_csv_bytes(assets: Sequence[Asset], actor_id: int) -> tuple[bytes, int]:
+    """Build a repair ledger and return its bytes plus exported record count."""
+    asset_ids = [asset.id for asset in assets]
+    records = list(
+        db.session.scalars(
+            select(AssetRepairRecord)
+            .where(AssetRepairRecord.asset_id.in_(asset_ids))
+            .order_by(AssetRepairRecord.sent_at.desc(), AssetRepairRecord.id.desc())
+        ).all()
+    )
+    include_amount = permission_service.has_permission(actor_id, "asset:amount:view")
+    asset_map = {asset.id: asset for asset in assets}
+    organization_names = _name_map(
+        Organization, {asset.organization_id for asset in assets}
+    )
+    category_names = _name_map(AssetCategory, {asset.category_id for asset in assets})
+    output = StringIO(newline="")
+    writer = csv.writer(output)
+    headers = [
+        "维修单号",
+        "资产编码",
+        "资产名称",
+        "所属公司",
+        "资产分类",
+        "维修前状态",
+        "故障原因",
+        "维修供应商",
+        "送修时间",
+        "完成时间",
+        "维修结果",
+        "确认人",
+        "确认时间",
+    ]
+    if include_amount:
+        headers.append("维修费用")
+    writer.writerow(headers)
+    user_names = _user_map(
+        {record.confirmed_by for record in records if record.confirmed_by is not None}
+    )
+    for record in records:
+        asset = asset_map[record.asset_id]
+        row: list[object] = [
+            record.repair_no,
+            asset.asset_code,
+            asset.asset_name,
+            organization_names.get(asset.organization_id, ""),
+            category_names.get(asset.category_id, ""),
+            record.before_status,
+            record.fault_description,
+            record.repair_supplier_name or "",
+            record.sent_at.isoformat(),
+            record.completed_at.isoformat() if record.completed_at else "",
+            record.repair_result or "",
+            user_names.get(record.confirmed_by or -1, ""),
+            record.confirmed_at.isoformat() if record.confirmed_at else "",
+        ]
+        if include_amount:
+            row.append(
+                f"{record.repair_cost:.2f}" if record.repair_cost is not None else ""
+            )
+        writer.writerow(row)
+    return ("\ufeff" + output.getvalue()).encode("utf-8"), len(records)
+
+
+_LABEL_WIDTH = 184.28
+_LABEL_HEIGHT = 85.04
+_LABEL_LEFT = 3.0
+_LABEL_BOTTOM = 3.0
+_LABEL_RIGHT = _LABEL_WIDTH - _LABEL_LEFT
+_LABEL_TOP = _LABEL_HEIGHT - _LABEL_BOTTOM
+_LABEL_TABLE_SPLIT = 130.0
+_LABEL_VALUE_SPLIT = 43.5
+_LABEL_FONT_NAME = "NotoSansCJKsc"
+_LABEL_FONT_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "static"
+    / "fonts"
+    / "NotoSansCJKsc-Regular.ttf"
+)
+
+
+def _label_font_name() -> str:
+    if _LABEL_FONT_NAME not in pdfmetrics.getRegisteredFontNames():
+        if not _LABEL_FONT_PATH.is_file():
+            raise RuntimeError(f"标签字体文件不存在: {_LABEL_FONT_PATH}")
+        pdfmetrics.registerFont(TTFont(_LABEL_FONT_NAME, str(_LABEL_FONT_PATH)))
+    return _LABEL_FONT_NAME
 
 
 def _code39_value(value: str) -> str:
@@ -287,9 +477,9 @@ def _code39_value(value: str) -> str:
     return f"*{normalized}*"
 
 
-def _barcode_commands(
-    value: str, *, x: float, y: float, width: float, height: float
-) -> list[str]:
+def _draw_barcode(
+    canvas: Canvas, value: str, *, x: float, y: float, width: float, height: float
+) -> None:
     encoded = _code39_value(value)
     narrow = 1.0
     wide = 2.4
@@ -303,105 +493,183 @@ def _barcode_commands(
         units += gap
     scale = width / units
     cursor = x
-    commands: list[str] = ["0 0 0 rg"]
+    canvas.setFillColorRGB(0, 0, 0)
     for character in encoded:
         mask = _CODE39_MASKS[character]
         for index in range(9):
             element_width = (wide if mask & (1 << (8 - index)) else narrow) * scale
             if index % 2 == 0:
-                commands.append(
-                    f"{cursor:.2f} {y:.2f} {element_width:.2f} {height:.2f} re f"
-                )
+                canvas.rect(cursor, y, element_width, height, stroke=0, fill=1)
             cursor += element_width
         cursor += gap * scale
-    return commands
 
 
-def _label_content(asset: Asset, company_name: str) -> bytes:
-    company = company_name[:24] or "资产管理"
-    asset_name = asset.asset_name[:28]
-    serial = (asset.serial_number or "无序列号")[:32]
-    detail_path = f"/assets/{asset.id}"
-    commands = [
-        "q",
-        "0.97 0.98 1 rg 0 0 226.77 85.04 re f",
-        "0.13 0.32 0.63 RG 0.7 w 4 4 218.77 77.04 re S",
-        f"BT /F1 8 Tf 8 70 Td <{_pdf_text(company)}> Tj ET",
-        f"BT /F1 9 Tf 8 57 Td <{_pdf_text(asset_name)}> Tj ET",
-        f"BT /F1 6.8 Tf 8 47 Td <{_pdf_text('序列号：' + serial)}> Tj ET",
-        f"BT /F2 5.8 Tf 156 69 Td <{_pdf_text(detail_path)}> Tj ET",
-    ]
-    commands.extend(
-        _barcode_commands(asset.asset_code, x=8, y=15, width=210, height=25)
+def _draw_qr(canvas: Canvas, value: str, *, x: float, y: float, size: float) -> None:
+    qr = qrcode.QRCode(
+        version=None,
+        error_correction=qrcode.constants.ERROR_CORRECT_M,
+        box_size=1,
+        border=0,
     )
-    commands.extend(
-        [
-            f"BT /F2 7 Tf 8 7 Td <{_pdf_text(asset.asset_code)}> Tj ET",
-            "Q",
-        ]
+    qr.add_data(value)
+    qr.make(fit=True)
+    matrix = qr.get_matrix()
+    quiet_zone = 2
+    module_size = size / (len(matrix) + quiet_zone * 2)
+    canvas.setFillColorRGB(0, 0, 0)
+    for row_index, row in enumerate(matrix):
+        for column_index, is_dark in enumerate(row):
+            if not is_dark:
+                continue
+            rect_x = x + (column_index + quiet_zone) * module_size
+            rect_y = y + (len(matrix) - row_index - 1 + quiet_zone) * module_size
+            canvas.rect(rect_x, rect_y, module_size, module_size, stroke=0, fill=1)
+
+
+def _draw_text(
+    canvas: Canvas,
+    value: str,
+    *,
+    font_size: float,
+    x: float,
+    y: float,
+    max_width: float | None = None,
+) -> None:
+    font_name = _label_font_name()
+    if max_width is not None:
+        measured_width = pdfmetrics.stringWidth(value, font_name, font_size)
+        if measured_width > max_width:
+            font_size *= max_width / measured_width
+    canvas.setFillColorRGB(0, 0, 0)
+    canvas.setFont(font_name, font_size)
+    canvas.drawString(x, y, value)
+
+
+def _draw_centered_text(
+    canvas: Canvas,
+    value: str,
+    *,
+    font_size: float,
+    center_x: float,
+    y: float,
+    max_width: float | None = None,
+) -> None:
+    font_name = _label_font_name()
+    if max_width is not None:
+        measured_width = pdfmetrics.stringWidth(value, font_name, font_size)
+        if measured_width > max_width:
+            font_size *= max_width / measured_width
+    canvas.setFillColorRGB(0, 0, 0)
+    canvas.setFont(font_name, font_size)
+    text_width = pdfmetrics.stringWidth(value, font_name, font_size)
+    x = max(_LABEL_LEFT + 1.5, center_x - text_width / 2)
+    canvas.drawString(x, y, value)
+
+
+def _asset_qr_value(asset: Asset, qr_base_url: str | None = None) -> str:
+    """Build a portable scan payload for mobile camera and app scanners.
+
+    The first field is always the asset code so the SPA can look the asset up
+    again even when the frontend deployment origin changes.  The optional
+    second field is the printed Code 39 value.
+    """
+    base_url = (
+        str(qr_base_url or current_app.config.get("ASSET_QR_BASE_URL") or "")
+        .strip()
+        .rstrip("/")
     )
-    return "\n".join(commands).encode("ascii")
+    prefix = f"{base_url}/scan-use" if base_url else "scan-use"
+    barcode_value = asset.serial_number or asset.asset_code or "-"
+    return (
+        f"{prefix}?asset_code={quote(str(asset.asset_code), safe='')}"
+        f"&barcode={quote(str(barcode_value), safe='')}"
+    )
 
 
-def _pdf_bytes(assets: Sequence[Asset]) -> bytes:
+def _draw_label(
+    canvas: Canvas, asset: Asset, company_name: str, *, qr_base_url: str | None = None
+) -> None:
+    title = f"{company_name or '资产管理'}固定资产标签"
+    asset_code = asset.asset_code[:24]
+    asset_name = asset.asset_name
+    purchase_date = asset.purchase_date.isoformat()
+    barcode_value = (asset.serial_number or asset.asset_code or "-")[:32]
+    qr_value = _asset_qr_value(asset, qr_base_url)
+
+    canvas.setFillColorRGB(1, 1, 1)
+    canvas.rect(0, 0, _LABEL_WIDTH, _LABEL_HEIGHT, stroke=0, fill=1)
+    canvas.setStrokeColorRGB(0, 0, 0)
+    canvas.setLineWidth(0.8)
+    canvas.rect(
+        _LABEL_LEFT,
+        _LABEL_BOTTOM,
+        _LABEL_RIGHT - _LABEL_LEFT,
+        _LABEL_TOP - _LABEL_BOTTOM,
+        stroke=1,
+        fill=0,
+    )
+    canvas.line(_LABEL_TABLE_SPLIT, 30.0, _LABEL_TABLE_SPLIT, _LABEL_TOP)
+    canvas.line(_LABEL_LEFT, 68.8, _LABEL_TABLE_SPLIT, 68.8)
+    canvas.line(_LABEL_LEFT, 56.1, _LABEL_TABLE_SPLIT, 56.1)
+    canvas.line(_LABEL_LEFT, 43.4, _LABEL_TABLE_SPLIT, 43.4)
+    canvas.line(_LABEL_LEFT, 30.0, _LABEL_RIGHT, 30.0)
+    canvas.line(_LABEL_VALUE_SPLIT, 68.8, _LABEL_VALUE_SPLIT, 30.0)
+
+    _draw_centered_text(
+        canvas, title, font_size=9, center_x=66.5, y=73.25, max_width=125.0
+    )
+    _draw_text(canvas, "资产编号", font_size=8.5, x=7.0, y=59.5)
+    _draw_text(canvas, asset_code, font_size=8.5, x=46.0, y=59.5)
+    _draw_text(canvas, "名称", font_size=8.5, x=11.5, y=46.8)
+    # The value area runs from the label separator to the QR boundary.  Keep a
+    # small right margin so long CJK names shrink instead of crossing either line.
+    _draw_text(canvas, asset_name, font_size=8.5, x=46.0, y=46.8, max_width=82.0)
+    _draw_text(canvas, "日期", font_size=8.5, x=11.5, y=33.4)
+    _draw_text(canvas, purchase_date, font_size=8.5, x=46.0, y=33.4)
+
+    _draw_qr(canvas, qr_value, x=130.5, y=32.0, size=48.0)
+    _draw_barcode(canvas, barcode_value, x=50.0, y=13.0, width=84.0, height=13.0)
+    _draw_centered_text(canvas, barcode_value, font_size=7.2, center_x=92.14, y=6.8)
+
+
+def _pdf_bytes(assets: Sequence[Asset], *, qr_base_url: str | None = None) -> bytes:
     company_names = _name_map(Organization, {row.organization_id for row in assets})
-    objects: list[bytes] = []
-    page_object_ids = [5 + index * 2 for index in range(len(assets))]
-    objects.append(b"<< /Type /Catalog /Pages 2 0 R >>")
-    kids = " ".join(f"{object_id} 0 R" for object_id in page_object_ids)
-    objects.append(
-        f"<< /Type /Pages /Kids [{kids}] /Count {len(assets)} >>".encode("ascii")
+    output = BytesIO()
+    canvas = Canvas(
+        output,
+        pagesize=(_LABEL_WIDTH, _LABEL_HEIGHT),
+        pageCompression=0,
+        pdfVersion=(1, 4),
     )
-    objects.append(
-        b"<< /Type /Font /Subtype /Type0 /BaseFont /STSong-Light "
-        b"/Encoding /UniGB-UCS2-H /DescendantFonts [4 0 R] >>"
-    )
-    objects.append(
-        b"<< /Type /Font /Subtype /CIDFontType0 /BaseFont /STSong-Light "
-        b"/CIDSystemInfo << /Registry (Adobe) /Ordering (GB1) /Supplement 4 >> >>"
-    )
-    for index, asset in enumerate(assets):
-        content_object_id = page_object_ids[index] + 1
-        objects.append(
-            (
-                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 226.77 85.04] "
-                "/Resources << /Font << /F1 3 0 R /F2 3 0 R >> >> "
-                f"/Contents {content_object_id} 0 R >>"
-            ).encode("ascii")
+    canvas.setTitle("资产条码标签")
+    for asset in assets:
+        _draw_label(
+            canvas,
+            asset,
+            company_names.get(asset.organization_id, ""),
+            qr_base_url=qr_base_url,
         )
-        content = _label_content(asset, company_names.get(asset.organization_id, ""))
-        objects.append(
-            f"<< /Length {len(content)} >>\nstream\n".encode("ascii")
-            + content
-            + b"\nendstream"
-        )
-
-    result = bytearray(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")
-    offsets = [0]
-    for object_id, body in enumerate(objects, start=1):
-        offsets.append(len(result))
-        result.extend(f"{object_id} 0 obj\n".encode("ascii"))
-        result.extend(body)
-        result.extend(b"\nendobj\n")
-    xref_offset = len(result)
-    result.extend(f"xref\n0 {len(objects) + 1}\n".encode("ascii"))
-    result.extend(b"0000000000 65535 f \n")
-    for offset in offsets[1:]:
-        result.extend(f"{offset:010d} 00000 n \n".encode("ascii"))
-    result.extend(
-        (
-            f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\n"
-            f"startxref\n{xref_offset}\n%%EOF\n"
-        ).encode("ascii")
-    )
-    return bytes(result)
+        canvas.showPage()
+    canvas.save()
+    return output.getvalue()
 
 
 def create(payload: Mapping[str, Any], actor_id: int) -> dict[str, Any]:
     job_type = str(payload["job_type"])
-    permission_code = "asset:export" if job_type == _ASSET_CSV else "asset:label:print"
+    permission_code = {
+        _ASSET_CSV: "asset:export",
+        _REPAIR_CSV: "repair:export",
+        _SCRAP_CSV: "scrap:export",
+        _LABEL_PDF: "asset:label:print",
+    }.get(job_type)
+    if permission_code is None:
+        raise BusinessException("不支持的导出类型")
     permission_service.require_permission(actor_id, permission_code)
-    assets = _resolve_assets(payload, actor_id)
+    assets = (
+        _resolve_scrapped_assets(payload, actor_id)
+        if job_type == _SCRAP_CSV
+        else _resolve_assets(payload, actor_id)
+    )
     if not assets:
         raise BusinessException("当前条件下没有可导出的资产")
     if job_type == _LABEL_PDF and len(assets) > _MAX_LABEL_ASSETS:
@@ -409,15 +677,23 @@ def create(payload: Mapping[str, Any], actor_id: int) -> dict[str, Any]:
 
     now = utc_now()
     retention_hours = int(current_app.config.get("EXPORT_RETENTION_HOURS", 24))
-    suffix = ".csv" if job_type == _ASSET_CSV else ".pdf"
+    suffix = ".pdf" if job_type == _LABEL_PDF else ".csv"
     mime_type = (
-        "text/csv; charset=utf-8" if job_type == _ASSET_CSV else "application/pdf"
+        "application/pdf" if job_type == _LABEL_PDF else "text/csv; charset=utf-8"
     )
     timestamp = now.astimezone(timezone(timedelta(hours=8))).strftime("%Y%m%d-%H%M%S")
     original_name = (
         f"资产台账-{timestamp}{suffix}"
         if job_type == _ASSET_CSV
-        else f"资产条码标签-{timestamp}{suffix}"
+        else (
+            f"维修记录-{timestamp}{suffix}"
+            if job_type == _REPAIR_CSV
+            else (
+                f"报废资产-{timestamp}{suffix}"
+                if job_type == _SCRAP_CSV
+                else f"资产条码标签-{timestamp}{suffix}"
+            )
+        )
     )
     storage_key = f"{now:%Y/%m/%d}/{uuid4().hex}{suffix}"
     snapshot = {
@@ -440,18 +716,34 @@ def create(payload: Mapping[str, Any], actor_id: int) -> dict[str, Any]:
 
     target: Path | None = None
     try:
-        content = (
-            _csv_bytes(assets, actor_id)
-            if job_type == _ASSET_CSV
-            else _pdf_bytes(assets)
-        )
+        if job_type == _ASSET_CSV:
+            content = _csv_bytes(assets, actor_id)
+        elif job_type == _REPAIR_CSV:
+            content, repair_count = _repair_csv_bytes(assets, actor_id)
+            if repair_count == 0:
+                raise BusinessException("当前资产没有维修记录")
+            job.item_count = repair_count
+        elif job_type == _SCRAP_CSV:
+            content = _scrap_csv_bytes(assets, actor_id)
+        else:
+            content = _pdf_bytes(assets)
         target = _write_file(storage_key, content)
         job.status = _SUCCESS
         job.size_bytes = len(content)
         audit_service.record_resource_change(
-            action="ASSET_EXPORT_CREATE"
-            if job_type == _ASSET_CSV
-            else "ASSET_LABEL_CREATE",
+            action=(
+                "ASSET_EXPORT_CREATE"
+                if job_type == _ASSET_CSV
+                else (
+                    "REPAIR_EXPORT_CREATE"
+                    if job_type == _REPAIR_CSV
+                    else (
+                        "SCRAP_EXPORT_CREATE"
+                        if job_type == _SCRAP_CSV
+                        else "ASSET_LABEL_CREATE"
+                    )
+                )
+            ),
             resource_type="export_job",
             resource_id=job.id,
             actor_id=actor_id,
@@ -463,7 +755,13 @@ def create(payload: Mapping[str, Any], actor_id: int) -> dict[str, Any]:
             },
         )
         lifecycle_type = (
-            "ASSET_EXPORT" if job_type == _ASSET_CSV else "ASSET_LABEL_PRINT"
+            "ASSET_EXPORT"
+            if job_type == _ASSET_CSV
+            else (
+                "REPAIR_EXPORT"
+                if job_type == _REPAIR_CSV
+                else ("SCRAP_EXPORT" if job_type == _SCRAP_CSV else "ASSET_LABEL_PRINT")
+            )
         )
         for asset in assets:
             audit_service.record_asset_lifecycle(
@@ -496,7 +794,15 @@ def create(payload: Mapping[str, Any], actor_id: int) -> dict[str, Any]:
 
 def page(*, actor_id: int, page_index: int, size: int) -> PageResult:
     permission_codes = permission_service.get_user_permissions(actor_id)
-    if not {"asset:export", "asset:label:print"} & permission_codes:
+    if (
+        not {
+            "asset:export",
+            "repair:export",
+            "scrap:export",
+            "asset:label:print",
+        }
+        & permission_codes
+    ):
         raise BusinessException("无权查看导出任务", result_code=ResultCode.FORBIDDEN)
     statement = (
         select(ExportJob)
@@ -527,13 +833,53 @@ def _is_expired(value: datetime, now: datetime) -> bool:
     return normalized <= now
 
 
+def preview_labels(
+    asset_ids: Sequence[int],
+    actor_id: int,
+    *,
+    qr_base_url: str | None = None,
+) -> DownloadTarget:
+    """Generate an ephemeral inline label PDF for immediate browser preview."""
+    permission_service.require_permission(actor_id, "asset:label:print")
+    assets = _selected_assets(asset_ids, actor_id)
+    if len(assets) > _MAX_LABEL_ASSETS:
+        raise BusinessException(f"单次最多生成 {_MAX_LABEL_ASSETS} 张标签")
+    now = utc_now()
+    target = _write_file(
+        f"{now:%Y/%m/%d}/preview/{uuid4().hex}.pdf",
+        _pdf_bytes(assets, qr_base_url=qr_base_url),
+    )
+    audit_service.record_resource_change(
+        action="ASSET_LABEL_PRINT",
+        resource_type="export",
+        resource_id="preview",
+        before_data=None,
+        after_data={
+            "asset_ids": [asset.id for asset in assets],
+            "preview": True,
+            "qr_base_url": qr_base_url,
+        },
+        actor_id=actor_id,
+    )
+    return DownloadTarget(
+        path=target,
+        original_name=f"资产条码标签-{now.astimezone(timezone(timedelta(hours=8))):%Y%m%d-%H%M%S}.pdf",
+        mime_type="application/pdf",
+    )
+
+
 def download_target(export_id: int, actor_id: int) -> DownloadTarget:
     job = db.session.get(ExportJob, export_id)
     if job is None or job.created_by != actor_id:
         raise BusinessException("导出任务不存在", result_code=ResultCode.NOT_FOUND)
-    permission_code = (
-        "asset:export" if job.job_type == _ASSET_CSV else "asset:label:print"
-    )
+    permission_code = {
+        _ASSET_CSV: "asset:export",
+        _REPAIR_CSV: "repair:export",
+        _SCRAP_CSV: "scrap:export",
+        _LABEL_PDF: "asset:label:print",
+    }.get(job.job_type)
+    if permission_code is None:
+        raise BusinessException("不支持的导出类型")
     permission_service.require_permission(actor_id, permission_code)
     if job.status != _SUCCESS:
         raise BusinessException("导出文件当前不可下载")
@@ -546,7 +892,19 @@ def download_target(export_id: int, actor_id: int) -> DownloadTarget:
         raise BusinessException("导出文件不存在", result_code=ResultCode.NOT_FOUND)
     job.downloaded_at = utc_now()
     audit_service.record_resource_change(
-        action="ASSET_EXPORT_DOWNLOAD",
+        action=(
+            "ASSET_EXPORT_DOWNLOAD"
+            if job.job_type == _ASSET_CSV
+            else (
+                "REPAIR_EXPORT_DOWNLOAD"
+                if job.job_type == _REPAIR_CSV
+                else (
+                    "SCRAP_EXPORT_DOWNLOAD"
+                    if job.job_type == _SCRAP_CSV
+                    else "ASSET_LABEL_DOWNLOAD"
+                )
+            )
+        ),
         resource_type="export_job",
         resource_id=job.id,
         actor_id=actor_id,
@@ -563,6 +921,14 @@ def download_target(export_id: int, actor_id: int) -> DownloadTarget:
 
 def cleanup_expired_files(*, now: datetime | None = None) -> int:
     current = now or utc_now()
+    preview_root = _storage_root() / "preview"
+    for preview_root_item in preview_root.rglob("*.pdf"):
+        if (
+            preview_root_item.is_file()
+            and preview_root_item.stat().st_mtime
+            < (current - timedelta(minutes=30)).timestamp()
+        ):
+            preview_root_item.unlink()
     rows = list(
         db.session.scalars(
             select(ExportJob).where(

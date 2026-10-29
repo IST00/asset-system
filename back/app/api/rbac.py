@@ -87,7 +87,10 @@ def update_role_permissions(role_id: int) -> dict:
 def update_user_roles(user_id: int) -> dict:
     payload = _update_user_roles_schema.load(request.get_json(silent=True) or {})
     data = rbac_service.update_user_roles(
-        user_id, payload["role_ids"], current_user_id(), payload.get("reason")
+        user_id,
+        payload["role_ids"],
+        current_user_id(),
+        payload.get("reason"),
     )
     return Result.success(data).to_dict()
 

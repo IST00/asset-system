@@ -9,6 +9,9 @@ export interface ProtectedFinancialSnapshot {
 export const assetFormDefaultValues: Partial<AssetFormValues> = {
   asset_name: '',
   company_name: '',
+  usage_company_name: '',
+  usage_department_name: '',
+  holder_user_name: '',
   category_name: '',
   source_name: '',
   unit_name: '',
@@ -28,6 +31,9 @@ export function toAssetFormValues(asset: AssetDetail): AssetFormValues {
   return {
     asset_name: asset.asset_name,
     company_name: asset.company_name,
+    usage_company_name: asset.usage_company_name ?? '',
+    usage_department_name: asset.usage_department_name ?? '',
+    holder_user_name: asset.user_name ?? '',
     category_name: asset.category_name,
     source_name: asset.source_name,
     unit_name: asset.unit_name,

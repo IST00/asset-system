@@ -1,7 +1,7 @@
 import http from '@/api/http'
 import type { AssetListQuery } from '@/features/assets/types'
 
-export type ExportJobType = 'ASSET_CSV' | 'LABEL_PDF'
+export type ExportJobType = 'ASSET_CSV' | 'REPAIR_CSV' | 'SCRAP_CSV' | 'LABEL_PDF'
 export type ExportJobStatus = 'PROCESSING' | 'SUCCESS' | 'FAILED' | 'EXPIRED'
 
 export interface ExportJob {

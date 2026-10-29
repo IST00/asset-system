@@ -34,7 +34,10 @@ def get_status() -> dict[str, Any]:
     db.session.execute(text("SELECT 1"))
     dialect = db.engine.dialect.name
     profile = str(os.getenv("FLASK_ENV") or "dev").lower()
-    formal_feishu = _configured("FEISHU_APP_ID") and _configured("FEISHU_APP_SECRET")
+    formal_feishu = bool(current_app.config.get("FEISHU_INTEGRATION_ENABLED")) and bool(
+        current_app.config.get("FEISHU_APP_ID")
+        and current_app.config.get("FEISHU_APP_SECRET")
+    )
     local_feishu = bool(current_app.debug or current_app.testing)
     file_storage = _configured(
         "FILE_STORAGE_PATH", "FILE_STORAGE_BUCKET", "OBJECT_STORAGE_BUCKET"

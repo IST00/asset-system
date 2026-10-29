@@ -36,6 +36,19 @@ def get_descendant_ids(organization_id: int) -> set[int]:
     return result
 
 
+def get_ancestor_ids(organization_id: int) -> set[int]:
+    """Return an organization and all of its enabled/disabled ancestors."""
+    result: set[int] = set()
+    current = _require(organization_id)
+    while True:
+        if current.id in result:
+            raise BusinessException("组织层级存在循环")
+        result.add(current.id)
+        if current.parent_id is None:
+            return result
+        current = _require(current.parent_id)
+
+
 def get_top_level(organization_id: int) -> Organization:
     current = _require(organization_id)
     visited: set[int] = set()
@@ -52,6 +65,28 @@ def require_enabled(organization_id: int) -> Organization:
     if organization.status != RecordStatus.ENABLED.value:
         raise BusinessException("所属组织已停用")
     return organization
+
+
+def full_paths() -> dict[int, str]:
+    """Return every organization's full path keyed by organization id."""
+    rows = organization_repository.list_all()
+    rows_by_id = {row.id: row for row in rows}
+    result: dict[int, str] = {}
+    for row in rows:
+        names = [row.name]
+        parent_id = row.parent_id
+        visited = {row.id}
+        while (
+            parent_id is not None
+            and parent_id in rows_by_id
+            and parent_id not in visited
+        ):
+            parent = rows_by_id[parent_id]
+            names.append(parent.name)
+            visited.add(parent_id)
+            parent_id = parent.parent_id
+        result[row.id] = "/".join(reversed(names))
+    return result
 
 
 def _to_dict(organization: Organization, include_top: bool = False) -> dict[str, Any]:
@@ -158,9 +193,11 @@ def tree(actor_id: int) -> list[dict[str, Any]]:
 __all__ = [
     "create",
     "get",
+    "get_ancestor_ids",
     "get_descendant_ids",
     "get_top_level",
     "require_enabled",
+    "full_paths",
     "set_enabled",
     "tree",
     "update",

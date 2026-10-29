@@ -80,7 +80,9 @@ class CreateInventoryTaskSchema(Schema):
     holder_user_ids = fields.List(fields.Integer(strict=True), load_default=list)
     manager_user_ids = fields.List(fields.Integer(strict=True), load_default=list)
     asset_statuses = fields.List(
-        fields.String(validate=validate.OneOf(["IDLE", "IN_USE", "REPAIRING"])),
+        fields.String(
+            validate=validate.OneOf(["IDLE", "PENDING_RECEIPT", "IN_USE", "REPAIRING"])
+        ),
         load_default=list,
     )
     public_responsible_user_id = fields.Integer(

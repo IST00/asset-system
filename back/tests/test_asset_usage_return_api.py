@@ -11,6 +11,8 @@ import pytest
 from app import create_app
 from app.common import BusinessException, ResultCode
 from app.enums import ApprovalChannel, ApprovalStatus, ExecutionStatus, OperationType
+from sqlalchemy import select
+
 from app.extensions import db
 from app.models import (
     AssetLifecycleRecord,
@@ -22,6 +24,7 @@ from app.models import (
     User,
 )
 from app.repositories.operation_repository import ExternalApprovalEventRepository
+from app.models.rbac import Role
 from app.services import (
     asset_return_service,
     asset_usage_service,
@@ -93,6 +96,11 @@ def seed_pending_personal_usage() -> tuple[UsageReturnContext, OperationRequest]
     )
     operation = db.session.get(OperationRequest, submitted["id"])
     assert operation is not None
+    # Local FEISHU contracts exercise the legacy callback adapter; production
+    # submissions now use internal approval with fulfillment workflows.
+    operation.approval_channel = ApprovalChannel.FEISHU.value
+    operation.external_instance_id = f"LOCAL-FEISHU-{operation.id}"
+    db.session.commit()
     return context, operation
 
 
@@ -110,13 +118,27 @@ def seed_pending_personal_return() -> tuple[UsageReturnContext, OperationRequest
     context = seed_usage_return_context()
     _set_personal_assets_in_use(context)
     grant_permissions(context.employee, "asset:return:self")
+    grant_permissions(context.manager, "asset:usage:manage")
     submitted = asset_return_service.submit_personal(
         {"asset_ids": [context.main_asset.id]},
         context.employee.id,
     )
     operation = db.session.get(OperationRequest, submitted["id"])
     assert operation is not None
+    # Local FEISHU contracts exercise the legacy callback adapter; production
+    # submissions now use internal approval with fulfillment workflows.
+    operation.approval_channel = ApprovalChannel.FEISHU.value
+    operation.external_instance_id = f"LOCAL-FEISHU-{operation.id}"
+    db.session.commit()
     return context, operation
+
+
+def _switch_to_legacy_feishu(operation_id: int) -> None:
+    operation = db.session.get(OperationRequest, operation_id)
+    assert operation is not None
+    operation.approval_channel = ApprovalChannel.FEISHU.value
+    operation.external_instance_id = f"LOCAL-FEISHU-{operation.id}"
+    db.session.commit()
 
 
 def _outsider(context: UsageReturnContext) -> User:
@@ -132,18 +154,19 @@ def _outsider(context: UsageReturnContext) -> User:
     return user
 
 
-def test_usage_target_employee_can_mock_approve_once(app) -> None:
+def test_usage_manager_can_mock_approve_once(app) -> None:
     context, operation = seed_pending_personal_usage()
     register_usage_return_handlers()
     payload = {"action": "APPROVE", "external_event_id": "usage-approved-1"}
-    result = local_feishu_service.act(operation.id, payload, context.employee.id)
-    replay = local_feishu_service.act(operation.id, payload, context.employee.id)
-    assert result["execution_status"] == ExecutionStatus.SUCCESS.value
+    result = local_feishu_service.act(operation.id, payload, context.manager.id)
+    replay = local_feishu_service.act(operation.id, payload, context.manager.id)
+    assert result["approval_status"] == ApprovalStatus.APPROVED.value
+    assert result["execution_status"] == ExecutionStatus.NOT_STARTED.value
     assert replay["id"] == result["id"]
     assert db.session.query(ExternalApprovalEvent).count() == 1
-    assert db.session.query(OperationExecutionAttempt).count() == 1
-    assert db.session.query(AssetLifecycleRecord).count() == 2
-    assert db.session.query(OperationLog).count() == 1
+    assert db.session.query(OperationExecutionAttempt).count() == 0
+    assert db.session.query(AssetLifecycleRecord).count() == 0
+    assert db.session.query(OperationLog).count() == 0
 
 
 def test_mock_reject_persists_reason_in_external_event_payload(app) -> None:
@@ -155,7 +178,7 @@ def test_mock_reject_persists_reason_in_external_event_payload(app) -> None:
             "external_event_id": "usage-rejected-1",
             "reason": "device not received",
         },
-        context.employee.id,
+        context.manager.id,
     )
     assert db.session.query(ExternalApprovalEvent).one().payload["reason"] == (
         "device not received"
@@ -190,7 +213,7 @@ def test_mock_duplicate_event_rejects_conflicting_payload_without_mutation(
     first = local_feishu_service.act(
         operation.id,
         original_payload,
-        context.employee.id,
+        context.manager.id,
     )
     expected_event_payload = {
         "status": ApprovalStatus.REJECTED.value,
@@ -203,7 +226,7 @@ def test_mock_duplicate_event_rejects_conflicting_payload_without_mutation(
     exact_replay = local_feishu_service.act(
         operation.id,
         original_payload,
-        context.employee.id,
+        context.manager.id,
     )
 
     assert exact_replay["id"] == first["id"]
@@ -217,7 +240,7 @@ def test_mock_duplicate_event_rejects_conflicting_payload_without_mutation(
         local_feishu_service.act(
             operation.id,
             conflicting_payload,
-            context.employee.id,
+            context.manager.id,
         )
     except BusinessException as error:
         conflict = error
@@ -247,7 +270,7 @@ def test_mock_concurrent_duplicate_event_binds_only_one_reason(
         db.create_all()
         context, operation = seed_pending_personal_usage()
         operation_id = operation.id
-        actor_id = context.employee.id
+        actor_id = context.manager.id
 
     original_repository = local_feishu_service.external_approval_event_repository
     monkeypatch.setattr(
@@ -320,7 +343,7 @@ def test_mock_reason_enrichment_recovers_after_commit_failure(
     with monkeypatch.context() as commit_patch:
         commit_patch.setattr(db.session, "commit", fail_reason_commit)
         with pytest.raises(RuntimeError, match="injected reason commit failure"):
-            local_feishu_service.act(operation.id, payload, context.employee.id)
+            local_feishu_service.act(operation.id, payload, context.manager.id)
 
     assert commit_calls == 2
     db.session.rollback()
@@ -333,7 +356,7 @@ def test_mock_reason_enrichment_recovers_after_commit_failure(
     recovered = local_feishu_service.act(
         operation.id,
         payload,
-        context.employee.id,
+        context.manager.id,
     )
 
     assert recovered["approval_status"] == ApprovalStatus.REJECTED.value
@@ -347,15 +370,15 @@ def test_mock_reason_enrichment_recovers_after_commit_failure(
 
 
 @pytest.mark.parametrize("action", ["APPROVE", "REJECT"])
-@pytest.mark.parametrize("actor_kind", ["applicant", "outsider"])
-def test_mock_usage_decision_rejects_non_target_actor(
+@pytest.mark.parametrize("actor_kind", ["target_employee", "outsider"])
+def test_mock_usage_decision_rejects_non_manager_actor(
     app,
     action: str,
     actor_kind: str,
 ) -> None:
     context, operation = seed_pending_personal_usage()
     outsider = _outsider(context)
-    actor_id = context.manager.id if actor_kind == "applicant" else outsider.id
+    actor_id = context.employee.id if actor_kind == "target_employee" else outsider.id
     payload = {
         "action": action,
         "external_event_id": f"usage-{action.lower()}-{actor_kind}",
@@ -405,6 +428,8 @@ def test_mock_return_manager_with_full_scope_can_decide(
 @pytest.mark.parametrize("action", ["APPROVE", "REJECT"])
 def test_mock_return_decision_requires_manage_permission(app, action: str) -> None:
     context, operation = seed_pending_personal_return()
+    decision_maker = _outsider(context)
+    grant_permissions(decision_maker, "unrelated:permission")
     payload = {
         "action": action,
         "external_event_id": f"return-{action.lower()}-no-permission",
@@ -412,7 +437,7 @@ def test_mock_return_decision_requires_manage_permission(app, action: str) -> No
     }
 
     with pytest.raises(BusinessException) as raised:
-        local_feishu_service.act(operation.id, payload, context.manager.id)
+        local_feishu_service.act(operation.id, payload, decision_maker.id)
 
     assert raised.value.code == ResultCode.FORBIDDEN.code
     assert db.session.get(OperationRequest, operation.id).approval_status == (
@@ -437,10 +462,18 @@ def test_mock_return_decision_requires_scope_for_every_asset(
     context.child_asset.organization_id = other_organization.id
     _set_personal_assets_in_use(context)
     grant_permissions(context.employee, "asset:return:self")
+    grant_permissions(context.manager, "asset:usage:manage")
     submitted = asset_return_service.submit_personal(
         {"asset_ids": [context.main_asset.id]},
         context.employee.id,
     )
+    _switch_to_legacy_feishu(submitted["id"])
+    all_scope_role = db.session.scalar(
+        select(Role).where(Role.code == f"UR-ALL-{context.manager.id}")
+    )
+    assert all_scope_role is not None
+    db.session.delete(all_scope_role)
+    db.session.flush()
     grant_scoped_manager_permission(context.manager, context.organization.id)
     payload = {
         "action": action,
@@ -500,7 +533,7 @@ def test_mock_reject_normalizes_reason_before_persisting(app) -> None:
             "external_event_id": "  usage-rejected-normalized  ",
             "reason": "  device not received  ",
         },
-        context.employee.id,
+        context.manager.id,
     )
 
     event = db.session.query(ExternalApprovalEvent).one()
@@ -523,7 +556,7 @@ def test_mock_approve_normalizes_blank_reason_to_none(app) -> None:
             "external_event_id": "usage-approved-blank-reason",
             "reason": "   ",
         },
-        context.employee.id,
+        context.manager.id,
     )
 
     assert db.session.query(ExternalApprovalEvent).one().payload["reason"] is None
@@ -540,7 +573,7 @@ def test_mock_reject_requires_non_blank_reason(app) -> None:
                 "external_event_id": "usage-rejected-blank-reason",
                 "reason": "   ",
             },
-            context.employee.id,
+            context.manager.id,
         )
 
     assert raised.value.code == ResultCode.BAD_REQUEST.code
@@ -595,7 +628,7 @@ def test_mock_service_is_available_in_each_local_mode(app, enabled_by: str) -> N
             "external_event_id": f"usage-rejected-{enabled_by}",
             "reason": "not received",
         },
-        context.employee.id,
+        context.manager.id,
     )
 
     assert result["approval_status"] == ApprovalStatus.REJECTED.value
@@ -654,6 +687,9 @@ def _set_public_assets_in_use(context: UsageReturnContext) -> None:
 
 def _inspection_payload(context: UsageReturnContext) -> dict[str, object]:
     return {
+        "return_company_id": context.organization.id,
+        "return_usage_company_id": context.organization.id,
+        "return_region_id": context.return_location.id,
         "return_location_id": context.return_location.id,
         "items": [
             {"asset_id": context.main_asset.id, "condition": "NORMAL"},
@@ -680,6 +716,25 @@ def test_personal_usage_post_returns_common_envelope(feature_client) -> None:
     assert body["data"]["operation_type"] == OperationType.PERSONAL_USE.value
 
 
+def test_employee_cannot_submit_personal_usage_without_manage_permission(
+    feature_client,
+) -> None:
+    context, headers = seed_http_context(feature_client)
+
+    response = feature_client.post(
+        "/api/v1/asset-usage-requests/personal",
+        headers=headers.employee,
+        json={
+            "asset_ids": [context.main_asset.id],
+            "target_user_id": context.employee.id,
+        },
+    )
+
+    body = response.get_json()
+    assert response.status_code == 200
+    assert body["code"] == ResultCode.FORBIDDEN.code
+
+
 def test_public_usage_post_returns_common_envelope(feature_client) -> None:
     context, headers = seed_http_context(feature_client)
 
@@ -697,6 +752,53 @@ def test_public_usage_post_returns_common_envelope(feature_client) -> None:
     assert response.status_code == 200
     assert body["code"] == 200
     assert body["data"]["operation_type"] == OperationType.PUBLIC_USE.value
+
+
+def test_employee_can_submit_public_usage_for_approval(feature_client) -> None:
+    context, headers = seed_http_context(feature_client)
+    grant_permissions(context.employee, "asset:usage:self")
+
+    response = feature_client.post(
+        "/api/v1/asset-usage-requests/public",
+        headers=headers.employee,
+        json={
+            "asset_ids": [context.main_asset.id],
+            "public_object_id": context.public_object.id,
+            "location_id": context.location.id,
+        },
+    )
+
+    body = response.get_json()
+    assert response.status_code == 200
+    assert body["code"] == 200
+    data = body["data"]
+    assert data["operation_type"] == OperationType.PUBLIC_USE.value
+    assert data["approval_status"] == ApprovalStatus.PENDING.value
+    assert data["execution_status"] == ExecutionStatus.NOT_STARTED.value
+
+
+def test_employee_can_submit_public_borrow_for_approval(feature_client) -> None:
+    context, headers = seed_http_context(feature_client)
+    grant_permissions(context.employee, "asset:usage:self")
+
+    response = feature_client.post(
+        "/api/v1/asset-usage-requests/public-borrow",
+        headers=headers.employee,
+        json={
+            "asset_ids": [context.main_asset.id],
+            "public_object_id": context.public_object.id,
+            "location_id": context.location.id,
+            "expected_return_at": "2026-12-31T15:59:00+08:00",
+        },
+    )
+
+    body = response.get_json()
+    assert response.status_code == 200
+    assert body["code"] == 200
+    data = body["data"]
+    assert data["operation_type"] == OperationType.PUBLIC_USE.value
+    assert data["feature"]["usage_mode"] == "BORROW"
+    assert data["approval_status"] == ApprovalStatus.PENDING.value
 
 
 def test_usage_page_and_detail_get_return_common_envelopes(feature_client) -> None:
@@ -785,6 +887,7 @@ def test_manager_can_confirm_mock_approved_personal_return(feature_client) -> No
         headers=headers.employee,
         json={"asset_ids": [context.main_asset.id]},
     ).get_json()["data"]
+    _switch_to_legacy_feishu(submitted["id"])
     approved = feature_client.post(
         f"/api/v1/asset-return-requests/{submitted['id']}/mock-feishu-action",
         headers=headers.manager,
@@ -829,7 +932,7 @@ def test_public_return_post_returns_common_envelope(feature_client) -> None:
     assert body["data"]["operation_type"] == OperationType.PUBLIC_RETURN.value
 
 
-def test_usage_mock_feishu_route_uses_authenticated_employee(feature_client) -> None:
+def test_usage_mock_feishu_route_uses_authenticated_manager(feature_client) -> None:
     context, headers = seed_http_context(feature_client)
     submitted = feature_client.post(
         "/api/v1/asset-usage-requests/personal",
@@ -839,10 +942,11 @@ def test_usage_mock_feishu_route_uses_authenticated_employee(feature_client) -> 
             "target_user_id": context.employee.id,
         },
     ).get_json()["data"]
+    _switch_to_legacy_feishu(submitted["id"])
 
     response = feature_client.post(
         f"/api/v1/asset-usage-requests/{submitted['id']}/mock-feishu-action",
-        headers=headers.employee,
+        headers=headers.manager,
         json={
             "action": "APPROVE",
             "external_event_id": "  http-usage-approved  ",
@@ -864,6 +968,7 @@ def test_return_mock_feishu_route_uses_authenticated_manager(feature_client) -> 
         headers=headers.employee,
         json={"asset_ids": [context.main_asset.id]},
     ).get_json()["data"]
+    _switch_to_legacy_feishu(submitted["id"])
 
     response = feature_client.post(
         f"/api/v1/asset-return-requests/{submitted['id']}/mock-feishu-action",
@@ -952,3 +1057,64 @@ def test_feature_blueprint_sources_keep_http_boundary_rules() -> None:
         assert 'methods=["PUT"' not in source
         assert 'methods=["PATCH"' not in source
         assert 'methods=["DELETE"' not in source
+
+
+def test_manager_direct_personal_usage_and_employee_my_assets(feature_client) -> None:
+    context, headers = seed_http_context(feature_client)
+
+    response = feature_client.post(
+        "/api/v1/asset-usage-requests/personal-direct",
+        headers=headers.manager,
+        json={
+            "asset_ids": [context.main_asset.id],
+            "target_user_id": context.employee.id,
+            "location_id": context.return_location.id,
+        },
+    )
+
+    body = response.get_json()
+    assert response.status_code == 200
+    assert body["code"] == 200
+    assert body["data"]["approval_channel"] == ApprovalChannel.DIRECT.value
+    assert body["data"]["execution_status"] == ExecutionStatus.SUCCESS.value
+
+    my_assets = feature_client.get(
+        "/api/v1/asset-usage-requests/my-assets",
+        headers=headers.employee,
+    )
+    my_assets_body = my_assets.get_json()
+    assert my_assets.status_code == 200
+    assert my_assets_body["code"] == 200
+    assert [item["id"] for item in my_assets_body["data"]] == [context.main_asset.id]
+
+
+def test_manager_direct_personal_return_route(feature_client) -> None:
+    context, headers = seed_http_context(feature_client)
+    direct_usage = feature_client.post(
+        "/api/v1/asset-usage-requests/personal-direct",
+        headers=headers.manager,
+        json={
+            "asset_ids": [context.main_asset.id],
+            "target_user_id": context.employee.id,
+        },
+    ).get_json()
+    assert direct_usage["code"] == 200
+
+    response = feature_client.post(
+        "/api/v1/asset-return-requests/personal-direct",
+        headers=headers.manager,
+        json={
+            "asset_ids": [context.main_asset.id],
+            **_inspection_payload(context),
+        },
+    )
+
+    body = response.get_json()
+    assert response.status_code == 200
+    assert body["code"] == 200
+    assert body["data"]["approval_channel"] == ApprovalChannel.DIRECT.value
+    assert body["data"]["execution_status"] == ExecutionStatus.SUCCESS.value
+    db.session.refresh(context.main_asset)
+    assert context.main_asset.status == "IDLE"
+    assert context.main_asset.holder_user_id is None
+    assert context.main_asset.location_id == context.return_location.id
